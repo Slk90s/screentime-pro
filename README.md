@@ -47,9 +47,26 @@
 3. 程序默认开机自启、启动即开始追踪，菜单栏/托盘常驻。
 
 ### Windows
-1. 下载 `screentime-pro_0.2.0_x86_64.exe`，双击运行。
-2. 确保系统已安装 **WebView2 运行时**（大多数 Win10/11 已内置；缺失时可从微软官网安装）。
+1. 下载 `screentime-pro_0.2.0_x86_64.exe`（NSIS 安装包）。
+2. **首次安装**：若系统未装 WebView2 运行时，安装器会**自动下载并安装**（需联网，几秒到几分钟）。Win10 1809+ / Win11 通常已内置，无需此步。
 3. 托盘右键「退出」可彻底关闭；「设置」页可开关开机自启。
+
+> **手动安装 WebView2 永驻版**（系统未联网或安装失败时）：<br>
+> [Microsoft Edge WebView2 Runtime（Evergreen Standalone）](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) › 「Evergreen Standalone Installer」下载 `MicrosoftEdgeWebView2RuntimeInstallerX64.exe`。<br>
+> 检查命令：浏览器打开 `edge://version/`，看到「Microsoft Edge」即代表已就绪。
+
+---
+
+## ❓ 常见错误
+
+| 症状 | 原因 | 解决 |
+|------|------|------|
+| Windows 启动后窗口黑屏 / 立刻闪退 | 缺 WebView2 运行时 | 安装包会自动下载；若失败按上方链接手动装永驻版 |
+| Windows 双击 exe 弹出「无法启动此程序，因为计算机中丢失 WebView2Loader.dll」 | 安装包损坏或被解压了 | 用 NSIS 安装包（exe），不要用 7-Zip 解压后运行 |
+| Windows SmartScreen 拦截「未识别的应用」 | 包未签名 | 点击「更多信息 › 仍要运行」 |
+| macOS 启动提示「无法打开，因为开发者无法验证」 | 未公证（Apple Developer 账号未配置） | 终端执行 `xattr -d com.apple.quarantine "/Applications/ScreenTime Pro.app"` 后重试 |
+| macOS 辅助功能请求反复弹出 | 权限未真正授予或被系统重置 | 系统设置 › 隐私与安全性 › 辅助功能中确认勾选 + 重启应用 |
+| 追踪不到任何活动 | macOS 未授权辅助功能；或系统在空闲 | 退出 app，授予权限后重启；登录界面不计 |
 
 ---
 

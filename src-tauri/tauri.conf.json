@@ -43,7 +43,15 @@
     "windows": {
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",
-      "timestampUrl": ""
+      "timestampUrl": "",
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false,
+        "languages": ["SimpChinese", "English"],
+        "webviewInstallMode": {
+          "type": "downloadBootstrapper"
+        }
+      }
     }
   },
   "plugins": {}
