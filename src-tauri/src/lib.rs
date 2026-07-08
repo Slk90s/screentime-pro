@@ -257,6 +257,9 @@ pub fn run() {
             commands::save_settings,
             // 文件管理器定位（导出后打开所在目录）
             commands::reveal_path,
+            // WebView2 运行时检测（仅 Windows 真正生效）
+            commands::check_webview2,
+            commands::open_webview2_download,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

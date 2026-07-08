@@ -21,6 +21,7 @@ import type {
   SessionOut,
   SettingsOut,
   TrendsOut,
+  Webview2Status,
 } from "../types";
 import { mock } from "./mock";
 
@@ -72,6 +73,9 @@ export const tracker = {
   // 权限查询与引导（macOS）
   checkPermissions: () => call<PermissionStatus>("check_permissions"),
   openPrivacySettings: () => call<void>("open_privacy_settings"),
+  // ===== WebView2 运行时检测（仅 Windows 真正生效） =====
+  checkWebview2: () => call<Webview2Status>("check_webview2"),
+  openWebview2Download: () => call<void>("open_webview2_download"),
   // ===== 周/月同比分析 =====
   trends: (period: string, device?: string) =>
     call<TrendsOut>("get_trends", { period, device: device ?? null }),

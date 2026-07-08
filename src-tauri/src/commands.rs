@@ -757,3 +757,66 @@ fn today_str() -> String {
 // 让 Weekday 在编译期被使用（防止未使用导入告警），实际用于 num_days_from_monday
 #[allow(dead_code)]
 fn _weekday_marker(_: Weekday) {}
+
+/// Windows WebView2 运行时检测结果
+#[derive(serde::Serialize, Clone)]
+pub struct Webview2Status {
+    /// 操作系统
+    pub os: String,
+    /// 是否可用（macOS/Linux 永远 true）
+    pub available: bool,
+    /// 当前安装的 WebView2 版本（未安装时为空字符串）
+    pub version: String,
+    /// 用户可读的安装提示文案（仅当 available=false 时有内容）
+    pub hint: String,
+}
+
+/// 前端启动时调用，提示用户安装 WebView2 永驻版
+/// 仅 Windows 平台做实际检查，macOS/Linux 不依赖 WebView2
+#[tauri::command]
+pub fn check_webview2(app: tauri::AppHandle) -> Webview2Status {
+    #[cfg(target_os = "windows")]
+    {
+        use tauri::WebviewWindow;
+        // 优先用 Tauri 提供的版本接口（需 2.x 支持），失败则提示用户手动安装
+        let version = app
+            .get_webview_window("main")
+            .and_then(|w| w.webview_version().ok())
+            .unwrap_or_default();
+        if version.is_empty() {
+            return Webview2Status {
+                os: "windows".to_string(),
+                available: false,
+                version: String::new(),
+                hint: "未检测到 WebView2 运行时，请先安装 Microsoft Edge WebView2 Runtime（永驻版）后再运行本应用：\nhttps://developer.microsoft.com/en-us/microsoft-edge/webview2/".to_string(),
+            };
+        }
+        return Webview2Status {
+            os: "windows".to_string(),
+            available: true,
+            version,
+            hint: String::new(),
+        };
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        Webview2Status {
+            os: std::env::consts::OS.to_string(),
+            available: true,
+            version: "n/a".to_string(),
+            hint: String::new(),
+        }
+    }
+}
+
+/// 打开 Microsoft WebView2 下载页（用户从错误弹窗点「去下载」时调用）
+#[tauri::command]
+pub fn open_webview2_download() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        open::that("https://developer.microsoft.com/en-us/microsoft-edge/webview2/")
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}

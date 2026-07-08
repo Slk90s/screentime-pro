@@ -50,6 +50,8 @@ windows = { version = "0.58", features = [
   "Win32_Foundation",
   "Win32_System_SystemInformation",
 ] }
+# 跨平台调用系统默认浏览器（用于打开 WebView2 下载页）
+open = "5"
 
 # ---- Linux 专属依赖 ----
 # x11rb：纯 Rust XCB 协议实现（无需系统 X11 库即可交叉编译；运行时需 X Display）

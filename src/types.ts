@@ -82,6 +82,14 @@ export interface PermissionStatus {
   screen_capture: boolean;
 }
 
+// WebView2 运行时检测结果（仅 Windows 真正生效，其他平台 available=true）
+export interface Webview2Status {
+  os: string;
+  available: boolean;
+  version: string;
+  hint: string;
+}
+
 // 分类规则（对应后端 RuleOut / classification_rules 表）
 // field: 匹配字段（process_name/window_title/exe_path/bundle_id/name）
 // match_type: contains(包含)/equals(相等)/prefix(前缀)/suffix(后缀)/regex(正则)

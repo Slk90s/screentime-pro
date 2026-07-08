@@ -18,6 +18,15 @@
       </div>
     </header>
 
+    <!-- WebView2 缺失横幅：Windows 启动时若检测到未安装 WebView2 Runtime，提示用户去下载 -->
+    <div v-if="showWebview2Warning && !webview2Dismissed" class="perm-banner perm-banner--warn">
+      <span>⚠️ 未检测到 WebView2 运行时，本程序依赖它显示界面。请先安装 Microsoft Edge WebView2 Runtime 后再启动。</span>
+      <div class="perm-actions">
+        <button @click="openWebview2Download">去下载</button>
+        <button class="perm-dismiss" @click="webview2Dismissed = true" title="暂时关闭提示">×</button>
+      </div>
+    </div>
+
     <!-- 权限引导横幅：macOS 未授予辅助功能权限时提示（空闲检测需要） -->
     <!-- v-show 而非 v-if：关闭后仍保留 DOM，重新检测到未授权时可再次显示 -->
     <div v-if="showPermWarning && !permDismissed" class="perm-banner">
@@ -65,12 +74,18 @@ const live = ref<CurrentForegroundOut>({
 const perm = ref<PermissionStatus>({ accessibility: true, screen_capture: true });
 // 用户手动关闭了权限横幅（关闭后不再显示，除非页面重新加载）
 const permDismissed = ref(false);
+// WebView2 检测结果（仅 Windows 真正生效）
+const webview2 = ref<{ os: string; available: boolean; version: string; hint: string } | null>(null);
+// 用户手动关闭了 WebView2 横幅
+const webview2Dismissed = ref(false);
 let timer: number | undefined;
 // Tauri focus 事件监听器 unlisten 函数
 let unlistenFocus: (() => void) | null = null;
 
 // 仅当辅助功能未授权时显示横幅（非 macOS 恒为 true，不显示）
 const showPermWarning = computed(() => !perm.value.accessibility);
+// WebView2 缺失横幅（仅 Windows + 未安装时显示）
+const showWebview2Warning = computed(() => webview2.value !== null && webview2.value.os === "windows" && !webview2.value.available);
 
 // 拉取一次实时前台应用，并同步追踪状态
 async function refreshLive() {
@@ -96,6 +111,15 @@ async function openSettings() {
   }
 }
 
+// 打开 Microsoft WebView2 下载页（Windows）
+async function openWebview2Download() {
+  try {
+    await tracker.openWebview2Download();
+  } catch {
+    /* ignore */
+  }
+}
+
 // 首次运行默认开启「开机自启」：若本地无偏好记录，则开启并保存
 async function ensureAutostart() {
   try {
@@ -114,6 +138,12 @@ onMounted(async () => {
     perm.value = await tracker.checkPermissions();
   } catch {
     /* 非 macOS 会失败，已用默认值兜底 */
+  }
+  // 检测 WebView2 运行时（仅 Windows 真正生效，macOS/Linux 永远 available=true）
+  try {
+    webview2.value = await tracker.checkWebview2();
+  } catch {
+    /* 非桌面运行时忽略 */
   }
   // 监听窗口聚焦事件：从系统设置返回后自动重新检查权限状态
   // 这样用户授予权限后无需手动重启程序，回到应用即生效
