@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Frontend build output
+dist/
+
+# Rust / Tauri build artifacts
+src-tauri/target/
+src-tauri/gen/
+
+# Tauri generated (schemas, etc.)
+src-tauri/Cargo.lock
+# NOTE: 若希望锁定依赖可取消上面一行并改为提交 Cargo.lock
+
+# Release binaries (发布安装包通过 GitHub Releases 分发，不入库)
+release/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Local env
+.env
+.env.local
+
+# WorkBuddy / agent 记忆（不随仓库开源）
+.workbuddy/

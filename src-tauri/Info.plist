@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>需要访问前台应用信息以统计使用时长</string>
+  <key>NSAccessibilityUsageDescription</key>
+  <string>需要辅助功能权限以检测当前窗口标题与系统空闲状态，用于精确统计应用使用时长</string>
+</dict>
+</plist>

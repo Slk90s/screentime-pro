@@ -1,0 +1,64 @@
+[package]
+name = "screentime-pro"
+version = "0.1.0"
+description = "跨平台应用使用时长追踪工具"
+authors = ["Ryan"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "screentime_pro_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.0.0", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+# 分类规则引擎的正则匹配
+regex = "1"
+# 跨平台获取本机电脑名（用于默认设备名称，而非默认设备 ID）
+gethostname = "0.5"
+# 开机自启插件（跨平台：macOS LaunchAgent / Windows 注册表 / Linux systemd --user）
+tauri-plugin-autostart = "2"
+# 跨平台后台定时任务（采样循环）
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+
+# ---- macOS 专属依赖（对齐 Tauri 2.x 引入的 objc2 0.6，避免重复编译）----
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication", "NSApplication"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSURL"] }
+# 前台窗口标题采集（CGWindowListCopyWindowInfo，需「屏幕录制」权限）
+# 用底层 core-foundation-sys 直接调 C 函数，规避 core-foundation 0.10 高层 API 变更
+core-foundation-sys = "0.8"
+core-graphics = "0.24"
+
+# ---- Windows 专属依赖 ----
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = [
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_System_ProcessStatus",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_Threading",
+  "Win32_Foundation",
+  "Win32_System_SystemInformation",
+] }
+
+# ---- Linux 专属依赖 ----
+# x11rb：纯 Rust XCB 协议实现（无需系统 X11 库即可交叉编译；运行时需 X Display）
+# resource_manager：读取 _NET_ACTIVE_WINDOW 等 EWMH 属性所需的原子名缓存
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", default-features = false, features = ["resource_manager"] }
+procfs = "0.17"
+
+[features]
+# 默认启用 Tauri 自定义协议 + 系统托盘（关闭窗口时最小化到托盘而非退出）
+default = ["custom-protocol", "tauri/tray-icon"]
+custom-protocol = ["tauri/custom-protocol"]
