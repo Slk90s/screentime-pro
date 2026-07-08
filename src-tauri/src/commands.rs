@@ -772,31 +772,31 @@ pub struct Webview2Status {
 }
 
 /// 前端启动时调用，提示用户安装 WebView2 永驻版
-/// 仅 Windows 平台做实际检查，macOS/Linux 不依赖 WebView2
+/// 仅 Windows 平台做实际检查（读注册表 EdgeUpdate clients 的 pv 值），macOS/Linux 不依赖 WebView2
 #[tauri::command]
 pub fn check_webview2(app: tauri::AppHandle) -> Webview2Status {
     #[cfg(target_os = "windows")]
     {
-        use tauri::WebviewWindow;
-        // 优先用 Tauri 提供的版本接口（需 2.x 支持），失败则提示用户手动安装
-        let version = app
-            .get_webview_window("main")
-            .and_then(|w| w.webview_version().ok())
-            .unwrap_or_default();
-        if version.is_empty() {
+        let _ = app;
+        // Edge WebView2 Runtime 安装时会在以下注册表键写入版本号
+        // HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\ClientState\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}\pv
+        // 同时 Edge 浏览器自身也会写 HKLM\SOFTWARE\Microsoft\Edge\BLBeacon\version
+        // 优先读取 WebView2 专属键；读取失败时回退到 Edge 浏览器版本
+        let version = read_webview2_version();
+        if let Some(v) = version {
             return Webview2Status {
                 os: "windows".to_string(),
-                available: false,
-                version: String::new(),
-                hint: "未检测到 WebView2 运行时，请先安装 Microsoft Edge WebView2 Runtime（永驻版）后再运行本应用：\nhttps://developer.microsoft.com/en-us/microsoft-edge/webview2/".to_string(),
+                available: true,
+                version: v,
+                hint: String::new(),
             };
         }
-        return Webview2Status {
+        Webview2Status {
             os: "windows".to_string(),
-            available: true,
-            version,
-            hint: String::new(),
-        };
+            available: false,
+            version: String::new(),
+            hint: "未检测到 WebView2 运行时，请先安装 Microsoft Edge WebView2 Runtime（永驻版）后再运行本应用：\nhttps://developer.microsoft.com/en-us/microsoft-edge/webview2/".to_string(),
+        }
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -808,6 +808,57 @@ pub fn check_webview2(app: tauri::AppHandle) -> Webview2Status {
             hint: String::new(),
         }
     }
+}
+
+/// 读取 Windows 注册表查询 WebView2 Runtime 版本
+/// 使用 `reg query` 命令，失败时返回 None
+#[cfg(target_os = "windows")]
+fn read_webview2_version() -> Option<String> {
+    use std::process::Command;
+    // 先尝试 WebView2 Runtime 自己的 ClientState
+    let keys = [
+        r"HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\ClientState\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+        r"HKLM\SOFTWARE\Microsoft\EdgeUpdate\ClientState\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+    ];
+    for key in keys {
+        let output = Command::new("reg")
+            .args(["query", key, "/v", "pv"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        // 形如 `    pv    REG_SZ    110.0.1587.50`
+        for line in text.lines() {
+            if line.trim_start().starts_with("pv") {
+                if let Some(v) = line.split_whitespace().nth(2) {
+                    return Some(v.to_string());
+                }
+            }
+        }
+    }
+    // 回退到 Edge 浏览器版本（Win11 自带 Edge 即代表 WebView2 就绪）
+    let output = Command::new("reg")
+        .args([
+            "query",
+            r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Edge\BLBeacon",
+            "/v",
+            "version",
+        ])
+        .output()
+        .ok()?;
+    if output.status.success() {
+        let text = String::from_utf8_lossy(&output.stdout);
+        for line in text.lines() {
+            if line.trim_start().starts_with("version") {
+                if let Some(v) = line.split_whitespace().nth(2) {
+                    return Some(v.to_string());
+                }
+            }
+        }
+    }
+    None
 }
 
 /// 打开 Microsoft WebView2 下载页（用户从错误弹窗点「去下载」时调用）
