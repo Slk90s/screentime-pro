@@ -5,7 +5,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](https://github.com/)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.1-orange)](./release)
+[![Version](https://img.shields.io/badge/version-0.2.2-orange)](./release)
 
 ---
 
@@ -34,7 +34,7 @@
 | Windows (x64) | `screentime-pro_{ver}_x86_64.exe` | 双击运行，需系统已装 **WebView2 运行时**（Win10/11 通常自带） |
 | Linux (x64) | `screentime-pro_{ver}_amd64.AppImage` / `.deb` | 由 CI 在 Linux 环境构建（详见下方「从源码构建」） |
 
-> 当前本仓库已包含 **macOS 0.2.1** 与 **Windows 0.2.1** 的构建产物（见 `release/v0.2.1/`）。
+> 当前本仓库已包含 **macOS 0.2.2** 与 **Windows 0.2.2** 的构建产物（见 `release/v0.2.2/`）。
 > Linux 因本机构建环境限制，需在你自己的 Linux 机器或 GitHub Actions CI 中产出（见 `.github/workflows/build.yml`）。
 
 ---
@@ -42,12 +42,12 @@
 ## 🚀 快速开始
 
 ### macOS
-1. 下载 `ScreenTime Pro_0.2.1_aarch64.dmg`，打开并拖入「应用程序」。
+1. 下载 `ScreenTime Pro_0.2.2_aarch64.dmg`，打开并拖入「应用程序」。
 2. 首次运行：系统设置 › 隐私与安全性 › **辅助功能** 中授予本应用权限（空闲检测必需）。
 3. 程序默认开机自启、启动即开始追踪，菜单栏/托盘常驻。
 
 ### Windows
-1. 下载 `screentime-pro_0.2.1_x86_64.exe`（NSIS 安装包）。
+1. 下载 `screentime-pro_0.2.2_x86_64.exe`（NSIS 安装包）。
 2. **首次安装**：若系统未装 WebView2 运行时，安装器会**自动下载并安装**（需联网，几秒到几分钟）。Win10 1809+ / Win11 通常已内置，无需此步。
 3. 托盘右键「退出」可彻底关闭；「设置」页可开关开机自启。
 
@@ -178,7 +178,7 @@ screentime-pro/
 ├── .github/workflows/
 │   └── build.yml            # 三端自动构建（macOS / Windows / Linux）
 ├── sql/                  # schema.sql / seed_categories.sql / seed_rules.sql
-├── release/v0.2.1/       # 已构建的带版本号安装包（不入库，走 GitHub Releases）
+├── release/v0.2.2/       # 已构建的带版本号安装包（不入库，走 GitHub Releases）
 ├── README.md / LICENSE / .gitignore
 └── package.json / vite.config.ts / tsconfig*.json
 ```

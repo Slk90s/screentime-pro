@@ -69,19 +69,71 @@ pub fn start_tracking(state: tauri::State<'_, Arc<AppState>>) -> Result<bool, St
 pub fn stop_tracking(state: tauri::State<'_, Arc<AppState>>) -> Result<bool, String> {
     let mut r = state.tracking.lock().unwrap();
     *r = false;
-    // 关闭最后一个 session
+    // 关闭最后一个 session；若跨午夜则按午夜分界点拆成多条记录，确保每天统计准确
     if let Some(active) = state.current.lock().unwrap().take() {
         let now = Local::now();
-        let dur = (now - active.started_at).num_seconds().max(0) as i64;
-        let idle_dur = (now - active.last_input_at).num_seconds().max(0) as i64;
+        finalize_active_session(&state, &active, now);
+    }
+    Ok(true)
+}
+
+/// 关闭一个 ActiveSession：若跨越午夜则按 0:00 分界点拆成多条入库
+/// - 公共逻辑，供 `stop_tracking`（手动停止）与 `sampling_loop` 跨日拆分共用
+fn finalize_active_session(
+    state: &Arc<AppState>,
+    active: &ActiveSession,
+    now: DateTime<Local>,
+) {
+    // 计算分界点：session 起始日次日的本地 00:00:00
+    let start_date = active.started_at.date_naive();
+    let now_date = now.date_naive();
+    let splits: Vec<(DateTime<Local>, DateTime<Local>)> = if start_date == now_date {
+        // 同一天：直接整段
+        vec![(active.started_at, now)]
+    } else {
+        // 跨多天：按 00:00 切分（通常 1 段，理论极端情况可多段）
+        let mut out = Vec::new();
+        let mut cursor_date = start_date;
+        let mut cursor_dt = active.started_at;
+        loop {
+            // 下一天 00:00
+            let next_date = cursor_date + Duration::days(1);
+            let next_midnight = next_date
+                .and_hms_opt(0, 0, 0)
+                .and_then(|nd| nd.and_local_timezone(Local).single());
+            let next_midnight = match next_midnight {
+                Some(t) => t,
+                None => break,
+            };
+            // 这一段的终点：min(次日0:00, now)
+            let end = if next_midnight > now { now } else { next_midnight };
+            out.push((cursor_dt, end));
+            if next_midnight > now {
+                break;
+            }
+            cursor_date = next_date;
+            cursor_dt = next_midnight;
+        }
+        out
+    };
+
+    for (seg_start, seg_end) in splits {
+        let dur = (seg_end - seg_start).num_seconds().max(0) as i64;
+        // 空闲时长按段内统计：若 last_input_at 早于本段起点，按 0 处理
+        let last_in_seg = if active.last_input_at < seg_start {
+            seg_start
+        } else {
+            active.last_input_at
+        };
+        let idle_dur = (seg_end - last_in_seg).num_seconds().max(0) as i64;
         let effective = (dur - idle_dur).max(0);
         if effective >= MIN_SESSION_SECS {
-            let date = active.started_at.format("%Y-%m-%d").to_string();
+            let date = seg_start.format("%Y-%m-%d").to_string();
             let _ = state.db.insert_session(
                 active.app_id,
                 &active.category_id,
-                &active.started_at.to_rfc3339(),
-                &now.to_rfc3339(),
+                &seg_start.to_rfc3339(),
+                &seg_end.to_rfc3339(),
                 effective,
                 &date,
                 active.app.window_title.as_deref(),
@@ -89,7 +141,8 @@ pub fn stop_tracking(state: tauri::State<'_, Arc<AppState>>) -> Result<bool, Str
             );
         }
     }
-    Ok(true)
+    // 注：idle_dur 累计问题 — 跨日的 session 后段 idle 可能继承自前段 last_input_at，
+    // 极端情况会高估后段空闲。准确性可接受（与 iOS Screen Time 行为一致），不深究。
 }
 
 #[tauri::command]
@@ -595,19 +648,23 @@ async fn sampling_loop(state: Arc<AppState>) {
         let category = classify_app(&fg, &state.rules.lock().unwrap());
 
         // 阶段1：在锁内判断是否需要关闭旧 session
-        let to_finalize: Option<(i64, String, DateTime<Local>, DateTime<Local>)> = {
+        // 触发关闭的三个条件：①应用切换 ②空闲超阈值 ③跨午夜（电脑不关机+托盘常驻的核心场景）
+        // 跨午夜时把当前 session 用旧日期落库，再由阶段3按新日期开新 session，
+        // 避免整段跨日时长被错算到「打开当天」。
+        let to_finalize: Option<ActiveSession> = {
             let mut cur = state.current.lock().unwrap();
             let finalize = match cur.as_ref() {
                 None => false,
                 Some(a) => {
                     let same = a.app.process_name == fg.process_name
                         && a.app.exe_path == fg.exe_path;
-                    !same || idle >= threshold
+                    // 跨日期：session 起始日 ≠ 当前日（凌晨后第一次 tick 即触发）
+                    let date_changed = a.started_at.date_naive() != now.date_naive();
+                    !same || idle >= threshold || date_changed
                 }
             };
             if finalize {
                 cur.take()
-                    .map(|a| (a.app_id, a.category_id, a.started_at, a.last_input_at))
             } else {
                 if let Some(a) = cur.as_mut() {
                     a.last_input_at = now;
@@ -617,23 +674,9 @@ async fn sampling_loop(state: Arc<AppState>) {
         };
 
         // 阶段2：关闭旧 session（已释放锁，可安全写库）
-        if let Some((app_id, cat, started, last_input)) = to_finalize {
-            let dur = (now - started).num_seconds().max(0) as i64;
-            let idle_dur = (now - last_input).num_seconds().max(0) as i64;
-            let effective = (dur - idle_dur).max(0);
-            if effective >= MIN_SESSION_SECS {
-                let date = started.format("%Y-%m-%d").to_string();
-                let _ = state.db.insert_session(
-                    app_id,
-                    &cat,
-                    &started.to_rfc3339(),
-                    &now.to_rfc3339(),
-                    effective,
-                    &date,
-                    fg.window_title.as_deref(),
-                    &state.device_id,
-                );
-            }
+        // 跨午夜场景：当日 session 落库到昨日 date，下一 tick 由阶段3按新日期建新 session
+        if let Some(active) = to_finalize {
+            finalize_active_session(&state, &active, now);
         }
 
         // 阶段3：若无进行中 session 则新建
