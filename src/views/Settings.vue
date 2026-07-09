@@ -75,7 +75,7 @@
         >
           <template v-if="updateResult.has_update">
             发现新版本 <b>v{{ updateResult.latest }}</b>（当前 v{{ updateResult.current }}）
-            <a :href="updateResult.url" target="_blank" rel="noopener">前往下载 →</a>
+            <button class="link-btn" @click="goDownload(updateResult.url)">前往下载 →</button>
           </template>
           <template v-else>
             已是最新版本（v{{ updateResult.current }}）
@@ -122,9 +122,9 @@
     <Modal
       v-model="pruneDialogOpen"
       type="warn"
-      title="按设备清理旧数据"
-      :message="`将删除 ${retention} 天之前，下列选中设备的 sessions。\n此操作不可恢复，请先「导出备份」。`"
-      :confirm-text="selectedDeviceIds.length === 0 ? '清全部设备' : `清 ${selectedDeviceIds.length} 台设备`"
+      title="按设备清理数据"
+      :message="`将删除下列选中设备【全部】sessions（不限 365 天）。\n\n系统会在删除前自动导出该设备的 JSON 备份到本机，便于误删时恢复。备份不会被自动删除，请记得手动复制到安全位置。`"
+      :confirm-text="selectedDeviceIds.length === 0 ? '清全部设备（> 365 天）' : `清理 ${selectedDeviceIds.length} 台设备（全量）`"
       cancel-text="取消"
       width="640px"
       @confirm="onConfirmPruneByDevice"
@@ -149,6 +149,11 @@
               <div class="device-name">
                 {{ d.device_name || d.device_id }}
                 <span v-if="d.device_id === settings.device_id" class="self-tag">本机</span>
+                <span
+                  v-else-if="!d.device_name || d.device_name === d.device_id"
+                  class="default-tag"
+                  title="该设备没有设置名称（可能是从旧版备份导入的数据）"
+                >未命名</span>
               </div>
               <div class="device-meta">
                 <span class="mono">{{ d.device_id }}</span>
@@ -162,7 +167,8 @@
             </div>
           </label>
           <p class="hint">
-            留空（不勾选任何设备）= 清理全部设备的旧数据。
+            勾选具体设备 → 清理该设备全部数据 + 自动导出 JSON 备份到本机<br />
+            留空（不勾选） → 按保留天数（${retention} 天）清理全部设备的旧数据
           </p>
         </div>
       </div>
@@ -194,7 +200,7 @@ const settings = ref<SettingsOut>({
 });
 
 // 应用版本：动态读取打包版本（tauri.conf.json），避免 UI 写死导致与实际不符
-const version = ref("0.3.1");
+const version = ref("0.4.0");
 
 // 检查更新状态
 const checking = ref(false);
@@ -259,20 +265,41 @@ function formatSeconds(s: number): string {
   return formatDuration(s);
 }
 
+// 按设备清理：弹窗确认后，对每个选中设备做「先备份再全删」
+const backupResultPath = ref("");
+
 async function onConfirmPruneByDevice() {
+  const ids = selectedDeviceIds.value;
+  if (ids.length === 0) {
+    // 留空 = 清全部设备 → 走原来的 pruneData（保留天数），不做自动备份
+    try {
+      const n = await tracker.pruneData(retention.value);
+      showAlert("info", "已清理", `已清理 ${n} 条旧记录（全部设备，> ${retention.value} 天）`);
+      pruneDialogOpen.value = false;
+    } catch (e) {
+      showAlert("warn", "清理失败", "清理失败：" + (e instanceof Error ? e.message : String(e)));
+    }
+    return;
+  }
+  // 选中具体设备 → 每个都先备份再全删
+  pruneDialogOpen.value = false; // 关闭列表弹窗
+  let totalDeleted = 0;
+  const backups: string[] = [];
   try {
-    const n = await tracker.pruneData(
-      retention.value,
-      selectedDeviceIds.value.length > 0 ? selectedDeviceIds.value : undefined
+    for (const id of ids) {
+      const res = await tracker.backupAndPruneDevice(id);
+      totalDeleted += res.deleted_count;
+      backups.push(res.backup_path);
+    }
+    // 弹结果弹窗：列出所有备份路径 + 在访达中显示 / 复制全部
+    backupResultPath.value = backups.join("\n");
+    showAlert(
+      "info",
+      "已清理",
+      `已清理 ${totalDeleted} 条 sessions（${ids.length} 台设备）。\n\n${ids.length} 份备份已保存到本机：\n${backups.join("\n")}\n\n⚠️ 备份不会被自动删除，请手动复制到安全位置（误删可从备份文件导入恢复）。`
     );
-    const scope =
-      selectedDeviceIds.value.length === 0
-        ? "全部设备"
-        : `${selectedDeviceIds.value.length} 台设备`;
-    showAlert("info", "已清理", `已清理 ${n} 条旧记录（${scope}）`);
-    pruneDialogOpen.value = false;
   } catch (e) {
-    console.error("清理失败", e);
+    console.error("按设备清理失败", e);
     showAlert(
       "warn",
       "清理失败",
@@ -401,6 +428,19 @@ async function onImport(e: Event) {
     );
   } finally {
     (e.target as HTMLInputElement).value = "";
+  }
+}
+
+/** 「前往下载」按钮：通过 Rust 调系统浏览器打开 URL（Tauri WebView 默认拦截 target=_blank） */
+async function goDownload(url: string) {
+  try {
+    await tracker.openUrl(url);
+  } catch (e: any) {
+    showAlert(
+      "warn",
+      "打开失败",
+      `无法打开下载页：${e?.message || e}\n\n请手动访问：\n${url}`
+    );
   }
 }
 
@@ -569,6 +609,20 @@ h4 {
   color: var(--brand, #FF7E27);
   text-decoration: underline;
 }
+.update-result .link-btn {
+  margin-left: 8px;
+  background: none;
+  border: 1px solid var(--brand, #FF7E27);
+  color: var(--brand, #FF7E27);
+  padding: 2px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.update-result .link-btn:hover {
+  background: var(--brand, #FF7E27);
+  color: #fff;
+}
 .about b {
   color: var(--text);
   font-weight: 500;
@@ -632,6 +686,13 @@ h4 {
   border-radius: 8px;
   background: var(--brand, #FF7E27);
   color: #fff;
+}
+.default-tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(192, 57, 43, 0.12);
+  color: #c0392b;
 }
 .empty {
   text-align: center;

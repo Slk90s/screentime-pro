@@ -77,11 +77,19 @@ export const tracker = {
   openWebview2Download: () => call<void>("open_webview2_download"),
   // ===== 检查更新（拉 GitHub Releases API） =====
   checkUpdate: () => call<UpdateInfo>("check_for_update"),
+  // 调系统默认浏览器打开 URL（用于「前往下载」按钮；Tauri WebView 默认拦截 target=_blank）
+  openUrl: (url: string) => call<void>("open_url", { url }),
   // ===== 周/月同比分析 =====
   trends: (period: string, device?: string) =>
     call<TrendsOut>("get_trends", { period, device: device ?? null }),
   // ===== 全量导出 / 导入合并 =====
-  exportAll: () => call<ExportResult>("export_all"),
+  exportAll: (deviceId?: string) =>
+    call<ExportResult>("export_all", { deviceId: deviceId ?? null }),
+  // 按设备清理（先自动备份再全删）
+  backupAndPruneDevice: (deviceId: string) =>
+    call<{ backup_path: string; deleted_count: number }>("backup_and_prune_device", {
+      deviceId,
+    }),
   importData: (content: string) => call<number>("import_data", { content }),
   pruneData: (days: number, deviceIds?: string[]) =>
     call<number>("prune_data", {

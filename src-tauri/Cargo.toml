@@ -30,6 +30,8 @@ tauri-plugin-autostart = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 # 检查更新：拉取 GitHub Releases API（用 rustls 避开 native openssl 依赖）
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# 自动归类引擎的 LRU 缓存（容量 256，进程名 → 分类 ID）
+lru = "0.12"
 
 # ---- macOS 专属依赖（对齐 Tauri 2.x 引入的 objc2 0.6，避免重复编译）----
 [target.'cfg(target_os = "macos")'.dependencies]

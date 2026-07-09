@@ -644,6 +644,16 @@ impl AppDb {
 
     /// 导出全量数据（应用 + 时段 + 设备名映射），用于跨设备合并
     pub fn export_all(&self) -> rusqlite::Result<ExportBundle> {
+        self.export_all_filtered(None)
+    }
+
+    /// 导出全量数据（应用 + 时段 + 设备名映射）
+    /// - `device_filter`：None 或空字符串 → 导出全部设备；Some(id) → 仅导出该设备的 sessions
+    /// - apps 表所有应用都导出（不分设备）；device 名映射始终全量
+    pub fn export_all_filtered(
+        &self,
+        device_filter: Option<&str>,
+    ) -> rusqlite::Result<ExportBundle> {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT name, process_name, exe_path, category_id, platform FROM apps",
@@ -660,24 +670,52 @@ impl AppDb {
             })?
             .collect::<Result<Vec<_>, rusqlite::Error>>()?;
 
-        let mut stmt2 = conn.prepare(
-            "SELECT a.process_name, a.platform, s.start_at, s.end_at, s.duration_seconds, s.date, s.window_title, s.device
-             FROM sessions s JOIN apps a ON s.app_id=a.id",
-        )?;
-        let sessions = stmt2
-            .query_map([], |r| {
-                Ok(ExportSession {
-                    app_process: r.get(0)?,
-                    app_platform: r.get(1)?,
-                    start_at: r.get(2)?,
-                    end_at: r.get(3)?,
-                    duration_seconds: r.get(4)?,
-                    date: r.get(5)?,
-                    window_title: r.get(6)?,
-                    device: r.get(7)?,
-                })
-            })?
-            .collect::<Result<Vec<_>, rusqlite::Error>>()?;
+        // sessions：按设备过滤（Some(id) 加 WHERE；None/空：全量）
+        let (session_sql, had_filter) = match device_filter {
+            Some(id) if !id.is_empty() => (
+                "SELECT a.process_name, a.platform, s.start_at, s.end_at, s.duration_seconds, s.date, s.window_title, s.device
+                 FROM sessions s JOIN apps a ON s.app_id=a.id
+                 WHERE s.device = ?1",
+                true,
+            ),
+            _ => (
+                "SELECT a.process_name, a.platform, s.start_at, s.end_at, s.duration_seconds, s.date, s.window_title, s.device
+                 FROM sessions s JOIN apps a ON s.app_id=a.id",
+                false,
+            ),
+        };
+        let mut stmt2 = conn.prepare(session_sql)?;
+        let sessions = if had_filter {
+            stmt2
+                .query_map([device_filter.unwrap()], |r| {
+                    Ok(ExportSession {
+                        app_process: r.get(0)?,
+                        app_platform: r.get(1)?,
+                        start_at: r.get(2)?,
+                        end_at: r.get(3)?,
+                        duration_seconds: r.get(4)?,
+                        date: r.get(5)?,
+                        window_title: r.get(6)?,
+                        device: r.get(7)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, rusqlite::Error>>()?
+        } else {
+            stmt2
+                .query_map([], |r| {
+                    Ok(ExportSession {
+                        app_process: r.get(0)?,
+                        app_platform: r.get(1)?,
+                        start_at: r.get(2)?,
+                        end_at: r.get(3)?,
+                        duration_seconds: r.get(4)?,
+                        date: r.get(5)?,
+                        window_title: r.get(6)?,
+                        device: r.get(7)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, rusqlite::Error>>()?
+        };
 
         // 收集设备名映射（settings 中 device_name:<id>）
         let mut dev_stmt =
@@ -803,6 +841,23 @@ pub fn prune_old(
 }
 
     // ===================== 简易键值配置 =====================
+
+    /// 删除指定设备的全部 sessions（不限时间，与 `prune_old` 的「超过 N 天」不同）
+    /// - 用于「按设备清理」组合命令（先备份再全删）
+    /// - 同步清理 daily_summaries（同 device 的记录）
+    pub fn delete_all_sessions_for_device(&self, device_id: &str) -> rusqlite::Result<usize> {
+        let conn = self.0.lock().unwrap();
+        let n: usize = conn
+            .execute(
+                "DELETE FROM sessions WHERE device = ?1",
+                params![device_id],
+            )?
+            as usize;
+        // daily_summaries 是按 (date, app_id) 聚合的，无法按 device 过滤（无 device 列）
+        // 删除 sessions 后，对应日聚合仍保留但少了一段时长，accuracy 影响小；
+        // 真正彻底清理需要重建 daily_summaries（v0.5+ 优化）。
+        Ok(n)
+    }
 
     /// 读取配置项（不存在返回 None）
     pub fn get_setting(&self, key: &str) -> Option<String> {

@@ -6,6 +6,7 @@
 //! 3. 菜单栏纯后台模式（macOS）：设为 Accessory 激活策略，去掉 Dock 图标
 //! 4. 启动即自动追踪 + 开机自启；命令注册：把 Rust 函数暴露给前端（Vue）通过 `invoke` 调用
 
+mod categorizer;
 mod classifier;
 mod commands;
 mod db;
@@ -35,6 +36,8 @@ pub struct AppState {
     pub tracker: Arc<dyn PlatformTracker>,
     /// 设备唯一标识（首次运行生成并持久化，多设备合并时区分数据来源）
     pub device_id: String,
+    /// 设备名（与 db.settings.device_name 同步，save_settings 时内存立即更新，无需重启）
+    pub device_name: Mutex<String>,
     /// 是否正在追踪（防止重复启动采样循环）
     pub tracking: Mutex<bool>,
     /// 空闲阈值（秒）：超过该时长无操作视为「离开」，不计入有效时长
@@ -43,6 +46,8 @@ pub struct AppState {
     pub current: Mutex<Option<ActiveSession>>,
     /// 内存缓存的分类规则（采样循环匹配用，规则变更时刷新）
     pub rules: Mutex<Vec<Rule>>,
+    /// 自动归类缓存（LRU 256 容量，避免每次都查 Wikipedia）
+    pub category_cache: categorizer::CategoryCache,
 }
 
 /// 生成稳定的设备唯一 ID（首次运行时调用，之后持久化到 settings，不再变化）
@@ -123,15 +128,22 @@ pub fn run() {
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or(300); // 默认 5 分钟
 
+            // 从 db 读取本机设备名（与 v0.4.0 的 device_name 内存字段同步：保存时无需重启）
+            let device_name_from_db = db
+                .get_setting("device_name")
+                .unwrap_or_else(|| device_id.clone());
+
             // 把数据库与采集器等放入全局状态，供命令使用
             let app_state = Arc::new(AppState {
                 db,
                 tracker,
                 device_id: device_id.clone(),
+                device_name: Mutex::new(device_name_from_db),
                 tracking: Mutex::new(false),
                 idle_threshold: Mutex::new(idle_threshold),
                 current: Mutex::new(None),
                 rules: Mutex::new(rules),
+                category_cache: categorizer::CategoryCache::new(),
             });
             app.manage(app_state.clone());
 
@@ -255,6 +267,7 @@ pub fn run() {
             commands::export_all,
             commands::import_data,
             commands::prune_data,
+            commands::backup_and_prune_device,
             // 多设备合并
             commands::get_devices,
             commands::list_devices_with_stats,
@@ -267,6 +280,7 @@ pub fn run() {
             commands::open_webview2_download,
             // 检查更新（拉 GitHub Releases API）
             commands::check_for_update,
+            commands::open_url,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

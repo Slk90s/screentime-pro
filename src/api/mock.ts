@@ -189,7 +189,15 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
     }
     // ===== 全量导出 / 导入合并 =====
     case "export_all":
-      return { path: "/mock/screentime_export_2026-07-08.json" } as ExportResult;
+      // mock：浏览器预览场景，路径用 file:// 协议路径占位
+      return {
+        path: `~/Library/Application Support/com.screentime.pro/exports/screentime_backup${args?.deviceId ? "_" + (args.deviceId as string).slice(0, 12) : ""}_mock.json`,
+      } as ExportResult;
+    case "backup_and_prune_device":
+      return {
+        backup_path: `~/Library/Application Support/com.screentime.pro/exports/screentime_backup_${((args?.deviceId as string) || "unknown").slice(0, 12)}_pre_purge_mock.json`,
+        deleted_count: 0, // 浏览器预览场景没真数据
+      };
     case "reveal_path":
       return null;
     case "import_data":
@@ -241,12 +249,16 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
     case "check_for_update":
       // 浏览器预览场景：模拟「已是最新版本」
       return {
-        current: "0.3.1",
-        latest: "0.3.1",
+        current: "0.4.0",
+        latest: "0.4.0",
         has_update: false,
         url: "https://github.com/Slk90s/screentime-pro/releases/latest",
         notes: "mock: 浏览器预览场景无网络，返回假数据",
       };
+    case "open_url":
+      // 浏览器预览场景：mock 不真的打开，只 console.log
+      console.log("[mock] open_url:", args?.url);
+      return null;
     default:
       return null;
   }

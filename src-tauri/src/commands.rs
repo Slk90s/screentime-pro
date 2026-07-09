@@ -374,15 +374,26 @@ pub fn export_data(
     })
 }
 
-/// 全量导出（含设备标签），用于跨设备数据合并
+/// 导出全量备份
+/// - `device_id`：可选过滤
+///   - None / 空字符串：导出所有设备的数据（多设备合并用）
+///   - Some(id)：仅导出该设备的数据（「按设备清理」前的备份）
 #[tauri::command]
-pub fn export_all(app: tauri::AppHandle) -> Result<ExportResult, String> {
-    let bundle = state_export(&app)?;
+pub fn export_all(
+    app: tauri::AppHandle,
+    device_id: Option<String>,
+) -> Result<ExportResult, String> {
+    let bundle = state_export(&app, device_id.as_deref())?;
     let json = serde_json::to_string_pretty(&bundle).map_err(|e| e.to_string())?;
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let exports = dir.join("exports");
     std::fs::create_dir_all(&exports).ok();
-    let file = format!("screentime_export_{}.json", today_str());
+    // 文件名带设备 ID 标记（多设备合并场景下用户一眼看出这是哪台的备份）
+    let suffix = match device_id.as_ref().filter(|s| !s.is_empty()) {
+        Some(id) => format!("_{}", &id[..id.len().min(12)]), // 截前 12 位（设备 ID 长度）
+        None => String::new(),
+    };
+    let file = format!("screentime_backup{}_{}.json", suffix, today_str());
     let path = exports.join(file);
     std::fs::write(&path, json).map_err(|e| e.to_string())?;
     Ok(ExportResult {
@@ -390,10 +401,58 @@ pub fn export_all(app: tauri::AppHandle) -> Result<ExportResult, String> {
     })
 }
 
-// 辅助：取 AppState 并导出全量包（export_all 用）
-fn state_export(app: &tauri::AppHandle) -> Result<ExportBundle, String> {
+// 辅助：取 AppState 并导出包；device_id 为 None 时导出全部
+fn state_export(app: &tauri::AppHandle, device_id: Option<&str>) -> Result<ExportBundle, String> {
     let state = app.state::<Arc<AppState>>();
-    state.db.export_all().map_err(|e| e.to_string())
+    state.db.export_all_filtered(device_id).map_err(|e| e.to_string())
+}
+
+/// 「按设备清理 + 自动备份」组合命令
+/// 流程：① 导出该设备全量备份到 `exports/` ② 删除该设备所有 sessions（不限时间）
+/// 设计目的：删除是不可逆操作，先备份让用户能恢复（用户可自己保管备份文件）
+#[derive(serde::Serialize, Clone)]
+pub struct BackupAndPruneResult {
+    /// 备份文件路径（用户应手动复制到安全位置）
+    pub backup_path: String,
+    /// 实际删除的 session 数
+    pub deleted_count: usize,
+}
+
+#[tauri::command]
+pub fn backup_and_prune_device(
+    app: tauri::AppHandle,
+    device_id: String,
+) -> Result<BackupAndPruneResult, String> {
+    if device_id.trim().is_empty() {
+        return Err("device_id 不能为空".to_string());
+    }
+    // 1. 导出该设备的备份（标记设备 ID 在文件名）
+    let bundle = state_export(&app, Some(&device_id))?;
+    let json = serde_json::to_string_pretty(&bundle).map_err(|e| e.to_string())?;
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let exports = dir.join("exports");
+    std::fs::create_dir_all(&exports).ok();
+    let suffix = &device_id[..device_id.len().min(12)];
+    let file = format!(
+        "screentime_backup_{}_{}_pre_purge.json",
+        suffix,
+        today_str()
+    );
+    let backup_path = exports.join(file);
+    std::fs::write(&backup_path, &json).map_err(|e| e.to_string())?;
+
+    // 2. 删除该设备的全部 sessions（不限 365 天；UI 已用 Modal 二次确认）
+    let state = app.state::<Arc<AppState>>();
+    // 直接 SQL 删除（不过 cutoff）：从 db 层加新方法
+    let deleted = state
+        .db
+        .delete_all_sessions_for_device(&device_id)
+        .map_err(|e| e.to_string())?;
+
+    Ok(BackupAndPruneResult {
+        backup_path: backup_path.to_string_lossy().to_string(),
+        deleted_count: deleted,
+    })
 }
 
 /// 导入全量数据并合并（按 start_at+app_id+device 去重）
@@ -633,6 +692,7 @@ pub fn get_settings(state: tauri::State<'_, Arc<AppState>>) -> Result<SettingsOu
 }
 
 /// 保存设置项（设备名 / 空闲阈值 / 保留天数）
+/// - v0.4.0：device_name 同步更新到内存（之前需重启才生效）
 #[tauri::command]
 pub fn save_settings(
     state: tauri::State<'_, Arc<AppState>>,
@@ -641,6 +701,8 @@ pub fn save_settings(
     data_retention_days: u32,
 ) -> Result<bool, String> {
     *state.idle_threshold.lock().unwrap() = idle_threshold;
+    // 同步设备名到内存，立即生效（无需重启）
+    *state.device_name.lock().unwrap() = device_name.clone();
     state
         .db
         .set_setting("idle_threshold", &idle_threshold.to_string())
@@ -683,7 +745,25 @@ async fn sampling_loop(state: Arc<AppState>) {
         let now = Local::now();
         let platform = platform_name();
         // 用规则引擎分类（窗口标题 / 进程名 / 路径 / 包名综合判定）
-        let category = classify_app(&fg, &state.rules.lock().unwrap());
+        // v0.4.0：规则匹配前先用 categorizer 本地字典 + Wikipedia 联网查 + 缓存；
+        // 用户自定义规则仍优先（classify_app 按 priority 倒序评估）
+        let category = {
+            // 先尝试用户规则（高 priority 优先）
+            let user_cat =
+                classify_app(&fg, &state.rules.lock().unwrap());
+            if user_cat != "other" {
+                user_cat
+            } else {
+                // 用户规则未命中，调用 categorizer（本地 + 联网 + 缓存）
+                // categorizer.lookup_category 是 async，这里用 blocking 同步版本
+                tauri::async_runtime::block_on(crate::categorizer::lookup_category(
+                    &fg.process_name,
+                    fg.exe_path.as_deref(),
+                    &fg.name,
+                    &state.category_cache,
+                ))
+            }
+        };
 
         // 阶段1：在锁内判断是否需要关闭旧 session
         // 触发关闭的三个条件：①应用切换 ②空闲超阈值 ③跨午夜（电脑不关机+托盘常驻的核心场景）
@@ -983,6 +1063,38 @@ pub fn open_webview2_download() -> Result<(), String> {
     Ok(())
 }
 
+/// 用系统默认浏览器打开 URL
+/// - Tauri 2 的 WebView 默认拦截 `<a target="_blank">`，所以需要通过 Rust 跳出去
+/// - 用于「检查更新」结果里的「前往下载」按钮（指向 GitHub Release 页面）
+#[tauri::command]
+pub fn open_url(url: String) -> Result<(), String> {
+    // 简易防护：只允许 http(s) 协议，避免被诱导执行本地命令
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(format!("不允许的 URL 协议：{}", url));
+    }
+    // 跨平台：用 cfg 切换实现，避免 macOS/Linux 上 `open` crate 不可见
+    #[cfg(target_os = "windows")]
+    {
+        open::that(&url).map_err(|e| format!("打开 URL 失败：{}", e))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("打开 URL 失败：{}", e))?;
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("打开 URL 失败：{}", e))?;
+        Ok(())
+    }
+}
+
 /// 检查更新结果（前端 Settings.vue「检查更新」按钮用）
 #[derive(serde::Serialize, Clone)]
 pub struct UpdateInfo {
@@ -1119,11 +1231,13 @@ fn parse_atom_latest_release(xml: &str) -> Option<(String, String, String)> {
     let entry = entry_re.find(xml)?;
     let block = entry.as_str();
 
-    // title: <title>Release v0.3.0</title> → "v0.3.0"
+    // title: <title>ScreenTime Pro v0.3.0</title> → "0.3.0"
     let title_re = Regex::new(r"<title[^>]*>([\s\S]*?)</title>").ok()?;
     let raw_title = title_re.captures(block)?.get(1)?.as_str().trim().to_string();
-    // 形如 "Release v0.3.0" → "v0.3.0" → "0.3.0"
+    // GitHub Atom feed 的 title 实际是 "ScreenTime Pro vX.Y.Z"（也可能用 "Release vX.Y.Z"）
+    // → 逐步剥离常见前缀，最终保留 "vX.Y.Z" → 再去 v → "X.Y.Z"
     let tag = raw_title
+        .trim_start_matches("ScreenTime Pro ")
         .trim_start_matches("Release ")
         .trim_start_matches("release ")
         .trim()
