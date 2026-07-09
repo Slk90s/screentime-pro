@@ -21,7 +21,11 @@
         </div>
         <!-- 设备切换（多设备合并） -->
         <DeviceSwitcher v-model="device" :devices="devices" />
-        <button class="export" @click="doExport">导出 CSV</button>
+        <!--
+          历史：原「导出 CSV」按钮已删除。
+          设置页「备份与多设备合并」板块有完整「导出备份」功能（JSON 全量 + 路径展示 + 复制），
+          与本按钮功能重叠且功能更弱。v0.3.1 起移除。
+        -->
       </div>
 
       <!-- 所选日期（点击上方柱状图的某一天切换；默认今天） -->
@@ -155,10 +159,7 @@ async function loadDevices() {
   }
 }
 
-async function doExport() {
-  const res = await tracker.exportData(selectedDate.value, "csv");
-  alert(`已导出 ${selectedDate.value} 的 CSV：\n${res.path}`);
-}
+// 历史：doExport 已移除，导出功能统一在「设置 → 备份与多设备合并」
 
 onMounted(() => {
   loadDevices();

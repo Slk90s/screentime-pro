@@ -99,6 +99,16 @@ export interface UpdateInfo {
   notes: string;
 }
 
+// 单设备聚合统计（用于「按设备清理」弹窗，对应后端 DeviceStats）
+export interface DeviceStats {
+  device_id: string;
+  device_name: string;
+  total_seconds: number;
+  session_count: number;
+  earliest_date: string;
+  latest_date: string;
+}
+
 // 分类规则（对应后端 RuleOut / classification_rules 表）
 // field: 匹配字段（process_name/window_title/exe_path/bundle_id/name）
 // match_type: contains(包含)/equals(相等)/prefix(前缀)/suffix(后缀)/regex(正则)

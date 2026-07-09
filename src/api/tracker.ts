@@ -13,6 +13,7 @@ import type {
   DailySummaryOut,
   DayCategoryOut,
   DeviceInfo,
+  DeviceStats,
   ExportResult,
   HourlyBucketOut,
   OverviewOut,
@@ -68,9 +69,6 @@ export const tracker = {
   // 空闲阈值配置
   setIdle: (secs: number) => call<boolean>("set_idle_threshold", { secs }),
   getIdle: () => call<number>("get_idle_threshold"),
-  // 数据导出（CSV / JSON）
-  exportData: (date: string, format: string) =>
-    call<ExportResult>("export_data", { date, format }),
   // 权限查询与引导（macOS）
   checkPermissions: () => call<PermissionStatus>("check_permissions"),
   openPrivacySettings: () => call<void>("open_privacy_settings"),
@@ -85,12 +83,16 @@ export const tracker = {
   // ===== 全量导出 / 导入合并 =====
   exportAll: () => call<ExportResult>("export_all"),
   importData: (content: string) => call<number>("import_data", { content }),
-  pruneData: (days: number, deviceId?: string) =>
-    call<number>("prune_data", { days, deviceId: deviceId ?? null }),
+  pruneData: (days: number, deviceIds?: string[]) =>
+    call<number>("prune_data", {
+      days,
+      deviceIds: deviceIds && deviceIds.length > 0 ? deviceIds : null,
+    }),
   // 在系统文件管理器中打开路径（导出后定位备份文件）
   revealPath: (path: string) => call<void>("reveal_path", { path }),
   // ===== 多设备合并 =====
   devices: () => call<DeviceInfo[]>("get_devices"),
+  devicesWithStats: () => call<DeviceStats[]>("list_devices_with_stats"),
   getSettings: () => call<SettingsOut>("get_settings"),
   // 注意：Tauri 命令参数在 JS 侧为 camelCase（idleThreshold 等），必须用 camelCase 键名传参
   saveSettings: (s: {

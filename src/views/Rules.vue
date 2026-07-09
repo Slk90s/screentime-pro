@@ -1,22 +1,22 @@
 <template>
   <!-- 分类规则管理视图
        负责：展示/新增/编辑/删除「自动归类规则」，并一键按规则重算历史数据。
+       v0.3.1：新增/编辑改成弹窗（避免长规则看不到完成提醒）
        注：开机自启开关已移至「设置」页（Settings.vue），此处不再重复。 -->
   <div class="rules-view">
-    <!-- 操作反馈条 -->
-    <div v-if="feedback.show" class="feedback" :class="feedback.type">
-      {{ feedback.msg }}
-    </div>
-
     <!-- ============ 规则列表 ============ -->
     <section class="card">
       <div class="head">
         <h3>分类规则（自动归类引擎）</h3>
-        <button class="primary" @click="doReclassify">按规则重算历史</button>
+        <div class="head-actions">
+          <button class="primary" @click="openCreate">＋ 新增规则</button>
+          <button @click="doReclassify">按规则重算历史</button>
+        </div>
       </div>
       <p class="hint">
         采集到的应用会按「字段 + 匹配方式 + 匹配值」自动归入分类，无需导出后人工整理。
         优先级大的规则先匹配；窗口标题规则需 Windows 默认可取 / macOS 授予「屏幕录制」权限。
+        v0.3.1 起，新增软件会自动加入清单（默认归入「其他」），可在弹窗里调整。
       </p>
 
       <table class="rule-table">
@@ -44,8 +44,8 @@
             <td>{{ r.priority }}</td>
             <td>{{ r.enabled ? "是" : "否" }}</td>
             <td class="ops">
-              <button @click="editRule(r)">编辑</button>
-              <button class="danger" @click="removeRule(r.id)">删除</button>
+              <button @click="openEdit(r)">编辑</button>
+              <button class="danger" @click="confirmRemove(r.id, r.pattern)">删除</button>
             </td>
           </tr>
           <tr v-if="rules.length === 0">
@@ -55,10 +55,17 @@
       </table>
     </section>
 
-    <!-- ============ 区块三：新增 / 编辑表单 ============ -->
-    <section class="card">
-      <h3>{{ editingId === null ? "新增规则" : "编辑规则 #" + editingId }}</h3>
-      <div class="form">
+    <!-- ============ 新增/编辑 弹窗 ============ -->
+    <Modal
+      v-model="formOpen"
+      :type="'info'"
+      :title="editingId === null ? '新增规则' : '编辑规则 #' + editingId"
+      :confirm-text="editingId === null ? '新增' : '保存'"
+      cancel-text="取消"
+      @confirm="submit"
+      width="560px"
+    >
+      <div class="form-grid">
         <label>
           字段
           <select v-model="form.field">
@@ -97,11 +104,19 @@
           <input type="checkbox" v-model="form.enabled" /> 启用
         </label>
       </div>
-      <div class="form-actions">
-        <button class="primary" @click="submit">{{ editingId === null ? "新增" : "保存修改" }}</button>
-        <button v-if="editingId !== null" @click="resetForm">取消</button>
-      </div>
-    </section>
+    </Modal>
+
+    <!-- 通用提示/确认弹窗 -->
+    <Modal
+      v-model="alertOpen"
+      :type="alertType"
+      :title="alertTitle"
+      :message="alertMsg"
+      :confirm-text="'确定'"
+      :cancel-text="alertType === 'info' ? '' : '取消'"
+      width="380px"
+      @confirm="onAlertConfirm"
+    />
   </div>
 </template>
 
@@ -114,6 +129,7 @@
 // 所有代码均带中文注释，符合项目「新增界面必须加注释」的规范。
 
 import { ref, onMounted } from "vue";
+import Modal from "../components/Modal.vue";
 import { tracker } from "../api/tracker";
 import type { CategoryOut, RuleOut } from "../types";
 
@@ -121,17 +137,27 @@ import type { CategoryOut, RuleOut } from "../types";
 const rules = ref<RuleOut[]>([]);
 const categories = ref<CategoryOut[]>([]);
 
-// 简易反馈条（替代原生 alert，避免在 Tauri WebView 中被遮挡/无响应）
-const feedback = ref<{ show: boolean; type: "ok" | "err"; msg: string }>({
-  show: false,
-  type: "ok",
-  msg: "",
-});
-let feedbackTimer: number | undefined;
-function showFeedback(type: "ok" | "err", msg: string) {
-  feedback.value = { show: true, type, msg };
-  if (feedbackTimer) clearTimeout(feedbackTimer);
-  feedbackTimer = window.setTimeout(() => (feedback.value.show = false), 3000);
+// 弹窗控制
+// - formOpen: 新增/编辑表单弹窗
+// - alertOpen: 通用提示/确认弹窗
+const formOpen = ref(false);
+const alertOpen = ref(false);
+const alertType = ref<"info" | "confirm" | "warn">("info");
+const alertTitle = ref("");
+const alertMsg = ref("");
+/** 通用弹窗：type=info 时只有确定按钮，type=confirm 时确认触发 onConfirm */
+let pendingConfirm: (() => void | Promise<void>) | null = null;
+function showAlert(
+  type: "info" | "confirm" | "warn",
+  title: string,
+  msg: string,
+  onConfirm?: () => void | Promise<void>
+) {
+  alertType.value = type;
+  alertTitle.value = title;
+  alertMsg.value = msg;
+  pendingConfirm = onConfirm ?? null;
+  alertOpen.value = true;
 }
 
 // 表单状态：editingId 为 null 表示新增，否则为正在编辑的规则 id
@@ -184,11 +210,11 @@ function catColor(id: string): string {
   return categories.value.find((c) => c.id === id)?.color || "#888780";
 }
 
-// 提交：新增或保存修改
+// 提交：新增或保存修改（Modal @confirm 触发）
 async function submit() {
   const f = form.value;
   if (!f.pattern.trim()) {
-    showFeedback("err", "匹配值不能为空");
+    showAlert("warn", "校验失败", "匹配值不能为空");
     return;
   }
   try {
@@ -200,7 +226,7 @@ async function submit() {
         categoryId: f.category_id,
         priority: f.priority,
       });
-      showFeedback("ok", "规则已新增");
+      showAlert("info", "已新增", `规则「${f.pattern}」已新增`);
     } else {
       await tracker.updateRule({
         id: editingId.value,
@@ -211,19 +237,24 @@ async function submit() {
         priority: f.priority,
         enabled: f.enabled,
       });
-      showFeedback("ok", "规则已更新");
+      showAlert("info", "已更新", `规则 #${editingId.value} 已更新`);
     }
     await loadAll();
     resetForm();
+    formOpen.value = false;
   } catch (e: any) {
-    // 把 invoke 的真实错误暴露出来，避免「按钮无反应」体感
     console.error("[Rules] submit failed:", e);
-    showFeedback("err", `操作失败：${e?.message || e}`);
+    showAlert("warn", "操作失败", `操作失败：${e?.message || e}`);
   }
 }
 
-// 载入某条规则到表单进行编辑
-function editRule(r: RuleOut) {
+// 打开「新增」弹窗
+function openCreate() {
+  resetForm();
+  formOpen.value = true;
+}
+// 打开「编辑」弹窗（载入某条规则到表单）
+function openEdit(r: RuleOut) {
   editingId.value = r.id;
   form.value = {
     field: r.field,
@@ -233,6 +264,7 @@ function editRule(r: RuleOut) {
     priority: r.priority,
     enabled: r.enabled,
   };
+  formOpen.value = true;
 }
 
 // 重置表单到「新增」状态
@@ -248,28 +280,43 @@ function resetForm() {
   };
 }
 
-// 删除规则
-async function removeRule(id: number) {
-  if (!confirm("确定删除该规则？")) return;
-  try {
-    await tracker.deleteRule(id);
-    showFeedback("ok", "规则已删除");
-    await loadAll();
-  } catch (e: any) {
-    console.error("[Rules] deleteRule failed:", e);
-    showFeedback("err", `删除失败：${e?.message || e}`);
-  }
+// 删除规则：先用 Modal 确认
+function confirmRemove(id: number, pattern: string) {
+  showAlert(
+    "confirm",
+    "删除规则",
+    `确定删除规则「${pattern}」吗？此操作不可恢复。`,
+    async () => {
+      try {
+        await tracker.deleteRule(id);
+        showAlert("info", "已删除", `规则「${pattern}」已删除`);
+        await loadAll();
+      } catch (e: any) {
+        console.error("[Rules] deleteRule failed:", e);
+        showAlert("warn", "删除失败", `删除失败：${e?.message || e}`);
+      }
+    }
+  );
 }
 
 // 一键按当前规则重算历史分类
 async function doReclassify() {
   try {
     const n = await tracker.reclassify();
-    showFeedback("ok", `已更新 ${n} 个应用的分类`);
+    showAlert("info", "重算完成", `已更新 ${n} 个应用的分类`);
     await loadAll();
   } catch (e: any) {
     console.error("[Rules] reclassify failed:", e);
-    showFeedback("err", `重算失败：${e?.message || e}`);
+    showAlert("warn", "重算失败", `重算失败：${e?.message || e}`);
+  }
+}
+
+/** 通用弹窗的 confirm 事件：优先执行 pendingConfirm，否则单纯关闭 */
+function onAlertConfirm() {
+  if (pendingConfirm) {
+    const cb = pendingConfirm;
+    pendingConfirm = null;
+    void cb();
   }
 }
 
@@ -334,40 +381,41 @@ onMounted(loadAll);
   text-align: center;
   color: var(--text-dim, #6b7280);
 }
-/* 表单 */
-.form {
+/* 头部操作区 */
+.head-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  align-items: flex-end;
+  gap: 8px;
 }
-.form label {
+/* 弹窗内表单（弹窗化布局） */
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.form-grid label {
   display: flex;
   flex-direction: column;
   font-size: 12px;
   color: var(--text-dim, #6b7280);
   gap: 4px;
 }
-.form label.grow {
-  flex: 1;
-  min-width: 220px;
+.form-grid label.grow {
+  grid-column: 1 / -1;
 }
-.form input,
-.form select {
+.form-grid label.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  grid-column: 1 / -1;
+}
+.form-grid input,
+.form-grid select {
   padding: 6px 8px;
   border: 1px solid var(--border, #e5e7eb);
   border-radius: 8px;
   font-size: 13px;
-}
-.form label.check {
-  flex-direction: row;
-  align-items: center;
-  gap: 6px;
-}
-.form-actions {
-  margin-top: 12px;
-  display: flex;
-  gap: 8px;
+  background: var(--card, #fff);
+  color: var(--text, #1f2937);
 }
 button {
   border: 1px solid var(--border, #e5e7eb);
@@ -384,21 +432,5 @@ button.primary {
 }
 button.danger {
   color: #c0392b;
-}
-/* 操作反馈条（成功绿/失败红） */
-.feedback {
-  padding: 8px 14px;
-  border-radius: 8px;
-  font-size: 13px;
-}
-.feedback.ok {
-  background: rgba(46, 160, 67, 0.12);
-  color: #2ea043;
-  border: 1px solid rgba(46, 160, 67, 0.3);
-}
-.feedback.err {
-  background: rgba(192, 57, 43, 0.12);
-  color: #c0392b;
-  border: 1px solid rgba(192, 57, 43, 0.3);
 }
 </style>

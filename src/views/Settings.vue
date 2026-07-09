@@ -1,24 +1,7 @@
 <template>
-  <!-- 设置页：设备名 / 空闲阈值 / 保留天数 / 开机自启 / 备份与多设备合并 -->
+  <!-- 设置页：设备名 / 空闲阈值 / 保留天数 / 开机自启 / 备份与多设备合并 / 关于
+       v0.3.1：所有操作反馈改用 Modal 弹窗（避免大屏下 toast 被忽略） -->
   <div class="settings">
-    <!-- 操作反馈条：保存/导出/导入/清理的结果都显示在这里，确保有可见反馈（不再依赖原生 alert） -->
-    <transition name="fade">
-      <div v-if="toast.show" class="toast" :class="toast.type">
-        <span>{{ toast.msg }}</span>
-        <button
-          v-if="toast.path"
-          class="toast-btn"
-          @click="reveal(toast.path!)"
-        >
-          在访达中显示
-        </button>
-        <button v-if="toast.path" class="toast-btn" @click="copy(toast.path)">
-          复制路径
-        </button>
-        <button class="toast-close" @click="toast.show = false">×</button>
-      </div>
-    </transition>
-
     <section class="card">
       <h3>设备与数据</h3>
 
@@ -40,12 +23,6 @@
         <p class="hint">超过保留期的旧记录会在「清理旧数据」时删除，默认 365 天。</p>
       </div>
 
-      <div class="field">
-        <label>按设备清理（可选）</label>
-        <input v-model="pruneDeviceId" placeholder="输入设备 ID（12 位），留空=清全部" />
-        <p class="hint">多设备合并场景下输入某台设备的 ID，只清该台旧数据；不影响其它设备。</p>
-      </div>
-
       <div class="field row">
         <label>开机自启</label>
         <input v-model="autostart" type="checkbox" @change="onAutostart" />
@@ -56,13 +33,29 @@
 
     <section class="card">
       <h3>备份与多设备合并</h3>
-      <p class="hint">把本机全量数据导出为 JSON 备份；或从其他设备导出的文件合并进来（按时间+应用+设备去重）。</p>
+      <p class="hint">
+        把本机全量数据导出为 JSON 备份；或从其他设备导出的文件合并进来（按时间+应用+设备去重）。
+      </p>
       <div class="btns">
         <button @click="onExport">导出备份</button>
         <button @click="pickImport">导入合并</button>
-        <input ref="fileInput" type="file" accept="application/json,.json" hidden @change="onImport" />
+        <input
+          ref="fileInput"
+          type="file"
+          accept="application/json,.json"
+          hidden
+          @change="onImport"
+        />
       </div>
-      <button class="danger" @click="onPrune">清理 {{ retention }} 天前的旧数据</button>
+
+      <div class="danger-zone">
+        <h4>危险操作</h4>
+        <div class="btns">
+          <button class="danger" @click="confirmCleanAll">清理 {{ retention }} 天前的旧数据</button>
+          <button class="danger" @click="openDevicePrune">按设备清理</button>
+        </div>
+        <p class="hint danger-hint">这两个操作不可恢复，请先在「导出备份」中保留一份 JSON 备份。</p>
+      </div>
     </section>
 
     <section class="card">
@@ -75,7 +68,11 @@
             {{ checking ? "检查中…" : "检查更新" }}
           </button>
         </div>
-        <div v-if="updateResult" class="update-result" :class="{ outdated: updateResult.has_update }">
+        <div
+          v-if="updateResult"
+          class="update-result"
+          :class="{ outdated: updateResult.has_update }"
+        >
           <template v-if="updateResult.has_update">
             发现新版本 <b>v{{ updateResult.latest }}</b>（当前 v{{ updateResult.current }}）
             <a :href="updateResult.url" target="_blank" rel="noopener">前往下载 →</a>
@@ -84,18 +81,108 @@
             已是最新版本（v{{ updateResult.current }}）
           </template>
         </div>
-        <div><span>设备 ID</span><b class="mono">{{ settings.device_id || "—" }}</b></div>
+        <div>
+          <span>设备 ID</span>
+          <b class="mono">{{ settings.device_id || "—" }}</b>
+        </div>
         <div><span>数据存储</span><b>本地 SQLite · 零上传 · 隐私优先</b></div>
       </div>
     </section>
+
+    <!-- ============ 通用反馈/确认弹窗（替代原 toast 顶部横条）============ -->
+    <Modal
+      v-model="alertOpen"
+      :type="alertType"
+      :title="alertTitle"
+      :message="alertMsg"
+      :confirm-text="'确定'"
+      :cancel-text="alertType === 'info' ? '' : '取消'"
+      width="420px"
+      @confirm="onAlertConfirm"
+    />
+
+    <!-- ============ 导出成功后的弹窗（带「在访达中显示 / 复制路径」操作）============ -->
+    <Modal
+      v-model="exportDialogOpen"
+      type="info"
+      title="已导出备份"
+      :message="`文件已保存到：\n${exportPath}`"
+      confirm-text="确定"
+      cancel-text=""
+      width="520px"
+    >
+      <template #footer>
+        <button class="modal-btn cancel" @click="reveal(exportPath)">在访达中显示</button>
+        <button class="modal-btn cancel" @click="copy(exportPath)">复制路径</button>
+        <button class="modal-btn primary" @click="exportDialogOpen = false">关闭</button>
+      </template>
+    </Modal>
+
+    <!-- ============ 按设备清理弹窗 ============ -->
+    <Modal
+      v-model="pruneDialogOpen"
+      type="warn"
+      title="按设备清理旧数据"
+      :message="`将删除 ${retention} 天之前，下列选中设备的 sessions。\n此操作不可恢复，请先「导出备份」。`"
+      :confirm-text="selectedDeviceIds.length === 0 ? '清全部设备' : `清 ${selectedDeviceIds.length} 台设备`"
+      cancel-text="取消"
+      width="640px"
+      @confirm="onConfirmPruneByDevice"
+    >
+      <div class="device-list">
+        <div v-if="deviceStats.length === 0" class="empty">
+          加载中…
+        </div>
+        <div v-else>
+          <label
+            v-for="d in deviceStats"
+            :key="d.device_id"
+            class="device-row"
+            :class="{ checked: selectedDeviceIds.includes(d.device_id) }"
+          >
+            <input
+              type="checkbox"
+              :value="d.device_id"
+              v-model="selectedDeviceIds"
+            />
+            <div class="device-info">
+              <div class="device-name">
+                {{ d.device_name || d.device_id }}
+                <span v-if="d.device_id === settings.device_id" class="self-tag">本机</span>
+              </div>
+              <div class="device-meta">
+                <span class="mono">{{ d.device_id }}</span>
+                <span>·</span>
+                <span>{{ formatSeconds(d.total_seconds) }}</span>
+                <span>·</span>
+                <span>{{ d.session_count }} 条 session</span>
+                <span v-if="d.earliest_date">·</span>
+                <span v-if="d.earliest_date">{{ d.earliest_date }} → {{ d.latest_date }}</span>
+              </div>
+            </div>
+          </label>
+          <p class="hint">
+            留空（不勾选任何设备）= 清理全部设备的旧数据。
+          </p>
+        </div>
+      </div>
+    </Modal>
   </div>
 </template>
 
 <script setup lang="ts">
+// 设置页
+// 关键变更：
+// - 所有反馈改用 Modal 弹窗（替代顶部 toast 横条）
+// - 按设备清理改用弹窗 + 多选 checkbox（不再用文本输入框）
+// - 检查更新失败时把错误消息放进弹窗，用户能看到具体 HTTP 码/响应
+
 import { ref, onMounted } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
+import Modal from "../components/Modal.vue";
 import { tracker } from "../api/tracker";
-import type { SettingsOut } from "../types";
+import type { DeviceStats, SettingsOut, UpdateInfo } from "../types";
+import { formatDuration } from "../utils/format";
 
 const settings = ref<SettingsOut>({
   device_id: "",
@@ -107,65 +194,115 @@ const settings = ref<SettingsOut>({
 });
 
 // 应用版本：动态读取打包版本（tauri.conf.json），避免 UI 写死导致与实际不符
-const version = ref("0.3.0");
+const version = ref("0.3.1");
 
 // 检查更新状态
 const checking = ref(false);
-const updateResult = ref<{
-  current: string;
-  latest: string;
-  has_update: boolean;
-  url: string;
-  notes: string;
-} | null>(null);
+const updateResult = ref<UpdateInfo | null>(null);
 
-// 点「检查更新」：调 Rust check_for_update 拉 GitHub Releases API
-async function onCheckUpdate() {
-  checking.value = true;
-  updateResult.value = null;
-  try {
-    updateResult.value = await tracker.checkUpdate();
-    if (updateResult.value.has_update) {
-      showToast("ok", `发现新版本 v${updateResult.value.latest}，点击下方链接下载`);
-    } else {
-      showToast("ok", `已是最新版本 v${updateResult.value.current}`);
-    }
-  } catch (e: any) {
-    showToast("err", `检查更新失败：${e?.message || e}`);
-  } finally {
-    checking.value = false;
-  }
-}
-
-// 表单绑定（空闲阈值以分钟展示）
+// 表单绑定
 const deviceName = ref("");
 const idleMin = ref(5);
 const retention = ref(365);
 const autostart = ref(false);
-// 按设备清理输入框（12 位 hex，空=清全部）
-const pruneDeviceId = ref("");
 
 const fileInput = ref<HTMLInputElement>();
 
-// 操作反馈条（替代原生 alert，确保每次点击都有可见结果）
-const toast = ref<{
-  show: boolean;
-  type: "ok" | "err";
-  msg: string;
-  path?: string;
-}>({ show: false, type: "ok", msg: "" });
+// ============ 通用弹窗（替代原 showToast）============
+const alertOpen = ref(false);
+const alertType = ref<"info" | "confirm" | "warn">("info");
+const alertTitle = ref("");
+const alertMsg = ref("");
+/** 通用弹窗 confirm 时执行的回调（用于「清理」「删除」等异步操作） */
+let pendingConfirm: (() => void | Promise<void>) | null = null;
+function showAlert(
+  type: "info" | "confirm" | "warn",
+  title: string,
+  msg: string,
+  onConfirm?: () => void | Promise<void>
+) {
+  alertType.value = type;
+  alertTitle.value = title;
+  alertMsg.value = msg;
+  pendingConfirm = onConfirm ?? null;
+  alertOpen.value = true;
+}
+function onAlertConfirm() {
+  if (pendingConfirm) {
+    const cb = pendingConfirm;
+    pendingConfirm = null;
+    void cb();
+  }
+}
 
-let toastTimer: number | undefined;
-function showToast(type: "ok" | "err", msg: string, path?: string) {
-  toast.value = { show: true, type, msg, path };
-  if (toastTimer) clearTimeout(toastTimer);
-  // 失败提示停留更久；成功提示 4 秒后自动消失（有 path 时不自动消失，等用户操作）
-  const ms = type === "err" || path ? 0 : 4000;
-  if (ms > 0) toastTimer = window.setTimeout(() => (toast.value.show = false), ms);
+// ============ 导出成功专用弹窗 ============
+const exportDialogOpen = ref(false);
+const exportPath = ref("");
+
+// ============ 按设备清理弹窗 ============
+const pruneDialogOpen = ref(false);
+const deviceStats = ref<DeviceStats[]>([]);
+const selectedDeviceIds = ref<string[]>([]);
+
+async function openDevicePrune() {
+  // 打开前先拉取设备列表
+  pruneDialogOpen.value = true;
+  selectedDeviceIds.value = [];
+  try {
+    deviceStats.value = await tracker.devicesWithStats();
+  } catch (e: any) {
+    showAlert("warn", "加载失败", `加载设备列表失败：${e?.message || e}`);
+  }
+}
+
+function formatSeconds(s: number): string {
+  return formatDuration(s);
+}
+
+async function onConfirmPruneByDevice() {
+  try {
+    const n = await tracker.pruneData(
+      retention.value,
+      selectedDeviceIds.value.length > 0 ? selectedDeviceIds.value : undefined
+    );
+    const scope =
+      selectedDeviceIds.value.length === 0
+        ? "全部设备"
+        : `${selectedDeviceIds.value.length} 台设备`;
+    showAlert("info", "已清理", `已清理 ${n} 条旧记录（${scope}）`);
+    pruneDialogOpen.value = false;
+  } catch (e) {
+    console.error("清理失败", e);
+    showAlert(
+      "warn",
+      "清理失败",
+      "清理失败：" + (e instanceof Error ? e.message : String(e))
+    );
+  }
+}
+
+function confirmCleanAll() {
+  showAlert(
+    "confirm",
+    "清理全部设备的旧数据",
+    `确定清理 ${retention.value} 天之前【全部设备】的数据吗？此操作不可恢复。`,
+    async () => {
+      try {
+        const n = await tracker.pruneData(retention.value);
+        showAlert("info", "已清理", `已清理 ${n} 条旧记录（全部设备）`);
+      } catch (e) {
+        console.error("清理失败", e);
+        showAlert(
+          "warn",
+          "清理失败",
+          "清理失败：" + (e instanceof Error ? e.message : String(e))
+        );
+      }
+    }
+  );
 }
 
 onMounted(async () => {
-  // 动态读取应用版本（打包后即为真实版本号；浏览器预览兜底显示默认）
   try {
     version.value = await getVersion();
   } catch {
@@ -187,9 +324,9 @@ onMounted(async () => {
 async function onAutostart() {
   try {
     await tracker.setAutostart(autostart.value);
-    showToast("ok", autostart.value ? "已开启开机自启" : "已关闭开机自启");
+    showAlert("info", "已更新", autostart.value ? "已开启开机自启" : "已关闭开机自启");
   } catch (e) {
-    showToast("err", "开机自启设置失败：" + e);
+    showAlert("warn", "设置失败", "开机自启设置失败：" + e);
   }
 }
 
@@ -200,20 +337,29 @@ async function onSave() {
       deviceName: deviceName.value.trim() || settings.value.device_name,
       dataRetentionDays: retention.value,
     });
-    showToast("ok", "设置已保存");
+    showAlert("info", "已保存", "设置已保存");
   } catch (e) {
     console.error("保存设置失败", e);
-    showToast("err", "保存失败：" + (e instanceof Error ? e.message : String(e)));
+    showAlert(
+      "warn",
+      "保存失败",
+      "保存失败：" + (e instanceof Error ? e.message : String(e))
+    );
   }
 }
 
 async function onExport() {
   try {
     const res = await tracker.exportAll();
-    showToast("ok", "已导出备份", res.path);
+    exportPath.value = res.path;
+    exportDialogOpen.value = true;
   } catch (e) {
     console.error("导出失败", e);
-    showToast("err", "导出失败：" + (e instanceof Error ? e.message : String(e)));
+    showAlert(
+      "warn",
+      "导出失败",
+      "导出失败：" + (e instanceof Error ? e.message : String(e))
+    );
   }
 }
 
@@ -222,16 +368,16 @@ async function reveal(path: string) {
   try {
     await tracker.revealPath(path);
   } catch (e) {
-    showToast("err", "打开失败：" + (e instanceof Error ? e.message : String(e)));
+    showAlert("warn", "打开失败", "打开失败：" + (e instanceof Error ? e.message : String(e)));
   }
 }
 
 async function copy(path: string) {
   try {
     await navigator.clipboard.writeText(path);
-    showToast("ok", "路径已复制");
+    showAlert("info", "已复制", "路径已复制到剪贴板");
   } catch {
-    showToast("err", "复制失败，路径：" + path);
+    showAlert("warn", "复制失败", "复制失败，路径：" + path);
   }
 }
 
@@ -245,26 +391,43 @@ async function onImport(e: Event) {
   try {
     const text = await file.text();
     const n = await tracker.importData(text);
-    showToast("ok", `已合并导入 ${n} 条记录`);
+    showAlert("info", "导入成功", `已合并导入 ${n} 条记录`);
   } catch (err) {
     console.error("导入失败", err);
-    showToast("err", "导入失败：" + (err instanceof Error ? err.message : String(err)));
+    showAlert(
+      "warn",
+      "导入失败",
+      "导入失败：" + (err instanceof Error ? err.message : String(err))
+    );
   } finally {
-    // 允许重复选择同一文件
     (e.target as HTMLInputElement).value = "";
   }
 }
 
-async function onPrune() {
-  const dev = pruneDeviceId.value.trim();
-  const scope = dev ? `设备 ${dev}` : "全部设备";
-  if (!confirm(`确定清理 ${retention.value} 天之前【${scope}】的数据吗？此操作不可恢复。`)) return;
+// 点「检查更新」：调 Rust check_for_update 拉 GitHub Releases
+async function onCheckUpdate() {
+  checking.value = true;
+  updateResult.value = null;
   try {
-    const n = await tracker.pruneData(retention.value, dev || undefined);
-    showToast("ok", `已清理 ${n} 条旧记录（${scope}）`);
-  } catch (e) {
-    console.error("清理失败", e);
-    showToast("err", "清理失败：" + (e instanceof Error ? e.message : String(e)));
+    updateResult.value = await tracker.checkUpdate();
+    if (updateResult.value.has_update) {
+      showAlert(
+        "info",
+        "发现新版本",
+        `当前 v${updateResult.value.current} → 最新 v${updateResult.value.latest}\n\n请前往 GitHub Releases 下载最新安装包。`
+      );
+    } else {
+      showAlert("info", "已是最新版本", `当前版本 v${updateResult.value.current} 已是最新`);
+    }
+  } catch (e: any) {
+    console.error("检查更新失败", e);
+    showAlert(
+      "warn",
+      "检查更新失败",
+      `检查更新失败：${e?.message || e}\n\n常见原因：网络不通 / GitHub 限流 / 仓库地址错误。`
+    );
+  } finally {
+    checking.value = false;
   }
 }
 </script>
@@ -275,60 +438,6 @@ async function onPrune() {
   flex-direction: column;
   gap: 16px;
   max-width: 720px;
-}
-/* 操作反馈条 */
-.toast {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
-  border-radius: 10px;
-  font-size: 13px;
-  animation: slidein 0.2s ease;
-}
-.toast.ok {
-  background: #e8f8ee;
-  border: 1px solid #a3e0b8;
-  color: #1a7a3c;
-}
-.toast.err {
-  background: #fdecec;
-  border: 1px solid #f3b0b0;
-  color: #c0392b;
-}
-.toast-btn {
-  border: 1px solid currentColor;
-  background: transparent;
-  color: inherit;
-  padding: 4px 10px;
-  border-radius: 7px;
-  font-size: 12px;
-  cursor: pointer;
-}
-.toast-close {
-  margin-left: auto;
-  border: none;
-  background: transparent;
-  color: inherit;
-  font-size: 18px;
-  line-height: 1;
-  cursor: pointer;
-}
-@keyframes slidein {
-  from {
-    opacity: 0;
-    transform: translateY(-6px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-.fade-leave-active {
-  transition: opacity 0.2s;
-}
-.fade-leave-to {
-  opacity: 0;
 }
 .card {
   padding: 18px 20px;
@@ -341,6 +450,12 @@ h3 {
   font-weight: 600;
   margin: 0 0 14px;
   color: var(--text);
+}
+h4 {
+  font-size: 13px;
+  margin: 16px 0 8px;
+  color: var(--text-dim);
+  font-weight: 600;
 }
 .field {
   margin-bottom: 16px;
@@ -376,6 +491,9 @@ h3 {
   margin: 6px 0 0;
   line-height: 1.5;
 }
+.danger-hint {
+  color: #c0392b;
+}
 .save {
   border: none;
   background: var(--brand, #ff7e27);
@@ -389,6 +507,7 @@ h3 {
   display: flex;
   gap: 10px;
   margin: 12px 0;
+  flex-wrap: wrap;
 }
 .btns button {
   border: 1px solid var(--border);
@@ -399,14 +518,17 @@ h3 {
   font-size: 13px;
   cursor: pointer;
 }
+.danger-zone {
+  margin-top: 18px;
+  padding: 12px 14px;
+  border: 1px dashed #e0a;
+  border-radius: 10px;
+  background: rgba(224, 0, 170, 0.04);
+}
 .danger {
-  border: 1px solid #e0a;
-  background: transparent;
-  color: #d9534f;
-  padding: 8px 16px;
-  border-radius: 8px;
-  font-size: 13px;
-  cursor: pointer;
+  border: 1px solid #e0a !important;
+  background: transparent !important;
+  color: #d9534f !important;
 }
 .about div {
   display: flex;
@@ -454,5 +576,66 @@ h3 {
 .about .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
+}
+/* 按设备清理弹窗内设备列表 */
+.device-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 4px 2px;
+}
+.device-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.device-row:hover {
+  background: var(--bg-soft, rgba(0, 0, 0, 0.03));
+}
+.device-row.checked {
+  border-color: var(--brand, #FF7E27);
+  background: rgba(255, 126, 39, 0.06);
+}
+.device-row input[type="checkbox"] {
+  margin-top: 4px;
+  cursor: pointer;
+}
+.device-info {
+  flex: 1;
+  min-width: 0;
+}
+.device-name {
+  font-weight: 600;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.device-meta {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 4px;
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.self-tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--brand, #FF7E27);
+  color: #fff;
+}
+.empty {
+  text-align: center;
+  color: var(--text-dim);
+  padding: 24px 0;
 }
 </style>

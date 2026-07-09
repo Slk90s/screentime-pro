@@ -863,3 +863,82 @@ fn to_base64(data: &[u8]) -> String {
     }
     out
 }
+
+// ===================== 单设备聚合（按设备清理弹窗用） =====================
+
+/// 单设备聚合统计（用于「按设备清理」弹窗）
+#[derive(serde::Serialize, Clone)]
+pub struct DeviceStats {
+    /// 设备 ID（12 位 hex）
+    pub device_id: String,
+    /// 设备名（来自 settings，若无则用 id 兜底）
+    pub device_name: String,
+    /// 该设备的总累计秒数
+    pub total_seconds: i64,
+    /// 该设备的 session 数
+    pub session_count: i64,
+    /// 该设备最早一条 session 的日期（YYYY-MM-DD）
+    pub earliest_date: String,
+    /// 该设备最新一条 session 的日期（YYYY-MM-DD）
+    pub latest_date: String,
+}
+
+impl AppDb {
+    /// 列出所有出现过数据的设备聚合统计（含本机，本机即使无数据也列出）
+    /// - 用 `sessions` 表的 `device` 列做分组
+    /// - 设备名按 `settings` 表的 `device_name:<id>` key 读取，无则用 id 兜底
+    pub fn list_devices_with_stats(
+        &self,
+        current_id: &str,
+        current_name: &str,
+    ) -> rusqlite::Result<Vec<DeviceStats>> {
+        let conn = self.0.lock().unwrap();
+        // 1) 先取 sessions 中所有出现过的 device
+        let mut stmt = conn.prepare("SELECT DISTINCT device FROM sessions")?;
+        let mut ids: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        // 2) 本机即使暂无 session 也列出
+        if !ids.iter().any(|i| i == current_id) {
+            ids.push(current_id.to_string());
+        }
+
+        let mut out: Vec<DeviceStats> = Vec::with_capacity(ids.len());
+        for id in ids {
+            // 2.1 聚合统计
+            let (total, count, earliest, latest): (i64, i64, Option<String>, Option<String>) = conn
+                .query_row(
+                    "SELECT COALESCE(SUM(duration_seconds), 0),
+                            COUNT(*),
+                            MIN(date),
+                            MAX(date)
+                     FROM sessions WHERE device = ?1",
+                    params![id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )?;
+            // 2.2 设备名（settings 优先）
+            let name = if id == current_id {
+                current_name.to_string()
+            } else {
+                conn.query_row(
+                    "SELECT value FROM settings WHERE key=?1",
+                    params![format!("device_name:{}", id)],
+                    |r| r.get::<_, String>(0),
+                )
+                .optional()?
+                .unwrap_or_else(|| id.clone())
+            };
+            out.push(DeviceStats {
+                device_id: id,
+                device_name: name,
+                total_seconds: total,
+                session_count: count,
+                earliest_date: earliest.unwrap_or_default(),
+                latest_date: latest.unwrap_or_default(),
+            });
+        }
+        // 按总秒数倒序，最活跃的排前面
+        out.sort_by(|a, b| b.total_seconds.cmp(&a.total_seconds));
+        Ok(out)
+    }
+}

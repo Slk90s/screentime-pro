@@ -410,22 +410,52 @@ pub fn import_data(
 }
 
 /// 清理超过保留天数的旧数据
-/// - `device_id`：可选设备 ID 过滤。Some(id) → 仅清该设备的旧数据；None → 清全部设备
+/// - `device_ids`：可选设备 ID 列表过滤
+///   - `None` 或空数组：清全部设备的旧数据
+///   - `Some(["id1", "id2"])`：仅清这些设备的旧数据（多选用例）
 #[tauri::command]
 pub fn prune_data(
     state: tauri::State<'_, Arc<AppState>>,
     days: u32,
-    device_id: Option<String>,
+    device_ids: Option<Vec<String>>,
 ) -> Result<usize, String> {
-    let n = state
-        .db
-        .prune_old(days, device_id.as_deref())
-        .map_err(|e| e.to_string())?;
+    let ids = device_ids.unwrap_or_default();
+    let n = if ids.is_empty() {
+        // 清全部设备的旧数据
+        state.db.prune_old(days, None).map_err(|e| e.to_string())?
+    } else {
+        // 按设备清理（多选）：依次调用单设备清理并累加
+        let mut total = 0usize;
+        for id in &ids {
+            let deleted = state
+                .db
+                .prune_old(days, Some(id.as_str()))
+                .map_err(|e| e.to_string())?;
+            total += deleted;
+        }
+        total
+    };
     // 仅在「清全部」时更新全局保留天数（按设备清理不影响全局策略）
-    if device_id.is_none() {
+    if ids.is_empty() {
         let _ = state.db.set_setting("data_retention_days", &days.to_string());
     }
     Ok(n)
+}
+
+/// 列出所有设备的聚合统计（用于 Settings.vue「按设备清理」弹窗）
+#[tauri::command]
+pub fn list_devices_with_stats(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<crate::db::DeviceStats>, String> {
+    let current_id = state.device_id.clone();
+    let current_name = state
+        .db
+        .get_setting("device_name")
+        .unwrap_or_else(|| current_id.clone());
+    state
+        .db
+        .list_devices_with_stats(&current_id, &current_name)
+        .map_err(|e| e.to_string())
 }
 
 /// 查询当前系统权限状态（辅助功能 / 屏幕录制）
@@ -691,6 +721,7 @@ async fn sampling_loop(state: Arc<AppState>) {
         {
             let mut cur = state.current.lock().unwrap();
             if cur.is_none() {
+                let process_name = fg.process_name.clone();
                 let app_id = state
                     .db
                     .upsert_app(
@@ -704,10 +735,39 @@ async fn sampling_loop(state: Arc<AppState>) {
                 *cur = Some(ActiveSession {
                     app: fg,
                     app_id,
-                    category_id: category,
+                    category_id: category.clone(),
                     started_at: now,
                     last_input_at: now,
                 });
+                // 自动归类引擎的「清单」补全：如果是全新 process_name 且尚未有规则，
+                // 后台自动插入一条低优先级（priority=0）规则，分类用当前 classify 结果。
+                // 这样用户能在「分类规则」页面看到所有用过的应用并按需调整。
+                // 用 tokio::spawn 异步写库，避免阻塞采样循环。
+                let already_covered = state
+                    .rules
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|r| r.enabled && r.field == "process_name" && r.pattern == process_name);
+                if !already_covered {
+                    let st = Arc::clone(&state);
+                    let pn = process_name.clone();
+                    let cat = category.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Ok(rule_id) = st
+                            .db
+                            .insert_rule("process_name", "equals", &pn, &cat, 0)
+                        {
+                            // 重新加载内存缓存（让后续采样循环立即看到新规则）
+                            if let Ok(new_rules) = st.db.load_rules() {
+                                if let Ok(mut guard) = st.rules.lock() {
+                                    *guard = new_rules;
+                                }
+                            }
+                            let _ = rule_id;
+                        }
+                    });
+                }
             }
         }
     }
@@ -953,40 +1013,139 @@ pub async fn check_for_update(app: tauri::AppHandle) -> Result<UpdateInfo, Strin
         .clone()
         .unwrap_or_else(|| "0.0.0".to_string());
 
-    // 调 GitHub Releases API（latest 接口）
+    // 调 GitHub Releases Atom feed（无 60/hr rate limit，比 REST API 稳）
+    // 用 atom feed 替代 /repos/.../releases/latest：
+    //   - REST API 未授权每小时 60 次限制 + UA 严格 → 容易触发 403 rate limit
+    //   - Atom feed 是公开订阅源，无频率限制，对 User-Agent 不严
+    //   - 失败时回退到 REST API
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .user_agent("ScreenTime-Pro-Update-Checker")
         .build()
         .map_err(|e| format!("构建 HTTP 客户端失败: {}", e))?;
-    let resp = client
-        .get("https://api.github.com/repos/Slk90s/screentime-pro/releases/latest")
-        .header("Accept", "application/vnd.github+json")
+
+    let mut latest_info: Option<(String, String, String)> = None; // (version, url, body)
+    let mut last_err: Option<String> = None;
+
+    // 策略 1：Atom feed（最稳）
+    match client
+        .get("https://github.com/Slk90s/screentime-pro/releases.atom")
         .send()
         .await
-        .map_err(|e| format!("请求 GitHub 失败: {}", e))?;
-    if !resp.status().is_success() {
-        return Err(format!("GitHub 返回 HTTP {}", resp.status().as_u16()));
+    {
+        Ok(resp) if resp.status().is_success() => {
+            match resp.text().await {
+                Ok(xml) => {
+                    if let Some(info) = parse_atom_latest_release(&xml) {
+                        latest_info = Some(info);
+                    } else {
+                        last_err = Some("Atom feed 解析失败（未找到 release 条目）".to_string());
+                    }
+                }
+                Err(e) => last_err = Some(format!("Atom feed 读取失败: {}", e)),
+            }
+        }
+        Ok(resp) => {
+            last_err = Some(format!("Atom feed 返回 HTTP {}", resp.status().as_u16()));
+        }
+        Err(e) => last_err = Some(format!("Atom feed 请求失败: {}", e)),
     }
-    #[derive(serde::Deserialize)]
-    struct GhRelease {
-        tag_name: String,
-        html_url: String,
-        body: Option<String>,
+
+    // 策略 2：REST API（fallback）
+    if latest_info.is_none() {
+        match client
+            .get("https://api.github.com/repos/Slk90s/screentime-pro/releases/latest")
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                #[derive(serde::Deserialize)]
+                struct GhRelease {
+                    tag_name: String,
+                    html_url: String,
+                    body: Option<String>,
+                }
+                match resp.json::<GhRelease>().await {
+                    Ok(gh) => {
+                        let latest = gh.tag_name.trim_start_matches('v').to_string();
+                        latest_info = Some((latest, gh.html_url, gh.body.unwrap_or_default()));
+                    }
+                    Err(e) => last_err = Some(format!("REST API 解析失败: {}", e)),
+                }
+            }
+            Ok(resp) => {
+                // 把 status 取出后再读 body（避免 borrow moved value）
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                let body_short = if body.len() > 200 {
+                    format!("{}…", &body[..200])
+                } else {
+                    body
+                };
+                last_err = Some(format!("REST API 返回 HTTP {}：{}", status.as_u16(), body_short));
+            }
+            Err(e) => last_err = Some(format!("REST API 请求失败: {}", e)),
+        }
     }
-    let gh: GhRelease = resp
-        .json()
-        .await
-        .map_err(|e| format!("解析 GitHub 响应失败: {}", e))?;
-    let latest = gh.tag_name.trim_start_matches('v').to_string();
+
+    let (latest, url, notes) = match latest_info {
+        Some(v) => v,
+        None => {
+            return Err(last_err.unwrap_or_else(|| "未知错误：所有检查更新策略均失败".to_string()));
+        }
+    };
     let has_update = semver_gt(&latest, &current);
     Ok(UpdateInfo {
         current,
         latest,
         has_update,
-        url: gh.html_url,
-        notes: gh.body.unwrap_or_default(),
+        url,
+        notes,
     })
+}
+
+/// 从 GitHub Atom feed XML 中解析最新一条 release 的 tag/url/summary
+/// Atom 结构示例：
+///   <entry>
+///     <title>Release v0.3.0</title>
+///     <link href="https://github.com/Slk90s/screentime-pro/releases/tag/v0.3.0"/>
+///     <summary>...</summary>
+///   </entry>
+fn parse_atom_latest_release(xml: &str) -> Option<(String, String, String)> {
+    use regex::Regex;
+    // 抓第一个 <entry>...</entry> 块
+    let entry_re = Regex::new(r"<entry[\s\S]*?</entry>").ok()?;
+    let entry = entry_re.find(xml)?;
+    let block = entry.as_str();
+
+    // title: <title>Release v0.3.0</title> → "v0.3.0"
+    let title_re = Regex::new(r"<title[^>]*>([\s\S]*?)</title>").ok()?;
+    let raw_title = title_re.captures(block)?.get(1)?.as_str().trim().to_string();
+    // 形如 "Release v0.3.0" → "v0.3.0" → "0.3.0"
+    let tag = raw_title
+        .trim_start_matches("Release ")
+        .trim_start_matches("release ")
+        .trim()
+        .trim_start_matches('v')
+        .to_string();
+
+    // link: <link href="..."/> → url
+    let link_re = Regex::new(r#"<link[^>]*href="([^"]+)""#).ok()?;
+    let url = link_re.captures(block)?.get(1)?.as_str().to_string();
+
+    // summary: <summary>...</summary>（可能没有，做 best-effort）
+    let sum_re = Regex::new(r"<summary[^>]*>([\s\S]*?)</summary>").ok()?;
+    let notes = sum_re
+        .captures(block)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().trim().to_string())
+        .unwrap_or_default();
+
+    if tag.is_empty() {
+        return None;
+    }
+    Some((tag, url, notes))
 }
 
 /// SemVer 字符串比较：仅 0.X.Y 之间逐位数字比较，剪掉前缀 'v'

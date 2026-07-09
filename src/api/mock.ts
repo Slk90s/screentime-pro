@@ -204,6 +204,27 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
       ];
       return arr;
     }
+    case "list_devices_with_stats": {
+      // 模拟每个设备的统计数据（用于「按设备清理」弹窗预览）
+      return [
+        {
+          device_id: "a1b2c3d4e5f6",
+          device_name: "我的 MacBook Pro",
+          total_seconds: 86400 * 3 + 7200,
+          session_count: 142,
+          earliest_date: "2026-05-01",
+          latest_date: "2026-07-08",
+        },
+        {
+          device_id: "f6e5d4c3b2a1",
+          device_name: "办公室 Windows 台式机",
+          total_seconds: 86400 + 3600,
+          session_count: 38,
+          earliest_date: "2026-06-15",
+          latest_date: "2026-07-05",
+        },
+      ];
+    }
     case "get_settings": {
       const s: SettingsOut = {
         device_id: "a1b2c3d4e5f6",
@@ -220,8 +241,8 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
     case "check_for_update":
       // 浏览器预览场景：模拟「已是最新版本」
       return {
-        current: "0.3.0",
-        latest: "0.3.0",
+        current: "0.3.1",
+        latest: "0.3.1",
         has_update: false,
         url: "https://github.com/Slk90s/screentime-pro/releases/latest",
         notes: "mock: 浏览器预览场景无网络，返回假数据",

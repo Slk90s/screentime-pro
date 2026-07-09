@@ -257,6 +257,7 @@ pub fn run() {
             commands::prune_data,
             // 多设备合并
             commands::get_devices,
+            commands::list_devices_with_stats,
             commands::get_settings,
             commands::save_settings,
             // 文件管理器定位（导出后打开所在目录）
