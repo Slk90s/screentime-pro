@@ -217,6 +217,15 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
     }
     case "save_settings":
       return true;
+    case "check_for_update":
+      // 浏览器预览场景：模拟「已是最新版本」
+      return {
+        current: "0.3.0",
+        latest: "0.3.0",
+        has_update: false,
+        url: "https://github.com/Slk90s/screentime-pro/releases/latest",
+        notes: "mock: 浏览器预览场景无网络，返回假数据",
+      };
     default:
       return null;
   }

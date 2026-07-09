@@ -28,6 +28,8 @@ gethostname = "0.5"
 tauri-plugin-autostart = "2"
 # 跨平台后台定时任务（采样循环）
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+# 检查更新：拉取 GitHub Releases API（用 rustls 避开 native openssl 依赖）
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # ---- macOS 专属依赖（对齐 Tauri 2.x 引入的 objc2 0.6，避免重复编译）----
 [target.'cfg(target_os = "macos")'.dependencies]

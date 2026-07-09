@@ -12,8 +12,9 @@
     <!-- 标签页一：统计概览 -->
     <div v-if="tab === 'stats'">
       <div class="toolbar">
-        <!-- 时间范围：近 7/14/30 天 -->
+        <!-- 时间范围：今天 / 近 7/14/30 天 -->
         <div class="range">
+          <button :class="{ active: range === 0 }" @click="range = 0">今天</button>
           <button :class="{ active: range === 7 }" @click="range = 7">近7天</button>
           <button :class="{ active: range === 14 }" @click="range = 14">近14天</button>
           <button :class="{ active: range === 30 }" @click="range = 30">近30天</button>
@@ -113,10 +114,13 @@ const ranking = ref<AppRankingOut[]>([]);
 const categories = ref<CategoryOut[]>([]);
 
 // 加载时间范围内的汇总（按天柱状图 + 分类字典），与所选日期无关
+// range=0 表示「今天」：daily 用 days=1 取今日一行（SQLite LIMIT），dayCats 用 days=0 自然只取今天
 async function loadRange() {
   categories.value = await tracker.categories();
-  daily.value = await tracker.daily(range.value, device.value);
-  dayCats.value = await tracker.dailyCategories(range.value, device.value);
+  const dailyDays = range.value === 0 ? 1 : range.value;
+  const catDays = range.value === 0 ? 0 : range.value;
+  daily.value = await tracker.daily(dailyDays, device.value);
+  dayCats.value = await tracker.dailyCategories(catDays, device.value);
 }
 // 加载所选「某天」的详情（总览 / 小时分布 / 排行）
 async function loadDetails() {

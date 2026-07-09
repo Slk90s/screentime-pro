@@ -90,6 +90,15 @@ export interface Webview2Status {
   hint: string;
 }
 
+// 检查更新结果（GitHub Releases API，对应后端 UpdateInfo）
+export interface UpdateInfo {
+  current: string;
+  latest: string;
+  has_update: boolean;
+  url: string;
+  notes: string;
+}
+
 // 分类规则（对应后端 RuleOut / classification_rules 表）
 // field: 匹配字段（process_name/window_title/exe_path/bundle_id/name）
 // match_type: contains(包含)/equals(相等)/prefix(前缀)/suffix(后缀)/regex(正则)

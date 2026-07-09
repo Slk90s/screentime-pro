@@ -774,17 +774,33 @@ impl AppDb {
     }
 
     /// 清理超过 retention_days 天的旧时段（按日期）
-    pub fn prune_old(&self, retention_days: u32) -> rusqlite::Result<usize> {
-        let conn = self.0.lock().unwrap();
-        let cutoff = (Local::now() - Duration::days(retention_days as i64))
-            .format("%Y-%m-%d")
-            .to_string();
-        let n: usize = conn
-            .execute("DELETE FROM sessions WHERE date < ?1", params![cutoff])?
-            as usize;
-        conn.execute("DELETE FROM daily_summaries WHERE date < ?1", params![cutoff])?;
-        Ok(n)
-    }
+/// - `device_filter`：可选设备 ID 过滤。Some(id) → 仅清该设备的旧数据；None → 清全部设备的旧数据
+///   用于多设备合并场景下「只想清某一台历史数据」
+pub fn prune_old(
+    &self,
+    retention_days: u32,
+    device_filter: Option<&str>,
+) -> rusqlite::Result<usize> {
+    let conn = self.0.lock().unwrap();
+    let cutoff = (Local::now() - Duration::days(retention_days as i64))
+        .format("%Y-%m-%d")
+        .to_string();
+    let n: usize = match device_filter {
+        Some(dev) if !dev.is_empty() => {
+            // 仅清指定设备的旧数据（用于「按设备清理」入口）
+            conn.execute(
+                "DELETE FROM sessions WHERE date < ?1 AND device = ?2",
+                params![cutoff, dev],
+            )?
+        }
+        _ => conn.execute("DELETE FROM sessions WHERE date < ?1", params![cutoff])?,
+    } as usize;
+    conn.execute(
+        "DELETE FROM daily_summaries WHERE date < ?1",
+        params![cutoff],
+    )?;
+    Ok(n)
+}
 
     // ===================== 简易键值配置 =====================
 

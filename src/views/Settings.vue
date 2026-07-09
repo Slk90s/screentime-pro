@@ -40,6 +40,12 @@
         <p class="hint">超过保留期的旧记录会在「清理旧数据」时删除，默认 365 天。</p>
       </div>
 
+      <div class="field">
+        <label>按设备清理（可选）</label>
+        <input v-model="pruneDeviceId" placeholder="输入设备 ID（12 位），留空=清全部" />
+        <p class="hint">多设备合并场景下输入某台设备的 ID，只清该台旧数据；不影响其它设备。</p>
+      </div>
+
       <div class="field row">
         <label>开机自启</label>
         <input v-model="autostart" type="checkbox" @change="onAutostart" />
@@ -62,7 +68,22 @@
     <section class="card">
       <h3>关于</h3>
       <div class="about">
-        <div><span>应用版本</span><b class="mono">{{ version }}</b></div>
+        <div>
+          <span>应用版本</span>
+          <b class="mono">{{ version }}</b>
+          <button class="check-update" @click="onCheckUpdate" :disabled="checking">
+            {{ checking ? "检查中…" : "检查更新" }}
+          </button>
+        </div>
+        <div v-if="updateResult" class="update-result" :class="{ outdated: updateResult.has_update }">
+          <template v-if="updateResult.has_update">
+            发现新版本 <b>v{{ updateResult.latest }}</b>（当前 v{{ updateResult.current }}）
+            <a :href="updateResult.url" target="_blank" rel="noopener">前往下载 →</a>
+          </template>
+          <template v-else>
+            已是最新版本（v{{ updateResult.current }}）
+          </template>
+        </div>
         <div><span>设备 ID</span><b class="mono">{{ settings.device_id || "—" }}</b></div>
         <div><span>数据存储</span><b>本地 SQLite · 零上传 · 隐私优先</b></div>
       </div>
@@ -86,13 +107,43 @@ const settings = ref<SettingsOut>({
 });
 
 // 应用版本：动态读取打包版本（tauri.conf.json），避免 UI 写死导致与实际不符
-const version = ref("0.1.0");
+const version = ref("0.3.0");
+
+// 检查更新状态
+const checking = ref(false);
+const updateResult = ref<{
+  current: string;
+  latest: string;
+  has_update: boolean;
+  url: string;
+  notes: string;
+} | null>(null);
+
+// 点「检查更新」：调 Rust check_for_update 拉 GitHub Releases API
+async function onCheckUpdate() {
+  checking.value = true;
+  updateResult.value = null;
+  try {
+    updateResult.value = await tracker.checkUpdate();
+    if (updateResult.value.has_update) {
+      showToast("ok", `发现新版本 v${updateResult.value.latest}，点击下方链接下载`);
+    } else {
+      showToast("ok", `已是最新版本 v${updateResult.value.current}`);
+    }
+  } catch (e: any) {
+    showToast("err", `检查更新失败：${e?.message || e}`);
+  } finally {
+    checking.value = false;
+  }
+}
 
 // 表单绑定（空闲阈值以分钟展示）
 const deviceName = ref("");
 const idleMin = ref(5);
 const retention = ref(365);
 const autostart = ref(false);
+// 按设备清理输入框（12 位 hex，空=清全部）
+const pruneDeviceId = ref("");
 
 const fileInput = ref<HTMLInputElement>();
 
@@ -205,10 +256,12 @@ async function onImport(e: Event) {
 }
 
 async function onPrune() {
-  if (!confirm(`确定清理 ${retention.value} 天之前的数据吗？此操作不可恢复。`)) return;
+  const dev = pruneDeviceId.value.trim();
+  const scope = dev ? `设备 ${dev}` : "全部设备";
+  if (!confirm(`确定清理 ${retention.value} 天之前【${scope}】的数据吗？此操作不可恢复。`)) return;
   try {
-    const n = await tracker.pruneData(retention.value);
-    showToast("ok", `已清理 ${n} 条旧记录`);
+    const n = await tracker.pruneData(retention.value, dev || undefined);
+    showToast("ok", `已清理 ${n} 条旧记录（${scope}）`);
   } catch (e) {
     console.error("清理失败", e);
     showToast("err", "清理失败：" + (e instanceof Error ? e.message : String(e)));
@@ -358,6 +411,7 @@ h3 {
 .about div {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   padding: 8px 0;
   border-bottom: 1px solid var(--border);
   font-size: 13px;
@@ -367,6 +421,31 @@ h3 {
 }
 .about span {
   color: var(--text-dim);
+}
+.check-update {
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  cursor: pointer;
+}
+.check-update:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.update-result {
+  font-size: 13px;
+  padding: 6px 0;
+  color: var(--text-muted);
+}
+.update-result.outdated {
+  color: var(--brand, #FF7E27);
+}
+.update-result a {
+  margin-left: 8px;
+  color: var(--brand, #FF7E27);
+  text-decoration: underline;
 }
 .about b {
   color: var(--text);

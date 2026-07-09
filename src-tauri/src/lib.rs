@@ -21,7 +21,7 @@ use tauri::tray::TrayIconBuilder;
 // TrayIconEvent 仅 macOS 菜单栏模式（左键切换窗口）使用，按平台条件导入避免 Windows/Linux 告警
 #[cfg(target_os = "macos")]
 use tauri::tray::TrayIconEvent;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tracker::{create_tracker, PlatformTracker};
 
@@ -175,6 +175,8 @@ pub fn run() {
                         if let Some(w) = app.get_webview_window("main") {
                             let _ = w.show();
                             let _ = w.set_focus();
+                            // 通知前端立即拉取一次最新数据（避免看到 stale 的「已记录 Xh」）
+                            let _ = app.emit_to("main", "tray-shown", ());
                         }
                     }
                     // 真正退出程序（区别于「关闭窗口到托盘」）
@@ -199,6 +201,8 @@ pub fn run() {
                                 } else {
                                     let _ = w.show();
                                     let _ = w.set_focus();
+                                    // 同菜单「显示主窗口」：唤起后立刻通知前端刷新一次
+                                    let _ = _tray.app_handle().emit_to("main", "tray-shown", ());
                                 }
                             }
                         }
@@ -260,6 +264,8 @@ pub fn run() {
             // WebView2 运行时检测（仅 Windows 真正生效）
             commands::check_webview2,
             commands::open_webview2_download,
+            // 检查更新（拉 GitHub Releases API）
+            commands::check_for_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -21,6 +21,7 @@ import type {
   SessionOut,
   SettingsOut,
   TrendsOut,
+  UpdateInfo,
   Webview2Status,
 } from "../types";
 import { mock } from "./mock";
@@ -76,13 +77,16 @@ export const tracker = {
   // ===== WebView2 运行时检测（仅 Windows 真正生效） =====
   checkWebview2: () => call<Webview2Status>("check_webview2"),
   openWebview2Download: () => call<void>("open_webview2_download"),
+  // ===== 检查更新（拉 GitHub Releases API） =====
+  checkUpdate: () => call<UpdateInfo>("check_for_update"),
   // ===== 周/月同比分析 =====
   trends: (period: string, device?: string) =>
     call<TrendsOut>("get_trends", { period, device: device ?? null }),
   // ===== 全量导出 / 导入合并 =====
   exportAll: () => call<ExportResult>("export_all"),
   importData: (content: string) => call<number>("import_data", { content }),
-  pruneData: (days: number) => call<number>("prune_data", { days }),
+  pruneData: (days: number, deviceId?: string) =>
+    call<number>("prune_data", { days, deviceId: deviceId ?? null }),
   // 在系统文件管理器中打开路径（导出后定位备份文件）
   revealPath: (path: string) => call<void>("reveal_path", { path }),
   // ===== 多设备合并 =====
@@ -95,20 +99,23 @@ export const tracker = {
     dataRetentionDays: number;
   }) => call<boolean>("save_settings", s),
   // ===== 分类规则引擎 =====
+  // 注：Tauri 2 默认把 Rust 命令的 snake_case 参数自动转为 camelCase 给 JS 侧；
+  //     之前这里传 snake_case（match_type/category_id）会被识别为缺参而抛错 → 按钮无反应。
+  //     必须用 camelCase，与 Settings.vue 的 saveSettings 保持一致。
   rules: () => call<RuleOut[]>("get_rules"),
   addRule: (r: {
     field: string;
-    match_type: string;
+    matchType: string;
     pattern: string;
-    category_id: string;
+    categoryId: string;
     priority: number;
   }) => call<number>("add_rule", r),
   updateRule: (r: {
     id: number;
     field: string;
-    match_type: string;
+    matchType: string;
     pattern: string;
-    category_id: string;
+    categoryId: string;
     priority: number;
     enabled: boolean;
   }) => call<boolean>("update_rule", r),

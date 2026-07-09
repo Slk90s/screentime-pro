@@ -161,6 +161,11 @@ onMounted(async () => {
         } catch { /* ignore */ }
       }, 300);
     });
+    // 监听「托盘唤起」事件：Rust 端 emit_to("main", "tray-shown")，
+    // 唤起后立即拉取一次最新前台应用/已记录时长，避免看到 stale 数据
+    await listen("tray-shown", () => {
+      refreshLive();
+    });
   } catch { /* 非 Tauri 环境 */ }
 
   // 首次运行默认开启开机自启

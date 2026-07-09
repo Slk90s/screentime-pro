@@ -3,6 +3,11 @@
        负责：展示/新增/编辑/删除「自动归类规则」，并一键按规则重算历史数据。
        注：开机自启开关已移至「设置」页（Settings.vue），此处不再重复。 -->
   <div class="rules-view">
+    <!-- 操作反馈条 -->
+    <div v-if="feedback.show" class="feedback" :class="feedback.type">
+      {{ feedback.msg }}
+    </div>
+
     <!-- ============ 规则列表 ============ -->
     <section class="card">
       <div class="head">
@@ -116,6 +121,19 @@ import type { CategoryOut, RuleOut } from "../types";
 const rules = ref<RuleOut[]>([]);
 const categories = ref<CategoryOut[]>([]);
 
+// 简易反馈条（替代原生 alert，避免在 Tauri WebView 中被遮挡/无响应）
+const feedback = ref<{ show: boolean; type: "ok" | "err"; msg: string }>({
+  show: false,
+  type: "ok",
+  msg: "",
+});
+let feedbackTimer: number | undefined;
+function showFeedback(type: "ok" | "err", msg: string) {
+  feedback.value = { show: true, type, msg };
+  if (feedbackTimer) clearTimeout(feedbackTimer);
+  feedbackTimer = window.setTimeout(() => (feedback.value.show = false), 3000);
+}
+
 // 表单状态：editingId 为 null 表示新增，否则为正在编辑的规则 id
 const editingId = ref<number | null>(null);
 const form = ref({
@@ -170,30 +188,38 @@ function catColor(id: string): string {
 async function submit() {
   const f = form.value;
   if (!f.pattern.trim()) {
-    alert("匹配值不能为空");
+    showFeedback("err", "匹配值不能为空");
     return;
   }
-  if (editingId.value === null) {
-    await tracker.addRule({
-      field: f.field,
-      match_type: f.match_type,
-      pattern: f.pattern.trim(),
-      category_id: f.category_id,
-      priority: f.priority,
-    });
-  } else {
-    await tracker.updateRule({
-      id: editingId.value,
-      field: f.field,
-      match_type: f.match_type,
-      pattern: f.pattern.trim(),
-      category_id: f.category_id,
-      priority: f.priority,
-      enabled: f.enabled,
-    });
+  try {
+    if (editingId.value === null) {
+      await tracker.addRule({
+        field: f.field,
+        matchType: f.match_type,
+        pattern: f.pattern.trim(),
+        categoryId: f.category_id,
+        priority: f.priority,
+      });
+      showFeedback("ok", "规则已新增");
+    } else {
+      await tracker.updateRule({
+        id: editingId.value,
+        field: f.field,
+        matchType: f.match_type,
+        pattern: f.pattern.trim(),
+        categoryId: f.category_id,
+        priority: f.priority,
+        enabled: f.enabled,
+      });
+      showFeedback("ok", "规则已更新");
+    }
+    await loadAll();
+    resetForm();
+  } catch (e: any) {
+    // 把 invoke 的真实错误暴露出来，避免「按钮无反应」体感
+    console.error("[Rules] submit failed:", e);
+    showFeedback("err", `操作失败：${e?.message || e}`);
   }
-  await loadAll();
-  resetForm();
 }
 
 // 载入某条规则到表单进行编辑
@@ -225,15 +251,26 @@ function resetForm() {
 // 删除规则
 async function removeRule(id: number) {
   if (!confirm("确定删除该规则？")) return;
-  await tracker.deleteRule(id);
-  await loadAll();
+  try {
+    await tracker.deleteRule(id);
+    showFeedback("ok", "规则已删除");
+    await loadAll();
+  } catch (e: any) {
+    console.error("[Rules] deleteRule failed:", e);
+    showFeedback("err", `删除失败：${e?.message || e}`);
+  }
 }
 
 // 一键按当前规则重算历史分类
 async function doReclassify() {
-  const n = await tracker.reclassify();
-  alert(`已更新 ${n} 个应用的分类`);
-  await loadAll();
+  try {
+    const n = await tracker.reclassify();
+    showFeedback("ok", `已更新 ${n} 个应用的分类`);
+    await loadAll();
+  } catch (e: any) {
+    console.error("[Rules] reclassify failed:", e);
+    showFeedback("err", `重算失败：${e?.message || e}`);
+  }
 }
 
 onMounted(loadAll);
@@ -347,5 +384,21 @@ button.primary {
 }
 button.danger {
   color: #c0392b;
+}
+/* 操作反馈条（成功绿/失败红） */
+.feedback {
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+.feedback.ok {
+  background: rgba(46, 160, 67, 0.12);
+  color: #2ea043;
+  border: 1px solid rgba(46, 160, 67, 0.3);
+}
+.feedback.err {
+  background: rgba(192, 57, 43, 0.12);
+  color: #c0392b;
+  border: 1px solid rgba(192, 57, 43, 0.3);
 }
 </style>

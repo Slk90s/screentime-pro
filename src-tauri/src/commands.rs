@@ -410,13 +410,21 @@ pub fn import_data(
 }
 
 /// 清理超过保留天数的旧数据
+/// - `device_id`：可选设备 ID 过滤。Some(id) → 仅清该设备的旧数据；None → 清全部设备
 #[tauri::command]
 pub fn prune_data(
     state: tauri::State<'_, Arc<AppState>>,
     days: u32,
+    device_id: Option<String>,
 ) -> Result<usize, String> {
-    let n = state.db.prune_old(days).map_err(|e| e.to_string())?;
-    let _ = state.db.set_setting("data_retention_days", &days.to_string());
+    let n = state
+        .db
+        .prune_old(days, device_id.as_deref())
+        .map_err(|e| e.to_string())?;
+    // 仅在「清全部」时更新全局保留天数（按设备清理不影响全局策略）
+    if device_id.is_none() {
+        let _ = state.db.set_setting("data_retention_days", &days.to_string());
+    }
     Ok(n)
 }
 
@@ -913,4 +921,93 @@ pub fn open_webview2_download() -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// 检查更新结果（前端 Settings.vue「检查更新」按钮用）
+#[derive(serde::Serialize, Clone)]
+pub struct UpdateInfo {
+    /// 当前版本（来自 tauri.conf.json）
+    pub current: String,
+    /// 远端最新版本（GitHub latest release tag）
+    pub latest: String,
+    /// 远端是否有更新（按 SemVer 严格比较，仅 0.X.Y 之间）
+    pub has_update: bool,
+    /// 最新 release 的 HTML 页面 URL（点击跳转下载）
+    pub url: String,
+    /// release notes / body（前端可截断展示）
+    pub notes: String,
+}
+
+/// 从 GitHub Releases API 拉取最新版本，与当前版本（tauri.conf.json）对比
+///
+/// 设计：
+/// - 不阻塞 UI：前端按钮点击后由 Rust 在 Tokio 线程中跑 HTTP GET
+/// - 超时 10s：网络不通时快速失败，不让用户干等
+/// - 不解析 SemVer：仅按「点分三段 → 转数字 → 逐位比较」；预发布版（-alpha/-beta）按字符串前缀比较忽略（即视为 < 对应数字）
+#[tauri::command]
+pub async fn check_for_update(app: tauri::AppHandle) -> Result<UpdateInfo, String> {
+    // 从 tauri.conf.json 读当前版本（编译期常量更稳妥，但运行时读配置也够用）
+    let current = app
+        .config()
+        .version
+        .clone()
+        .unwrap_or_else(|| "0.0.0".to_string());
+
+    // 调 GitHub Releases API（latest 接口）
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .user_agent("ScreenTime-Pro-Update-Checker")
+        .build()
+        .map_err(|e| format!("构建 HTTP 客户端失败: {}", e))?;
+    let resp = client
+        .get("https://api.github.com/repos/Slk90s/screentime-pro/releases/latest")
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|e| format!("请求 GitHub 失败: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!("GitHub 返回 HTTP {}", resp.status().as_u16()));
+    }
+    #[derive(serde::Deserialize)]
+    struct GhRelease {
+        tag_name: String,
+        html_url: String,
+        body: Option<String>,
+    }
+    let gh: GhRelease = resp
+        .json()
+        .await
+        .map_err(|e| format!("解析 GitHub 响应失败: {}", e))?;
+    let latest = gh.tag_name.trim_start_matches('v').to_string();
+    let has_update = semver_gt(&latest, &current);
+    Ok(UpdateInfo {
+        current,
+        latest,
+        has_update,
+        url: gh.html_url,
+        notes: gh.body.unwrap_or_default(),
+    })
+}
+
+/// SemVer 字符串比较：仅 0.X.Y 之间逐位数字比较，剪掉前缀 'v'
+/// 返回 latest > current
+fn semver_gt(latest: &str, current: &str) -> bool {
+    let parse = |s: &str| -> Vec<u32> {
+        s.split('.')
+            .filter_map(|p| p.split('-').next().unwrap_or("").parse::<u32>().ok())
+            .collect()
+    };
+    let l = parse(latest);
+    let c = parse(current);
+    for i in 0..3 {
+        let lv = l.get(i).copied().unwrap_or(0);
+        let cv = c.get(i).copied().unwrap_or(0);
+        if lv > cv {
+            return true;
+        }
+        if lv < cv {
+            return false;
+        }
+    }
+    false
 }
