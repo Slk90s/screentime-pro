@@ -54,7 +54,12 @@ impl PlatformTracker for LinuxTracker {
         if active_reply.value_len() == 0 {
             return Err(TrackerError::NoForeground);
         }
-        let window_id: u32 = active_reply.value32()?[0];
+        let window_id: u32 = active_reply
+            .value32()
+            .map_err(|e| TrackerError::Platform(format!("_NET_ACTIVE_WINDOW value32: {}", e)))?
+            .first()
+            .copied()
+            .ok_or_else(|| TrackerError::Platform("_NET_ACTIVE_WINDOW 空值".into()))?;
 
         // 避免记录自身窗口（ScreenTime Pro 自身）
         // 注意：无法可靠获取自身窗口 ID，此处不做过滤；
@@ -142,7 +147,12 @@ fn get_window_pid(
     if reply.value_len() == 0 {
         return Err(TrackerError::Platform("No _NET_WM_PID on active window".into()));
     }
-    Ok(reply.value32()?[0])
+    Ok(reply
+        .value32()
+        .map_err(|e| TrackerError::Platform(format!("_NET_WM_PID value32: {}", e)))?
+        .first()
+        .copied()
+        .ok_or_else(|| TrackerError::Platform("_NET_WM_PID 空值".into()))?)
 }
 
 /// 从 /proc/[pid]/ 读取进程可执行路径和名称

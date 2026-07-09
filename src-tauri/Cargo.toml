@@ -29,7 +29,7 @@ tauri-plugin-autostart = "2"
 # 跨平台后台定时任务（采样循环）
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 # 检查更新：拉取 GitHub Releases API（用 rustls 避开 native openssl 依赖）
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
 # 自动归类引擎的 LRU 缓存（容量 256，进程名 → 分类 ID）
 lru = "0.12"
 
@@ -41,6 +41,7 @@ objc2-foundation = { version = "0.3", features = ["NSString", "NSURL"] }
 # 前台窗口标题采集（CGWindowListCopyWindowInfo，需「屏幕录制」权限）
 # 用底层 core-foundation-sys 直接调 C 函数，规避 core-foundation 0.10 高层 API 变更
 core-foundation-sys = "0.8"
+core-foundation = "0.10"
 core-graphics = "0.24"
 
 # ---- Windows 专属依赖 ----

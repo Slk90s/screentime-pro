@@ -162,13 +162,43 @@ pub fn get_foreground_window_title(pid: i32) -> Option<String> {
 ///
 /// 空闲检测依赖此权限。未授予时 `CGEventSource...` 会返回异常值，
 /// 需要在系统设置中手动开启：隐私与安全性 → 辅助功能。
+///
+/// v0.4.1 修复：用 `AXIsProcessTrustedWithOptions` + `kAXTrustedCheckOptionPrompt=false`
+/// 比旧的 `AXIsProcessTrusted()` 在以下场景更可靠：
+/// - ad-hoc 签名应用：identifier 会随 binary 变，`AXIsProcessTrusted()` 有缓存；
+///   `WithOptions` 不缓存，每次都查 TCC
+/// - 应用从其他位置移动到 /Applications 后：旧 API 仍返回旧路径的授权状态，
+///   新 API 重新校验当前位置
+///
+/// ⚠️ 关键：传 `kAXTrustedCheckOptionPrompt: kCFBooleanFalse`，否则会触发系统弹窗
+/// （用户首次启动不希望立刻被打扰）。让用户通过 banner 主动点「前往系统设置」后再开。
 pub fn is_accessibility_trusted() -> bool {
-    // AXIsProcessTrusted 位于 ApplicationServices 框架（HIServices）
+    use core_foundation::base::TCFType;
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::string::CFString;
+
+    // 应用服务（ApplicationServices）下的辅助功能 API
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
-        fn AXIsProcessTrusted() -> bool;
+        fn AXIsProcessTrustedWithOptions(options: *const c_void) -> bool;
     }
-    unsafe { AXIsProcessTrusted() }
+
+    // 用 core-foundation 高级 API 拼一个 CFDictionary：
+    //   { "AXTrustedCheckOptionPrompt" : kCFBooleanFalse }
+    // Foundation 的 NSDictionary 与 CoreFoundation 的 CFDictionary 互通
+    // （Toll-Free Bridging），所以传 CFDictionaryRef 等价于 NSDictionary*。
+    unsafe {
+        let key = CFString::new("AXTrustedCheckOptionPrompt");
+        let val = CFBoolean::false_value();
+        let dict = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), val.as_CFType())]);
+        // CFDictionary<CFType, CFType> 内部就是 CFDictionaryRef，用 as_CFTypeRef 取指针
+        let dict_ptr: *const c_void = dict.as_CFTypeRef();
+        let trusted = AXIsProcessTrustedWithOptions(dict_ptr);
+        // 离开作用域后 CFDictionary / CFString / CFBoolean 引用计数自动清零
+        let _ = dict;
+        trusted
+    }
 }
 
 /// 屏幕录制（Screen Recording）权限是否已授予

@@ -61,14 +61,18 @@ export interface OverviewOut {
   pickup_count: number;
 }
 
+// ⚠️ Tauri 2 自动把 Rust 字段转 camelCase 给 JS，所以 TS 类型必须用 camelCase。
+// 否则 vue-tsc 会报 TS2551 「Property 'X' does not exist on type ...」，
+// 且运行时访问 snake_case 字段会得到 undefined（v0.4.0 之前就是这样导致
+// 「已记录 X秒」永不显示）。
 export interface CurrentForegroundOut {
   name: string;
-  process_name: string;
-  category_id: string;
-  idle_seconds: number;
+  processName: string;
+  categoryId: string;
+  idleSeconds: number;
   tracking: boolean;
-  window_title?: string | null;
-  session_seconds: number; // 当前前台应用已连续运行时长（秒）
+  windowTitle?: string | null;
+  sessionSeconds: number; // 当前前台应用已连续运行时长（秒）
 }
 
 export interface ExportResult {

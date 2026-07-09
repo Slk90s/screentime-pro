@@ -200,7 +200,7 @@ const settings = ref<SettingsOut>({
 });
 
 // 应用版本：动态读取打包版本（tauri.conf.json），避免 UI 写死导致与实际不符
-const version = ref("0.4.0");
+const version = ref("0.4.1");
 
 // 检查更新状态
 const checking = ref(false);

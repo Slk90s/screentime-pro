@@ -57,7 +57,7 @@ impl PlatformTracker for WindowsTracker {
             Ok(RawApp {
                 name,
                 process_name,
-                exe_path: Some(exe_path),
+                exe_path, // 可能是 None（系统进程拒绝查询时）
                 bundle_id: None,
                 window_title,
             })
@@ -105,7 +105,9 @@ extern "system" {
 }
 
 /// 通过 OpenProcess + PSAPI/Kernel32 获取进程路径
-unsafe fn get_process_path(pid: u32) -> (String, String) {
+/// - 返回 (Option<path>, process_name)：当两条策略都失败时，path 为 None（避免污染
+///   分类规则的「pid-N」假路径入库）；process_name 始终有值（fallback 用 pid-N 形式）
+unsafe fn get_process_path(pid: u32) -> (Option<String>, String) {
     // 策略1：标准权限 + PSAPI GetModuleFileNameExW
     if let Ok(handle) = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid) {
         let mut buf = [0u16; 1024];
@@ -117,7 +119,7 @@ unsafe fn get_process_path(pid: u32) -> (String, String) {
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| format!("pid-{}", pid));
-            return (path, name);
+            return (Some(path), name);
         }
     }
 
@@ -137,9 +139,10 @@ unsafe fn get_process_path(pid: u32) -> (String, String) {
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| format!("pid-{}", pid));
-            return (path, name);
+            return (Some(path), name);
         }
     }
 
-    (format!("unknown-pid-{}", pid), format!("pid-{}", pid))
+    // 两条策略都失败：path 为 None（让上游知道这是"未知路径"），process_name 仍给 fallback
+    (None, format!("pid-{}", pid))
 }

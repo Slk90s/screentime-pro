@@ -12,9 +12,11 @@
         <span class="dot" :class="{ on: tracking }"></span>
         <span class="live-label">{{ tracking ? "记录中" : "已暂停" }}</span>
         <span class="live-name">{{ live.name || "—" }}</span>
-        <span class="live-title" v-if="live.window_title">· {{ live.window_title }}</span>
-        <span class="live-session" v-if="tracking && live.session_seconds > 0">已记录 {{ fmtDur(live.session_seconds) }}</span>
-        <span class="live-idle" v-if="tracking">空闲 {{ live.idle_seconds }}s</span>
+        <!-- ⚠️ Tauri 2 自动把 Rust 字段转 camelCase，所以是 windowTitle/sessionSeconds/idleSeconds，
+             不是 snake_case（v0.4.0 之前用 snake_case 导致 v-if 全为假、UI 静默失效） -->
+        <span class="live-title" v-if="live.windowTitle">· {{ live.windowTitle }}</span>
+        <span class="live-session" v-if="tracking && (live.sessionSeconds ?? 0) > 0">已记录 {{ fmtDur(live.sessionSeconds ?? 0) }}</span>
+        <span class="live-idle" v-if="tracking">空闲 {{ live.idleSeconds ?? 0 }}s</span>
       </div>
     </header>
 
@@ -61,14 +63,15 @@ import type { CurrentForegroundOut, PermissionStatus } from "./types";
 // 是否正在追踪
 const tracking = ref(false);
 // 实时前台应用（每 2 秒刷新一次）
+// ⚠️ 字段名必须是 camelCase（Tauri 2 转换约定）
 const live = ref<CurrentForegroundOut>({
   name: "",
-  process_name: "",
-  category_id: "other",
-  idle_seconds: 0,
+  processName: "",
+  categoryId: "other",
+  idleSeconds: 0,
   tracking: false,
-  window_title: null,
-  session_seconds: 0,
+  windowTitle: null,
+  sessionSeconds: 0,
 });
 // 系统权限状态
 const perm = ref<PermissionStatus>({ accessibility: true, screen_capture: true });
