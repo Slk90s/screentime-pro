@@ -50,11 +50,15 @@ impl X11Atoms {
             b"CARDINAL",
             b"WINDOW",
         ];
+        // intern_atom 返回 Result<InternAtomCookie, ConnectionError>，需先 ? 解包
         let mut cookies = Vec::with_capacity(names.len());
         for name in names {
-            cookies.push(conn.intern_atom(false, *name));
+            let c = conn
+                .intern_atom(false, *name)
+                .map_err(|e| TrackerError::Platform(format!("intern_atom send: {}", e)))?;
+            cookies.push(c);
         }
-        // 解析所有 reply
+        // 再 reply() 解析所有
         let mut atoms = Vec::with_capacity(cookies.len());
         for c in cookies {
             let r = c
