@@ -11,6 +11,7 @@ mod classifier;
 mod commands;
 mod db;
 mod error;
+mod logging;
 mod tracker;
 
 use std::sync::{Arc, Mutex};
@@ -82,8 +83,31 @@ pub fn run() {
             MacosLauncher::LaunchAgent,
             None,
         ))
+        // ===== 日志插件（前端 Vue 通过 @tauri-apps/plugin-log 写入同一文件）=====
+        .plugin(tauri_plugin_log::Builder::default().build())
         // ===== 初始化：建库、注入状态 =====
         .setup(move |app| {
+            // ---- 1. 初始化日志系统（最优先，其他模块才可埋点）----
+            let log_dir = app
+                .path()
+                .app_log_dir()
+                .unwrap_or_else(|_| dir_for_log_fallback());
+            // WorkerGuard 必须存活到进程结束，否则非阻塞写入会被强制 flush
+            // → 通过 app.manage 挂到全局 State，AppHandle 拥有它
+            let log_guard = logging::init(&log_dir, cfg!(debug_assertions))
+                .unwrap_or_else(|e| {
+                    eprintln!("[main] 日志初始化失败: {}，降级到 stderr", e);
+                    None
+                });
+            // 启动日志：用 tauri.conf.json 的 version（业务语义版本）而非 Cargo.toml 的
+            // （CARGO_PKG_VERSION 始终是 lib crate 的初版 0.1.0，不随发版变化）
+            let app_version = app.package_info().version.to_string();
+            tracing::info!(
+                version = %app_version,
+                debug = cfg!(debug_assertions),
+                "ScreenTime Pro 启动"
+            );
+
             // 取应用数据目录（macOS: ~/Library/Application Support/com.screentime.pro）
             let dir = app.path().app_data_dir()?;
             let db = AppDb::open(&dir)?;
@@ -146,6 +170,11 @@ pub fn run() {
                 category_cache: categorizer::CategoryCache::new(),
             });
             app.manage(app_state.clone());
+            // 日志 guard 也挂到全局 State，保证其生命周期 = 程序生命周期
+            // （否则 setup 闭包结束时 guard 被 drop，pending 的日志会强制 flush 并丢失）
+            if let Some(g) = log_guard {
+                app.manage(LogGuardHolder(Some(g)));
+            }
 
             // ===== 菜单栏纯后台模式（仅 macOS）：去掉 Dock 图标 =====
             // 设为 Accessory 激活策略后，应用不出现在 Dock 与 Cmd+Tab，
@@ -281,7 +310,29 @@ pub fn run() {
             // 检查更新（拉 GitHub Releases API）
             commands::check_for_update,
             commands::open_url,
+            // 日志（v0.4.2）：用户报 bug 时一键导出
+            commands::export_logs,
+            commands::get_log_size,
+            commands::get_log_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// 日志 WorkerGuard 的占位类型（v0.4.2 引入）
+///
+/// 把 `WorkerGuard` 通过 `app.manage` 挂到全局 State，AppHandle 拥有它直至进程结束。
+/// 千万不要让 guard 在 setup 闭包结束时被 drop，否则非阻塞后台线程会强制 flush，
+/// pending 的日志会丢失。
+pub struct LogGuardHolder(pub Option<tracing_appender::non_blocking::WorkerGuard>);
+
+/// app_log_dir() 失败时的兜底目录（按平台惯例）
+fn dir_for_log_fallback() -> std::path::PathBuf {
+    let base = match std::env::var("HOME") {
+        Ok(h) => std::path::PathBuf::from(h),
+        Err(_) => std::env::temp_dir(),
+    };
+    let dir = base.join(".screentime-pro").join("logs");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
 }

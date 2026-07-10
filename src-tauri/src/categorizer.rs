@@ -293,6 +293,7 @@ pub fn lookup_category(
     display_name: &str,
     cache: &CategoryCache,
 ) -> String {
+    let start = std::time::Instant::now();
     // 1. 先看缓存
     let cache_key = format!(
         "{}|{}|{}",
@@ -301,11 +302,13 @@ pub fn lookup_category(
         exe_path.unwrap_or("").to_lowercase()
     );
     if let Some(cat) = cache.get(&cache_key) {
+        tracing::trace!(source = "cache", app = %display_name, "category hit");
         return cat;
     }
 
     // 2. 本地字典
     if let Some(cat) = lookup_local(process_name, exe_path, display_name) {
+        tracing::debug!(source = "local", app = %display_name, cat = %cat, "category resolved");
         cache.put(cache_key, cat.clone());
         return cat;
     }
@@ -317,9 +320,19 @@ pub fn lookup_category(
         process_name
     };
     if let Some(cat) = lookup_wikipedia(http_client(), query) {
+        // INFO 级：每次新软件联网分类都记录（用户报 bug 时一眼看到这里）
+        tracing::info!(
+            source = "wikipedia",
+            app = %display_name,
+            cat = %cat,
+            elapsed_ms = start.elapsed().as_millis() as u64,
+            "category resolved via web"
+        );
         cache.put(cache_key, cat.clone());
         return cat;
     }
+    // 联网也失败：WARN（不是 ERROR，因为有兜底）
+    tracing::warn!(app = %display_name, "wikipedia 分类失败，回落 other");
 
     // 4. 兜底
     let fallback = "other".to_string();

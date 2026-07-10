@@ -33,6 +33,15 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # 自动归类引擎的 LRU 缓存（容量 256，进程名 → 分类 ID）
 lru = "0.12"
 
+# ===== 日志系统（v0.4.2 引入）=====
+# tracing 生态：结构化日志、span、采样；按级别过滤
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "registry"] }
+# 文件输出 + 非阻塞写入（生产环境必备，避免日志 IO 卡住 UI）
+tracing-appender = "0.2"
+# Tauri 官方日志插件：把 Rust + 前端日志统一到同一文件，提供前端 invoke 调用
+tauri-plugin-log = "2"
+
 # ---- macOS 专属依赖（对齐 Tauri 2.x 引入的 objc2 0.6，避免重复编译）----
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

@@ -1,9 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "默认权限：允许前端调用自定义命令",
+  "description": "默认权限：允许前端调用自定义命令 + 日志插件",
   "windows": ["main"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "log:default"
   ]
 }

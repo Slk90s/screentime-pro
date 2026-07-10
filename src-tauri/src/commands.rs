@@ -1,6 +1,12 @@
 //! Tauri 命令层（前端通过 `invoke` 调用）
 //!
 //! 每个 `#[tauri::command]` 对应前端的一个 API：
+//!
+//! ## 日志埋点（v0.4.2 引入）
+//! - 采样循环：每分钟聚合 1 条 INFO（不要每 tick 一条，否则日志爆炸）
+//! - 关键错误：ERROR 级（spawn_blocking panic、DB 写入失败、权限永久拒绝）
+//! - 切应用：DEBUG 级（生产环境默认关，需要排查时开 RUST_LOG=debug）
+//! - 详细规则见 `logging.rs` 与 `docs/LOGGING.md`
 //! - 追踪控制：start/stop/is_tracking（启动即自动追踪，无需手动触发）
 //! - 实时查询：get_current_foreground、check_permissions
 //! - 统计查询：overview / daily_summaries / hourly_buckets / app_ranking / sessions（均支持按 device 过滤）
@@ -257,6 +263,110 @@ pub fn reveal_path(path: String) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+// =====================================================================
+// 日志相关命令（v0.4.2 引入）
+// =====================================================================
+
+/// 导出日志到桌面（用户报 bug 时一键打包）
+///
+/// 把当前所有 `app.log.*` 文件打包成 zip，输出到 `~/Desktop/screentime-pro-logs-{timestamp}.zip`
+/// （macOS/Linux） 或 `%USERPROFILE%\Desktop\...` （Windows）。
+#[tauri::command]
+pub fn export_logs(app: tauri::AppHandle) -> Result<ExportResult, String> {
+    use std::io::Read;
+
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| format!("无法定位日志目录: {}", e))?;
+
+    if !log_dir.exists() {
+        return Err(format!("日志目录不存在: {}", log_dir.display()));
+    }
+
+    // 桌面目录
+    let desktop = app
+        .path()
+        .desktop_dir()
+        .or_else(|_| app.path().home_dir().map(|p| p.join("Desktop")))
+        .map_err(|e| format!("无法定位桌面目录: {}", e))?;
+    std::fs::create_dir_all(&desktop).ok();
+
+    let ts = Local::now().format("%Y%m%d_%H%M%S");
+    // 简易方案：把多个日志文件拼接为单文件 .txt（避免新增 zip crate 依赖）
+    // 用户拿到这个 .txt 直接发邮件/聊天即可
+    // 为避免新增依赖（zip crate 比较大），这里用「拼接为单文件 .txt」方案：
+    //   screentime-pro-logs-{ts}.txt —— 把所有 app.log.* 追加写入
+    let txt_path = desktop.join(format!("screentime-pro-logs-{}.txt", ts));
+    let mut out = std::fs::File::create(&txt_path)
+        .map_err(|e| format!("创建日志导出文件失败: {}", e))?;
+
+    // 写文件头信息
+    use std::io::Write;
+    writeln!(
+        out,
+        "ScreenTime Pro 日志导出\n生成时间: {}\n日志目录: {}\n\n--- 文件列表 ---\n",
+        Local::now().format("%Y-%m-%d %H:%M:%S"),
+        log_dir.display()
+    )
+    .ok();
+
+    // 列出所有 app.log.* 文件，按日期倒序（最新的在前）
+    let mut entries: Vec<_> = std::fs::read_dir(&log_dir)
+        .map_err(|e| format!("读取日志目录失败: {}", e))?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("app.log")
+        })
+        .collect();
+    entries.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
+
+    for entry in entries {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        writeln!(
+            out,
+            "\n=== {} ({} bytes) ===\n",
+            name,
+            entry.metadata().map(|m| m.len()).unwrap_or(0)
+        )
+        .ok();
+        if let Ok(mut f) = std::fs::File::open(&path) {
+            let mut buf = String::new();
+            if f.read_to_string(&mut buf).is_ok() {
+                let _ = out.write_all(buf.as_bytes());
+            }
+        }
+    }
+
+    tracing::info!(path = %txt_path.display(), "用户导出日志");
+    Ok(ExportResult {
+        path: txt_path.to_string_lossy().to_string(),
+    })
+}
+
+/// 获取日志目录的总大小（字节）—— Settings 页显示用
+#[tauri::command]
+pub fn get_log_size(app: tauri::AppHandle) -> Result<u64, String> {
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| format!("无法定位日志目录: {}", e))?;
+    crate::logging::dir_size(&log_dir).map_err(|e| e.to_string())
+}
+
+/// 获取日志目录的绝对路径——Settings 页"打开日志目录"按钮用
+#[tauri::command]
+pub fn get_log_dir(app: tauri::AppHandle) -> Result<String, String> {
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| format!("无法定位日志目录: {}", e))?;
+    Ok(log_dir.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -735,6 +845,12 @@ pub fn save_settings(
 /// 写入的时段携带本机 device_id，用于多设备合并。
 async fn sampling_loop(state: Arc<AppState>) {
     let mut ticker = tokio::time::interval(StdDuration::from_secs(SAMPLE_INTERVAL));
+    // v0.4.2 日志节流：每分钟聚合 1 条 INFO，避免 1Hz tick 把日志写爆
+    let mut last_summary_minute: Option<i64> = None;
+    // 用于聚合统计：当前分钟内的 tick 数 + 应用切换次数
+    let mut tick_in_minute: u32 = 0;
+    let mut switch_in_minute: u32 = 0;
+    let mut last_app_for_minute: String = String::new();
     loop {
         ticker.tick().await;
         if !*state.tracking.lock().unwrap_or_else(|e| e.into_inner()) {
@@ -742,11 +858,41 @@ async fn sampling_loop(state: Arc<AppState>) {
         }
         let fg = match state.tracker.get_foreground_app() {
             Ok(a) => a,
-            Err(_) => continue,
+            Err(e) => {
+                // v0.4.2 日志：采集器失败可能是权限被收回/系统重启等关键信号
+                tracing::warn!(error = %e, "采集前台应用失败");
+                continue;
+            }
         };
         let idle = state.tracker.get_idle_seconds().unwrap_or(0);
+        // DEBUG 级：每次 tick 的切应用详情（生产默认关，排查时 RUST_LOG=debug）
+        tracing::debug!(
+            app = %fg.process_name,
+            idle = idle,
+            "foreground tick"
+        );
         let threshold = *state.idle_threshold.lock().unwrap_or_else(|e| e.into_inner());
         let now = Local::now();
+        // 分钟聚合：累计到下一分钟开头统一写一条 INFO
+        let current_minute = now.timestamp() / 60;
+        if last_summary_minute != Some(current_minute) {
+            if let Some(_m) = last_summary_minute {
+                tracing::info!(
+                    ticks = tick_in_minute,
+                    switches = switch_in_minute,
+                    last_app = %last_app_for_minute,
+                    "采样循环分钟摘要"
+                );
+            }
+            last_summary_minute = Some(current_minute);
+            tick_in_minute = 0;
+            switch_in_minute = 0;
+        }
+        tick_in_minute += 1;
+        if !last_app_for_minute.is_empty() && last_app_for_minute != fg.process_name {
+            switch_in_minute += 1;
+        }
+        last_app_for_minute = fg.process_name.clone();
         let platform = platform_name();
         // 用规则引擎分类（窗口标题 / 进程名 / 路径 / 包名综合判定）
         // v0.4.0：规则匹配前先用 categorizer 本地字典 + Wikipedia 联网查 + 缓存；
@@ -783,7 +929,7 @@ async fn sampling_loop(state: Arc<AppState>) {
                     })
                     .await
                     .unwrap_or_else(|e| {
-                        eprintln!("[sampling_loop] spawn_blocking 失败: {}", e);
+                        tracing::error!(error = %e, "spawn_blocking(lookup_category) 失败");
                         "other".to_string()
                     });
                     other
@@ -841,10 +987,11 @@ async fn sampling_loop(state: Arc<AppState>) {
                 ) {
                     Ok(id) => id,
                     Err(e) => {
-                        eprintln!(
-                            "[sampling_loop] upsert_app 失败，跳过本 tick：\
-                             process={} name={} err={}",
-                            fg.process_name, fg.name, e
+                        tracing::error!(
+                            error = %e,
+                            process = %fg.process_name,
+                            name = %fg.name,
+                            "upsert_app 失败，跳过本 tick"
                         );
                         continue;
                     }

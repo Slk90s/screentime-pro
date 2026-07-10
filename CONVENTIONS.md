@@ -206,9 +206,29 @@ Vue 示例：
 - **本文件**（CONVENTIONS.md）：项目级强约束，所有 AI 必读
 - **`.workbuddy/memory/`**：跨项目复用的踩坑经验（每次任务完成更新）
 - **`README.md`**：用户面向的功能/构建说明
+- **`docs/RELEASE.md`**：GitHub Releases 发布规范、版本历史、Notes 模板、检查清单（一键发布脚本 `scripts/release-github.sh` 引用）
 - **`docs/`**：架构/数据流等深度文档（如有）
 
 ---
 
+## 9. GitHub Releases 发布规范（2026-07-10 @v0.4.1）
+
+详见 **`docs/RELEASE.md`**，三条总原则（用户拍板）：
+
+| 原则 | 实现 |
+|------|------|
+| 🟢 **全部保留**（不删旧版本） | `gh release create` 默认行为 |
+| 📝 **写清版本区别**（每个 Release Notes 必含与上版对比） | `release/v{ver}/NOTES.md` 模板 |
+| ⭐ **Latest 自动**（新版本自动获徽章） | `gh release create` 默认行为，**不要加 `--latest=false`** |
+
+一键发布：
+```bash
+bash scripts/release-github.sh                     # 直接发布
+bash scripts/release-github.sh --draft             # 创建草稿（先审核）
+bash scripts/release-github.sh --notes ./n.md      # 自定义 notes
+```
+
+---
+
 **维护**：每次新增约束时追加；过期约束标 ⚠️ 一年内未触发可删除。
-**最后更新**：2026-07-09 @v0.4.0（建立）
+**最后更新**：2026-07-10 @v0.4.1（追加 §9 GitHub Releases 规范）

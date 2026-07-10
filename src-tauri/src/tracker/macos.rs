@@ -197,6 +197,8 @@ pub fn is_accessibility_trusted() -> bool {
         let trusted = AXIsProcessTrustedWithOptions(dict_ptr);
         // 离开作用域后 CFDictionary / CFString / CFBoolean 引用计数自动清零
         let _ = dict;
+        // v0.4.2 日志：DEBUG 级记录权限状态（生产环境默认关，排查时 RUST_LOG=debug）
+        tracing::debug!(trusted, "macOS 辅助功能权限检查");
         trusted
     }
 }
@@ -206,7 +208,9 @@ pub fn is_accessibility_trusted() -> bool {
 /// 后续如果要采集「窗口标题」级别的粒度，需要此权限。
 /// 10.15+ 提供预检 API，无需弹窗即可查询。
 pub fn is_screen_capture_trusted() -> bool {
-    unsafe { CGPreflightScreenCaptureAccess() }
+    let trusted = unsafe { CGPreflightScreenCaptureAccess() };
+    tracing::debug!(trusted, "macOS 屏幕录制权限检查");
+    trusted
 }
 
 // 链接 CoreGraphics.framework，调用 C 接口获取用户空闲秒数

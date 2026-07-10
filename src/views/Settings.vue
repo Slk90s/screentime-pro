@@ -48,6 +48,22 @@
         />
       </div>
 
+      <div class="diag-zone">
+        <h4>🛠 日志与诊断</h4>
+        <p class="hint">
+          遇到问题需要反馈给开发者？导出应用日志到桌面，发给他即可。
+          日志只包含错误摘要与应用切换统计，<strong>不包含窗口标题 / 聊天内容 / 密码等敏感信息</strong>。
+        </p>
+        <p class="hint" v-if="logSize !== null">
+          当前日志占用：<strong>{{ formatBytes(logSize) }}</strong>（生产环境默认 15MB 上限，3 天滚动）
+        </p>
+        <div class="btns">
+          <button @click="exportLogs">📋 导出日志到桌面</button>
+          <button class="reveal" @click="revealLogDir">📁 打开日志目录</button>
+          <button @click="refreshLogSize">🔄 刷新占用</button>
+        </div>
+      </div>
+
       <div class="danger-zone">
         <h4>危险操作</h4>
         <div class="btns">
@@ -118,6 +134,23 @@
       </template>
     </Modal>
 
+    <!-- ============ 日志导出成功后的弹窗（v0.4.2 新增）============ -->
+    <Modal
+      v-model="logExportDialogOpen"
+      type="info"
+      title="✅ 日志已导出"
+      :message="`文件已保存到：\n${logExportPath}\n\n可发给开发者辅助排查问题。`"
+      confirm-text="好的"
+      cancel-text=""
+      width="520px"
+    >
+      <template #footer>
+        <button class="modal-btn cancel" @click="reveal(logExportPath)">在访达中显示</button>
+        <button class="modal-btn cancel" @click="copy(logExportPath)">复制路径</button>
+        <button class="modal-btn primary" @click="logExportDialogOpen = false">关闭</button>
+      </template>
+    </Modal>
+
     <!-- ============ 按设备清理弹窗 ============ -->
     <Modal
       v-model="pruneDialogOpen"
@@ -185,6 +218,7 @@
 
 import { ref, onMounted } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
 import Modal from "../components/Modal.vue";
 import { tracker } from "../api/tracker";
 import type { DeviceStats, SettingsOut, UpdateInfo } from "../types";
@@ -407,6 +441,65 @@ async function copy(path: string) {
     showAlert("warn", "复制失败", "复制失败，路径：" + path);
   }
 }
+
+// ============ 日志导出（v0.4.2 引入）============
+const logSize = ref<number | null>(null);
+const logExportDialogOpen = ref(false);
+const logExportPath = ref("");
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return `${(bytes / Math.pow(1024, i)).toFixed(2)} ${units[i]}`;
+}
+
+async function refreshLogSize() {
+  try {
+    const size = await invoke<number>("get_log_size");
+    logSize.value = size;
+  } catch (e) {
+    console.error("读取日志大小失败", e);
+    logSize.value = null;
+  }
+}
+
+async function exportLogs() {
+  try {
+    const res = await invoke<{ path: string }>("export_logs");
+    logExportPath.value = res.path;
+    logExportDialogOpen.value = true;
+    // 导出后刷新大小
+    void refreshLogSize();
+  } catch (e) {
+    console.error("导出日志失败", e);
+    showAlert(
+      "warn",
+      "导出失败",
+      "导出失败：" + (e instanceof Error ? e.message : String(e))
+    );
+  }
+}
+
+async function revealLogDir() {
+  // 通过 reveal_path 命令打开日志所在目录
+  try {
+    const logDir = await invoke<string>("get_log_dir");
+    await tracker.revealPath(logDir);
+  } catch (e) {
+    console.error("打开日志目录失败", e);
+    showAlert(
+      "warn",
+      "打开失败",
+      "打开失败：" + (e instanceof Error ? e.message : String(e))
+    );
+  }
+}
+
+// 挂载时拉一次日志大小
+onMounted(() => {
+  void refreshLogSize();
+});
 
 function pickImport() {
   fileInput.value?.click();
