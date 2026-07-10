@@ -19,23 +19,75 @@ use crate::error::TrackerError;
 use crate::tracker::platform::{PlatformTracker, RawApp};
 
 // x11rb 0.13 API 路径迁移（v0.4.3 修复）：
-//   - Atom 常量从 `x11rb::protocol::Atom` → `x11rb::protocol::xproto::AtomEnum`（新 xproto 模块结构）
-//   - Connection 从 `x11rb::protocol::xcb::Connection` → `x11rb::connection::Connection`（trait）
+//   - EWMH atoms（NET_WM_NAME 等）不在 `AtomEnum` 中（这是 ICCCM/EWMH 规范）
+//   - 必须通过 `intern_atom` 动态查询；本文件在 `X11Connection::connect` 时一次性 intern
 //   - `get_property` 等 xproto 协议方法在 `x11rb::protocol::xproto::ConnectionExt` trait 里
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
+use x11rb::protocol::xproto::{Atom, ConnectionExt};
+
+/// X11 EWMH/ICCCM 协议所需 atoms（连接时一次性 intern 缓存）
+struct X11Atoms {
+    net_active_window: Atom,
+    net_wm_name: Atom,
+    net_wm_pid: Atom,
+    utf8_string: Atom,
+    wm_name: Atom,
+    string: Atom,
+    cardinal: Atom,
+    window: Atom,
+}
+
+impl X11Atoms {
+    fn intern(conn: &impl Connection) -> Result<Self, TrackerError> {
+        // 8 个 atoms 一次 intern（同步 cookie 调用）
+        let names: &[&[u8]] = &[
+            b"NET_ACTIVE_WINDOW",
+            b"NET_WM_NAME",
+            b"NET_WM_PID",
+            b"UTF8_STRING",
+            b"WM_NAME",
+            b"STRING",
+            b"CARDINAL",
+            b"WINDOW",
+        ];
+        let mut cookies = Vec::with_capacity(names.len());
+        for name in names {
+            cookies.push(conn.intern_atom(false, *name));
+        }
+        // 解析所有 reply
+        let mut atoms = Vec::with_capacity(cookies.len());
+        for c in cookies {
+            let r = c
+                .reply()
+                .map_err(|e| TrackerError::Platform(format!("intern_atom reply: {}", e)))?;
+            atoms.push(r.atom);
+        }
+        Ok(Self {
+            net_active_window: atoms[0],
+            net_wm_name: atoms[1],
+            net_wm_pid: atoms[2],
+            utf8_string: atoms[3],
+            wm_name: atoms[4],
+            string: atoms[5],
+            cardinal: atoms[6],
+            window: atoms[7],
+        })
+    }
+}
 
 /// X11 连接 + 资源封装（RAII 自动断开）
 struct X11Connection {
     conn: x11rb::rust_connection::RustConnection,
     screen_num: usize,
+    atoms: X11Atoms,
 }
 
 impl X11Connection {
     fn connect() -> Result<Self, TrackerError> {
         let (conn, screen_num) =
             x11rb::connect(None).map_err(|e| TrackerError::Platform(format!("X11 connect failed: {}", e)))?;
-        Ok(Self { conn, screen_num })
+        let atoms = X11Atoms::intern(&conn)?;
+        Ok(Self { conn, screen_num, atoms })
     }
 
     fn root(&self) -> u32 {
@@ -53,7 +105,7 @@ impl PlatformTracker for LinuxTracker {
         // 1. 读取 _NET_ACTIVE_WINDOW（EWMH 标准属性）
         let root = x.root();
         let active_cookie =
-            x.conn.get_property(false, root, AtomEnum::NET_ACTIVE_WINDOW.into(), AtomEnum::WINDOW.into(), 0, 1);
+            x.conn.get_property(false, root, x.atoms.net_active_window, x.atoms.window, 0, 1);
         let active_reply = active_cookie
             .reply()
             .map_err(|e| TrackerError::Platform(format!("_NET_ACTIVE_WINDOW query failed: {}", e)))?;
@@ -73,10 +125,10 @@ impl PlatformTracker for LinuxTracker {
         // 上层采样循环已对自身做排除逻辑
 
         // 2. 读取窗口标题（优先 UTF-8 的 _NET_WM_NAME，fallback WM_NAME）
-        let window_title = get_window_title(&x.conn, window_id);
+        let window_title = get_window_title(&x.conn, window_id, &x.atoms);
 
         // 3. 读取进程 PID（_NET_WM_PID）
-        let pid = get_window_pid(&x.conn, window_id)?;
+        let pid = get_window_pid(&x.conn, window_id, &x.atoms)?;
 
         // 4. 从 /proc 读取进程详细信息
         let process_info = read_proc_pid(pid as i32);
@@ -116,9 +168,10 @@ impl PlatformTracker for LinuxTracker {
 fn get_window_title(
     conn: &impl Connection,
     window: u32,
+    atoms: &X11Atoms,
 ) -> Option<String> {
     // 优先尝试 _NET_WM_NAME（UTF-8 编码，现代桌面环境标准）
-    let cookie = conn.get_property(false, window, AtomEnum::NET_WM_NAME.into(), AtomEnum::UTF8_STRING.into(), 0, 256);
+    let cookie = conn.get_property(false, window, atoms.net_wm_name, atoms.utf8_string, 0, 256);
     if let Ok(reply) = cookie.reply() {
         if reply.value_len() > 0 {
             if let Ok(s) = String::from_utf8(reply.value().to_vec()) {
@@ -130,7 +183,7 @@ fn get_window_title(
     }
 
     // Fallback: WM_NAME（传统 Latin-1 编码）
-    let cookie2 = conn.get_property(false, window, AtomEnum::WM_NAME.into(), AtomEnum::STRING.into(), 0, 256);
+    let cookie2 = conn.get_property(false, window, atoms.wm_name, atoms.string, 0, 256);
     if let Ok(reply) = cookie2.reply() {
         if reply.value_len() > 0 {
             // WM_NAME 可能是 COMPOUND_TEXT 或 STRING；尝试按 Latin-1 解码
@@ -145,8 +198,9 @@ fn get_window_title(
 fn get_window_pid(
     conn: &impl Connection,
     window: u32,
+    atoms: &X11Atoms,
 ) -> Result<u32, TrackerError> {
-    let cookie = conn.get_property(false, window, AtomEnum::NET_WM_PID.into(), AtomEnum::CARDINAL.into(), 0, 1);
+    let cookie = conn.get_property(false, window, atoms.net_wm_pid, atoms.cardinal, 0, 1);
     let reply = cookie
         .reply()
         .map_err(|e| TrackerError::Platform(format!("_NET_WM_PID query failed: {}", e)))?;
