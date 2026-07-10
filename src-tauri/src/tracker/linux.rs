@@ -108,8 +108,10 @@ impl PlatformTracker for LinuxTracker {
 
         // 1. 读取 _NET_ACTIVE_WINDOW（EWMH 标准属性）
         let root = x.root();
-        let active_cookie =
-            x.conn.get_property(false, root, x.atoms.net_active_window, x.atoms.window, 0, 1);
+        let active_cookie = x
+            .conn
+            .get_property(false, root, x.atoms.net_active_window, x.atoms.window, 0, 1)
+            .map_err(|e| TrackerError::Platform(format!("_NET_ACTIVE_WINDOW send: {}", e)))?;
         let active_reply = active_cookie
             .reply()
             .map_err(|e| TrackerError::Platform(format!("_NET_ACTIVE_WINDOW query failed: {}", e)))?;
@@ -175,23 +177,26 @@ fn get_window_title(
     atoms: &X11Atoms,
 ) -> Option<String> {
     // 优先尝试 _NET_WM_NAME（UTF-8 编码，现代桌面环境标准）
-    let cookie = conn.get_property(false, window, atoms.net_wm_name, atoms.utf8_string, 0, 256);
-    if let Ok(reply) = cookie.reply() {
-        if reply.value_len() > 0 {
-            if let Ok(s) = String::from_utf8(reply.value().to_vec()) {
-                if !s.trim().is_empty() {
-                    return Some(s);
+    // x11rb 0.13：请求函数返回 Result<Cookie, ConnectionError>，需先解开再 .reply()
+    if let Ok(cookie) = conn.get_property(false, window, atoms.net_wm_name, atoms.utf8_string, 0, 256) {
+        if let Ok(reply) = cookie.reply() {
+            if reply.value_len() > 0 {
+                if let Ok(s) = String::from_utf8(reply.value().to_vec()) {
+                    if !s.trim().is_empty() {
+                        return Some(s);
+                    }
                 }
             }
         }
     }
 
     // Fallback: WM_NAME（传统 Latin-1 编码）
-    let cookie2 = conn.get_property(false, window, atoms.wm_name, atoms.string, 0, 256);
-    if let Ok(reply) = cookie2.reply() {
-        if reply.value_len() > 0 {
-            // WM_NAME 可能是 COMPOUND_TEXT 或 STRING；尝试按 Latin-1 解码
-            return Some(String::from_utf8_lossy(reply.value()).trim_end('\0').to_string());
+    if let Ok(cookie) = conn.get_property(false, window, atoms.wm_name, atoms.string, 0, 256) {
+        if let Ok(reply) = cookie.reply() {
+            if reply.value_len() > 0 {
+                // WM_NAME 可能是 COMPOUND_TEXT 或 STRING；尝试按 Latin-1 解码
+                return Some(String::from_utf8_lossy(reply.value()).trim_end('\0').to_string());
+            }
         }
     }
 
@@ -204,7 +209,9 @@ fn get_window_pid(
     window: u32,
     atoms: &X11Atoms,
 ) -> Result<u32, TrackerError> {
-    let cookie = conn.get_property(false, window, atoms.net_wm_pid, atoms.cardinal, 0, 1);
+    let cookie = conn
+        .get_property(false, window, atoms.net_wm_pid, atoms.cardinal, 0, 1)
+        .map_err(|e| TrackerError::Platform(format!("_NET_WM_PID send: {}", e)))?;
     let reply = cookie
         .reply()
         .map_err(|e| TrackerError::Platform(format!("_NET_WM_PID query failed: {}", e)))?;
@@ -261,7 +268,7 @@ fn get_xss_idle() -> Option<u64> {
 
     let (conn, _) = x11rb::connect(None).ok()?;
     let screen = conn.setup().screens.first()?;
-    let cookie = conn.xss_query_info(screen.root);
+    let cookie = conn.xss_query_info(screen.root).ok()?;
     let reply = cookie.reply().ok()?;
     Some((reply.ms_since_user_input / 1000) as u64)
 }
