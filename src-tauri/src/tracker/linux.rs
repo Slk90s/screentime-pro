@@ -18,9 +18,15 @@ use std::path::Path;
 use crate::error::TrackerError;
 use crate::tracker::platform::{PlatformTracker, RawApp};
 
+// x11rb 0.13 API 路径迁移（v0.4.3 修复）：
+//   - Atom 常量从 `x11rb::protocol::Atom` → `x11rb::protocol::xproto::Atom`
+//   - Connection 从 `x11rb::protocol::xcb::Connection` → `x11rb::connection::Connection`（trait）
+use x11rb::connection::Connection;
+use x11rb::protocol::xproto::Atom;
+
 /// X11 连接 + 资源封装（RAII 自动断开）
 struct X11Connection {
-    conn: x11rb::protocol::xcb::Connection,
+    conn: x11rb::rust_connection::RustConnection,
     screen_num: usize,
 }
 
@@ -46,7 +52,7 @@ impl PlatformTracker for LinuxTracker {
         // 1. 读取 _NET_ACTIVE_WINDOW（EWMH 标准属性）
         let root = x.root();
         let active_cookie =
-            x.conn.get_property(false, root, x11rb::protocol::Atom::NET_ACTIVE_WINDOW.into(), x11rb::protocol::Atom::WINDOW.into(), 0, 1);
+            x.conn.get_property(false, root, Atom::NET_ACTIVE_WINDOW.into(), Atom::WINDOW.into(), 0, 1);
         let active_reply = active_cookie
             .reply()
             .map_err(|e| TrackerError::Platform(format!("_NET_ACTIVE_WINDOW query failed: {}", e)))?;
@@ -107,11 +113,11 @@ impl PlatformTracker for LinuxTracker {
 
 /// 从指定窗口获取标题字符串
 fn get_window_title(
-    conn: &x11rb::protocol::xcb::Connection,
+    conn: &impl Connection,
     window: u32,
 ) -> Option<String> {
     // 优先尝试 _NET_WM_NAME（UTF-8 编码，现代桌面环境标准）
-    let cookie = conn.get_property(false, window, x11rb::protocol::Atom::NET_WM_NAME.into(), x11rb::protocol::Atom::UTF8_STRING.into(), 0, 256);
+    let cookie = conn.get_property(false, window, Atom::NET_WM_NAME.into(), Atom::UTF8_STRING.into(), 0, 256);
     if let Ok(reply) = cookie.reply() {
         if reply.value_len() > 0 {
             if let Ok(s) = String::from_utf8(reply.value().to_vec()) {
@@ -123,7 +129,7 @@ fn get_window_title(
     }
 
     // Fallback: WM_NAME（传统 Latin-1 编码）
-    let cookie2 = conn.get_property(false, window, x11rb::protocol::Atom::WM_NAME.into(), x11rb::protocol::Atom::STRING.into(), 0, 256);
+    let cookie2 = conn.get_property(false, window, Atom::WM_NAME.into(), Atom::STRING.into(), 0, 256);
     if let Ok(reply) = cookie2.reply() {
         if reply.value_len() > 0 {
             // WM_NAME 可能是 COMPOUND_TEXT 或 STRING；尝试按 Latin-1 解码
@@ -136,10 +142,10 @@ fn get_window_title(
 
 /// 从指定窗口获取 PID（_NET_WM_PID）
 fn get_window_pid(
-    conn: &x11rb::protocol::xcb::Connection,
+    conn: &impl Connection,
     window: u32,
 ) -> Result<u32, TrackerError> {
-    let cookie = conn.get_property(false, window, x11rb::protocol::Atom::NET_WM_PID.into(), x11rb::protocol::Atom::CARDINAL.into(), 0, 1);
+    let cookie = conn.get_property(false, window, Atom::NET_WM_PID.into(), Atom::CARDINAL.into(), 0, 1);
     let reply = cookie
         .reply()
         .map_err(|e| TrackerError::Platform(format!("_NET_WM_PID query failed: {}", e)))?;
