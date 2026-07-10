@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   end_at          DATETIME NOT NULL,
   duration_seconds INTEGER NOT NULL,
   date            TEXT NOT NULL,
-  window_title    TEXT
+  window_title    TEXT,
+  device          TEXT NOT NULL DEFAULT 'default'
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_app_date ON sessions(app_id, date);
 CREATE INDEX IF NOT EXISTS idx_sessions_date ON sessions(date);

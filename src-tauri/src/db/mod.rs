@@ -54,6 +54,20 @@ impl AppDb {
         Ok(())
     }
 
+    /// 将迁移产生的「device='default'」遗留行回填为本机真实 device_id。
+    ///
+    /// 多设备合并特性上线前（旧版本）写入的 session 在被 `migrate()` 的
+    /// `ALTER TABLE ... ADD COLUMN device DEFAULT 'default'` 补列时，会落到字面量
+    /// `'default'`。这里在 device_id 已知后统一纠正，避免界面出现幽灵「default / 未命名」设备。
+    /// 已带真实 device_id 的行不会被影响。
+    pub fn backfill_device_column(&self, device_id: &str) -> rusqlite::Result<usize> {
+        let conn = self.0.lock().unwrap();
+        conn.execute(
+            "UPDATE sessions SET device = ?1 WHERE device = 'default' OR device IS NULL",
+            params![device_id],
+        )
+    }
+
     /// 写入/更新应用记录，返回 app id（按 process_name + platform 去重）
     pub fn upsert_app(
         &self,

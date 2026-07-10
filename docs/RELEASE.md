@@ -40,7 +40,8 @@
 
 | 版本 | 发布日期 | 关键变更 | 是否推荐 |
 |------|----------|----------|----------|
-| v0.4.2 | 2026-07-10 | 新增统一日志系统（tracing + tauri-plugin-log）：4 处核心埋点、Settings 一键导出、生产环境 15MB 上限、采样循环分钟级节流 | ⭐ Latest · 推荐升级 |
+| v0.4.3 | 2026-07-10 | 修「default 幽灵设备」：migrate() 回填改用真实 device_id（取代字面量 'default'）+ sql/schema.sql 补 device 列 + 清理本机脏数据 | ⭐ Latest · 推荐升级 |
+| v0.4.2 | 2026-07-10 | 新增统一日志系统（tracing + tauri-plugin-log）：4 处核心埋点、Settings 一键导出、生产环境 15MB 上限、采样循环分钟级节流 | 旧版 |
 | v0.4.1 | 2026-07-09 | 修 macOS 辅助功能权限检测（AXIsProcessTrustedWithOptions）+ 修采样循环 tokio 嵌套死锁 + 11 项 bug 扫描修复 + 三端构建 | 旧版 |
 | v0.4.0 | 2026-07-09 | 新增按设备清理/导出/导入、自动归类联网搜索（Wikipedia + 本地字典 + LRU）、Conventions 文档 | ⚠️ 已知采样循环死锁，请立即升级 |
 | v0.3.1 | 2026-07-09 | 检查更新改 GitHub Atom feed（避开 HTTP 403）；Settings 改操作反馈全部用 Modal 弹窗 | 旧版 |

@@ -120,6 +120,9 @@ pub fn run() {
                     let _ = db.set_setting("device_id", &id);
                     id
                 });
+            // 迁移回填：旧版本（无 device 列）写入的 session 会被 ALTER 落到 'default'，
+            // 在 device_id 已知后纠正为本机真实设备，避免幽灵「default」设备。
+            let _ = db.backfill_device_column(&device_id);
             // 设备显示名称：首次运行（或仍为默认设备 ID）时取本机电脑名（hostname），
             // 否则复用用户已保存的名称。这样默认展示「我的电脑」之类可读名，而不是一长串哈希 ID。
             // （仅用于落库；get_settings 直接从 DB 读取，故用 _ 前缀避免未使用告警）
