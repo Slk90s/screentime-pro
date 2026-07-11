@@ -11,6 +11,15 @@
 //! Wayland 环境：当前返回 Unsupported，上层采样循环跳过不崩溃。
 //! 注：本文件仅在 `target_os = "linux"` 下参与编译。编译时无需系统 X11 库
 //! （x11rb 是纯 Rust XCB 协议实现）；运行时需要 X11 Display 服务。
+//!
+//! ## x11rb 0.13 API 适配说明
+//!
+//! x11rb 0.13 对 `GetPropertyReply` 做了 breaking change：
+//! - `value_len` / `value` 字段变为**私有**
+//! - 必须使用类型化访问器：`value8()` / `value16()` / `value32()`
+//!   这些方法返回 `Option<Impl Iterator>`（format 不匹配时返回 None）
+//! - 所有请求函数（get_property / intern_atom / xss_query_info）返回 `Result<Cookie, E>`
+//!   需先解开 Result 再调用 cookie.reply()
 
 use std::fs;
 use std::path::Path;
@@ -18,10 +27,10 @@ use std::path::Path;
 use crate::error::TrackerError;
 use crate::tracker::platform::{PlatformTracker, RawApp};
 
-// x11rb 0.13 API 路径迁移（v0.4.3 修复）：
-//   - EWMH atoms（NET_WM_NAME 等）不在 `AtomEnum` 中（这是 ICCCM/EWMH 规范）
-//   - 必须通过 `intern_atom` 动态查询；本文件在 `X11Connection::connect` 时一次性 intern
-//   - `get_property` 等 xproto 协议方法在 `x11rb::protocol::xproto::ConnectionExt` trait 里
+// x11rb 0.13 路径：
+//   - Connection trait 在 x11rb::connection
+//   - 协议方法（get_property 等）在 x11rb::protocol::xproto::ConnectionExt trait
+//   - Atom 类型在 x11rb::protocol::xproto
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{Atom, ConnectionExt};
 
@@ -39,7 +48,6 @@ struct X11Atoms {
 
 impl X11Atoms {
     fn intern(conn: &impl Connection) -> Result<Self, TrackerError> {
-        // 8 个 atoms 一次 intern（同步 cookie 调用）
         let names: &[&[u8]] = &[
             b"NET_ACTIVE_WINDOW",
             b"NET_WM_NAME",
@@ -50,7 +58,7 @@ impl X11Atoms {
             b"CARDINAL",
             b"WINDOW",
         ];
-        // intern_atom 返回 Result<InternAtomCookie, ConnectionError>，需先 ? 解包
+        // intern_atom 返回 Result<Cookie, ConnectionError>
         let mut cookies = Vec::with_capacity(names.len());
         for name in names {
             let c = conn
@@ -58,7 +66,7 @@ impl X11Atoms {
                 .map_err(|e| TrackerError::Platform(format!("intern_atom send: {}", e)))?;
             cookies.push(c);
         }
-        // 再 reply() 解析所有
+        // 每个 cookie reply 解析为 atom
         let mut atoms = Vec::with_capacity(cookies.len());
         for c in cookies {
             let r = c
@@ -106,7 +114,7 @@ impl PlatformTracker for LinuxTracker {
     fn get_foreground_app(&self) -> Result<RawApp, TrackerError> {
         let x = X11Connection::connect()?;
 
-        // 1. 读取 _NET_ACTIVE_WINDOW（EWMH 标准属性）
+        // 1. 读取 _NET_ACTIVE_WINDOW（EWMH 标准属性）→ WINDOW 类型 (u32)
         let root = x.root();
         let active_cookie = x
             .conn
@@ -116,24 +124,16 @@ impl PlatformTracker for LinuxTracker {
             .reply()
             .map_err(|e| TrackerError::Platform(format!("_NET_ACTIVE_WINDOW query failed: {}", e)))?;
 
-        if active_reply.value_len() == 0 {
-            return Err(TrackerError::NoForeground);
-        }
-        let window_id: u32 = active_reply
+        // x11rb 0.13: value32() 返回 Option<Iterator<Item=u32>>（format != 32 时 None）
+        let window_id = active_reply
             .value32()
-            .map_err(|e| TrackerError::Platform(format!("_NET_ACTIVE_WINDOW value32: {}", e)))?
-            .first()
-            .copied()
-            .ok_or_else(|| TrackerError::Platform("_NET_ACTIVE_WINDOW 空值".into()))?;
-
-        // 避免记录自身窗口（ScreenTime Pro 自身）
-        // 注意：无法可靠获取自身窗口 ID，此处不做过滤；
-        // 上层采样循环已对自身做排除逻辑
+            .and_then(|mut iter| iter.next())
+            .ok_or(TrackerError::NoForeground)?;
 
         // 2. 读取窗口标题（优先 UTF-8 的 _NET_WM_NAME，fallback WM_NAME）
         let window_title = get_window_title(&x.conn, window_id, &x.atoms);
 
-        // 3. 读取进程 PID（_NET_WM_PID）
+        // 3. 读取进程 PID（_NET_WM_PID）→ CARDINAL 类型 (u32)
         let pid = get_window_pid(&x.conn, window_id, &x.atoms)?;
 
         // 4. 从 /proc 读取进程详细信息
@@ -157,13 +157,9 @@ impl PlatformTracker for LinuxTracker {
     }
 
     fn get_idle_seconds(&self) -> Result<u64, TrackerError> {
-        // 尝试通过 X ScreenSaver 扩展获取空闲时间
         match get_xss_idle() {
             Some(secs) => Ok(secs),
-            None => {
-                // 无 ScreenSaver 扩展时回退到 0（不影响主流程，只是空闲检测不可用）
-                Ok(0)
-            }
+            None => Ok(0),
         }
     }
 }
@@ -171,31 +167,40 @@ impl PlatformTracker for LinuxTracker {
 // ===================== 辅助函数 =====================
 
 /// 从指定窗口获取标题字符串
+///
+/// x11rb 0.13: GetPropertyReply 的 value 字段私有化；
+/// UTF-8 字符串用 `value8()` 读取字节迭代器再收集为 Vec<u8>。
 fn get_window_title(
     conn: &impl Connection,
     window: u32,
     atoms: &X11Atoms,
 ) -> Option<String> {
     // 优先尝试 _NET_WM_NAME（UTF-8 编码，现代桌面环境标准）
-    // x11rb 0.13：请求函数返回 Result<Cookie, ConnectionError>，需先解开再 .reply()
     if let Ok(cookie) = conn.get_property(false, window, atoms.net_wm_name, atoms.utf8_string, 0, 256) {
         if let Ok(reply) = cookie.reply() {
-            if reply.value_len() > 0 {
-                if let Ok(s) = String::from_utf8(reply.value().to_vec()) {
-                    if !s.trim().is_empty() {
-                        return Some(s);
+            // value8(): format==8 时 Some(Iterator<u8>)，否则 None
+            if let Some(bytes) = reply.value8() {
+                let vec: Vec<u8> = bytes.collect();
+                if let Ok(s) = String::from_utf8(vec) {
+                    let trimmed = s.trim_end('\0').trim();
+                    if !trimmed.is_empty() {
+                        return Some(trimmed.to_string());
                     }
                 }
             }
         }
     }
 
-    // Fallback: WM_NAME（传统 Latin-1 编码）
+    // Fallback: WM_NAME（传统 Latin-1/STRING 编码）
     if let Ok(cookie) = conn.get_property(false, window, atoms.wm_name, atoms.string, 0, 256) {
         if let Ok(reply) = cookie.reply() {
-            if reply.value_len() > 0 {
-                // WM_NAME 可能是 COMPOUND_TEXT 或 STRING；尝试按 Latin-1 解码
-                return Some(String::from_utf8_lossy(reply.value()).trim_end('\0').to_string());
+            if let Some(bytes) = reply.value8() {
+                let vec: Vec<u8> = bytes.collect();
+                let s = String::from_utf8_lossy(&vec);
+                let trimmed = s.trim_end('\0').trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
             }
         }
     }
@@ -203,7 +208,9 @@ fn get_window_title(
     None
 }
 
-/// 从指定窗口获取 PID（_NET_WM_PID）
+/// 从指定窗口获取 PID（_NET_WM_PID）→ CARDINAL/u32
+///
+/// x11rb 0.13: value32() 返回 Option<Iterator<Item=u32>>
 fn get_window_pid(
     conn: &impl Connection,
     window: u32,
@@ -216,15 +223,11 @@ fn get_window_pid(
         .reply()
         .map_err(|e| TrackerError::Platform(format!("_NET_WM_PID query failed: {}", e)))?;
 
-    if reply.value_len() == 0 {
-        return Err(TrackerError::Platform("No _NET_WM_PID on active window".into()));
-    }
-    Ok(reply
+    // value32() 返回 Option<Iterator>；无值或格式不匹配均为 None
+    reply
         .value32()
-        .map_err(|e| TrackerError::Platform(format!("_NET_WM_PID value32: {}", e)))?
-        .first()
-        .copied()
-        .ok_or_else(|| TrackerError::Platform("_NET_WM_PID 空值".into()))?)
+        .and_then(|mut iter| iter.next())
+        .ok_or_else(|| TrackerError::Platform("No _NET_WM_PID on active window".into()))
 }
 
 /// 从 /proc/[pid]/ 读取进程可执行路径和名称
@@ -236,17 +239,14 @@ struct ProcInfo {
 fn read_proc_pid(pid: i32) -> ProcInfo {
     let proc_dir = format!("/proc/{}", pid);
 
-    // 读取 /proc/[pid]/exe 符号链接 → 可执行文件绝对路径
     let exe_path = fs::read_link(format!("{}/exe", proc_dir))
         .ok()
         .and_then(|p| p.to_str().map(String::from));
 
-    // 读取 /proc/[pid]/comm → 进程短名（如 "chrome", "code"）
     let name = fs::read_to_string(format!("{}/comm", proc_dir))
         .ok()
         .map(|s| s.trim_end_matches('\n').to_string())
         .unwrap_or_else(|| {
-            // comm 不可用则从 exe_path 提取文件名
             exe_path
                 .as_ref()
                 .and_then(|p| Path::new(p).file_name())
@@ -258,16 +258,14 @@ fn read_proc_pid(pid: i32) -> ProcInfo {
 }
 
 /// 通过 X ScreenSaver 扩展获取用户空闲毫秒数
-///
-/// 使用 x11rb 的 screensaver 模块发送 XScreenSaverQueryInfo 请求。
-/// 返回 Some(秒数) 或 None（扩展不可用）。
 #[cfg(feature = "xss")]
 fn get_xss_idle() -> Option<u64> {
-    use x11rb::protocol::xss::{self, ConnectionExt as _};
     use x11rb::connection::Connection;
+    use x11rb::protocol::xss::ConnectionExt as _;
 
     let (conn, _) = x11rb::connect(None).ok()?;
     let screen = conn.setup().screens.first()?;
+    // xss_query_info 返回 Result<Cookie, _>
     let cookie = conn.xss_query_info(screen.root).ok()?;
     let reply = cookie.reply().ok()?;
     Some((reply.ms_since_user_input / 1000) as u64)
@@ -276,6 +274,5 @@ fn get_xss_idle() -> Option<u64> {
 /// 无 xss feature 时直接返回 None
 #[cfg(not(feature = "xss"))]
 fn get_xss_idle() -> Option<u64> {
-    // 不启用 xss feature 时跳过 ScreenSaver 检测
     None
 }

@@ -14,7 +14,7 @@
       <div class="toolbar">
         <!-- 时间范围：今天 / 近 7/14/30 天 -->
         <div class="range">
-          <button :class="{ active: range === 0 }" @click="range = 0">今天</button>
+          <button :class="{ active: range === 0 }" @click="selectToday">今天</button>
           <button :class="{ active: range === 7 }" @click="range = 7">近7天</button>
           <button :class="{ active: range === 14 }" @click="range = 14">近14天</button>
           <button :class="{ active: range === 30 }" @click="range = 30">近30天</button>
@@ -32,7 +32,7 @@
       <div class="seldate">
         <span>查看日期：<b>{{ selectedDate }}</b></span>
         <button class="pick-btn" @click="showPicker = true" title="选择指定日期">📅 选择</button>
-        <button v-if="selectedDate !== today" class="today" @click="backToToday">回到今天</button>
+        <button v-if="selectedDate !== todayStr()" class="today" @click="backToToday">回到今天</button>
         <span class="tip">点击上方柱状图的某一天，可查看当天详情</span>
       </div>
 
@@ -98,9 +98,8 @@ const device = ref<string>("");
 // 已知设备列表（供切换器与趋势页使用）
 const devices = ref<DeviceInfo[]>([]);
 
-const today = todayStr();
-// 当前查看的日期（默认今天；点击柱状图某天可切换）
-const selectedDate = ref(today);
+// 当前查看的日期（默认今天；点击柱状图某天可切换）—— 每次通过 todayStr() 实时获取当前日期
+const selectedDate = ref(todayStr());
 // 日历选择器显示状态
 const showPicker = ref(false);
 const overview = ref<OverviewOut>({
@@ -144,11 +143,16 @@ function onPickDate(d: string) {
   showPicker.value = false;
   loadDetails();
 }
-// 回到今天
+// 回到今天（每次调用实时取系统当前日期，解决跨天后仍显示旧日期的 bug）
 function backToToday() {
-  selectedDate.value = today;
+  selectedDate.value = todayStr();
   showPicker.value = false;
   loadDetails();
+}
+// 顶部「今天」按钮：同时切换范围 + 刷新查看日期为当天
+function selectToday() {
+  range.value = 0;
+  selectedDate.value = todayStr();
 }
 
 async function loadDevices() {

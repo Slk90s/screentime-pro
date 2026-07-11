@@ -38,7 +38,8 @@
 
 | 版本 | 发布时间 | 状态 | 关键说明 |
 |------|----------|------|----------|
-| **v0.4.3** | 2026-07-10 | ⭐ **Latest · 推荐** | 修「default 幽灵设备」：迁移回填改用真实 device_id（取代字面量 'default'）+ schema 补 device 列 + 清理本机脏数据 |
+| **v0.4.4** | 2026-07-11 | ⭐ **Latest · 推荐** | 修「跨天今天按钮」+ Linux CI 三端通过：Dashboard 今天按钮实时取系统日期 + linux.rs 完整适配 x11rb 0.13 GetPropertyReply 新 API |
+| v0.4.3 | 2026-07-10 | 旧版 | 修「default 幽灵设备」：迁移回填改用真实 device_id（取代字面量 'default'）+ schema 补 device 列 |
 | v0.4.2 | 2026-07-10 | 旧版 | 新增统一日志系统（4 处核心埋点 + Settings 一键导出 + 15MB 上限） |
 | v0.4.1 | 2026-07-09 | 旧版 | 修复采样循环死锁、macOS 权限 API bug、Mutex poison 雪崩等 11 项 |
 | v0.4.0 | — | ⚠️ **不推荐** | 已知严重 bug：采样循环 `block_on` 嵌套导致时间不统计 |
@@ -255,8 +256,8 @@ screentime-pro/
 
 | 当前版本 | 历史摘要 |
 |----------|----------|
-| ⭐ **v0.4.3** (Latest) | 修「default 幽灵设备」：迁移回填改用真实 device_id + schema 补 device 列 |
-| v0.4.2 | 新增统一日志系统（4 处核心埋点 + Settings 一键导出 + 15MB 上限） |
+| ⭐ **v0.4.4** (Latest) | 修「跨天今天按钮」+ Linux x11rb 0.13 完整适配（CI 三端通过） |
+| v0.4.3 | 修「default 幽灵设备」：迁移回填改用真实 device_id + schema 补 device 列 |
 | v0.4.1 | 修采样循环死锁 + 修 macOS 权限检测 + 三端完整构建 |
 | ⚠️ v0.4.0 | 自动归类联网搜索（已知 bug，已被 v0.4.1 取代） |
 | v0.3.1 | 检查更新 Atom feed + 设置改 Modal 弹窗 |
