@@ -54,32 +54,31 @@
 每个版本发布前，按下面格式书写 notes（保存为 `release/v{ver}/NOTES.md`），脚本会读这个文件作为 `--notes-file`：
 
 ```markdown
-## ✨ v0.4.1 (Latest · Recommended)
+## ✨ v0.4.4 (Latest · Recommended)
 
 > 📅 发布日期：YYYY-MM-DD · 🐙 提交：${commit_sha:0:7}
 
-### 🔧 关键修复（相对 v0.4.0）
+### 🔧 关键修复（相对 v0.4.1）
 
-- **修复** sampling_loop 里 `tauri::async_runtime::block_on` 嵌套导致 tokio worker 卡死 → 应用秒级使用时长全部丢失。改为同步 `lookup_category` + `spawn_blocking` 派发
-- **修复** macOS 辅助功能 API 一直返回 false（ad-hoc 签名 identifier 漂移问题） → 改用 `AXIsProcessTrustedWithOptions` + `kAXTrustedCheckOptionPrompt: false`（不弹窗、不缓存）
-- **修复** 并发 `Mutex` poison 导致批量统计雪崩 → 全量 `lock().unwrap()` → `unwrap_or_else(|e| e.into_inner())`
-- **修复** 11 项其他 bug（详见 CONVENTIONS.md 踩坑记录）
+- **修复** 设备不关机跨天运行时，点击 Dashboard 「今天」按钮仍显示昨日数据（根因：`const today = todayStr()` 在 `setup()` 时只算一次并永久缓存）→ 改为每次 `todayStr()` 实时取系统当前日期
+- **修复** Linux CI 反复失败（x11rb 0.13 API breaking changes）→ `linux.rs` 完整适配：`GetPropertyReply.value`/`.value_len()` 私有化，改用 `value8()`/`value32()` 类型化访问器；`get_property`/`intern_atom`/`xss_query_info` 等请求全部先 `?` 解包再 `reply()`
+- **修复** CI runner Rust 1.80+ `str::trim_end('\0')` 不再接受 char 参数 → 改为 `trim_end_matches('\0')`
 
 ### ➕ 优化
 
-- 三端产物完整：macOS dmg + Windows NSIS（CI 构建）+ Linux deb/AppImage（CI 构建）
+- 三端产物完整：macOS dmg（本机构建）+ Windows NSIS（CI 构建）+ Linux deb/AppImage（CI 构建）
 
-### ⚠️ 已知问题（v0.4.1 仍遗留）
+### ⚠️ 已知问题（v0.4.4 仍遗留）
 
-- Linux 交叉编译需 webkit2gtk 系统库，请走 GitHub Actions 构建（`tag v*` 自动触发）
+- Linux 需 webkit2gtk 系统库，本机 macOS 无法交叉编译，请走 GitHub Actions 构建（`tag v*` 自动触发）
 
 ### 📥 下载
 
 | 平台 | 文件 | 大小 |
 |------|------|------|
-| macOS (Apple Silicon) | `ScreenTime Pro_0.4.1_aarch64.dmg` | 6.3 MB |
-| Windows (x64)         | `screentime-pro_0.4.1_x86_64-setup.exe` | 6.4 MB |
-| Linux (x64)           | `screentime-pro_0.4.1_amd64.deb` | TBD（CI） |
+| macOS (Apple Silicon) | `ScreenTime Pro_0.4.4_aarch64.dmg` | ~6.8 MB |
+| Windows (x64)         | `screentime-pro_0.4.4_x86_64-setup.exe` | TBD（CI） |
+| Linux (x64)           | `screentime-pro_0.4.4_amd64.deb` | TBD（CI） |
 
 ---
 
@@ -168,5 +167,5 @@ bash scripts/release-github.sh --draft
 
 ---
 
-**最后更新**：2026-07-10 @v0.4.1（建立）
+**最后更新**：2026-07-11 @v0.4.4
 **维护人**：所有 AI / 开发者
