@@ -182,7 +182,7 @@ fn get_window_title(
             if let Some(bytes) = reply.value8() {
                 let vec: Vec<u8> = bytes.collect();
                 if let Ok(s) = String::from_utf8(vec) {
-                    let trimmed = s.trim_end('\0').trim();
+                    let trimmed = s.trim_end_matches('\0').trim();
                     if !trimmed.is_empty() {
                         return Some(trimmed.to_string());
                     }
@@ -197,7 +197,7 @@ fn get_window_title(
             if let Some(bytes) = reply.value8() {
                 let vec: Vec<u8> = bytes.collect();
                 let s = String::from_utf8_lossy(&vec);
-                let trimmed = s.trim_end('\0').trim();
+                let trimmed = s.trim_end_matches('\0').trim();
                 if !trimmed.is_empty() {
                     return Some(trimmed.to_string());
                 }
