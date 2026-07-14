@@ -59,6 +59,8 @@ export interface OverviewOut {
   most_used_app?: string | null;
   most_used_seconds: number;
   pickup_count: number;
+  /** 日均时长（秒）：仅范围聚合模式（days>0）时由后端计算，单日模式为 0 */
+  avg_daily_seconds?: number;
 }
 
 // ⚠️ Tauri 2 自动把 Rust 字段转 camelCase 给 JS，所以 TS 类型必须用 camelCase。

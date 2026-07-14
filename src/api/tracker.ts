@@ -53,8 +53,9 @@ export const tracker = {
   // 实时前台应用（用于 UI 显示「正在记录：XXX」，验证确实在采集其他软件）
   current: () => call<CurrentForegroundOut>("get_current_foreground"),
   // 各维度统计（支持按设备过滤：device 为空表示合并全部设备）
-  overview: (date: string, device?: string) =>
-    call<OverviewOut>("get_overview", { date, device: device ?? null }),
+  // overview / ranking 支持 days 参数：days=0 单日（用 date），days>0 范围聚合（近 N 天）
+  overview: (days: number, date: string, device?: string) =>
+    call<OverviewOut>("get_overview", { days, date, device: device ?? null }),
   daily: (days: number, device?: string) =>
     call<DailySummaryOut[]>("get_daily_summaries", { days, device: device ?? null }),
   // 按天 × 分类明细（iOS 风格堆叠柱状图）
@@ -62,8 +63,8 @@ export const tracker = {
     call<DayCategoryOut[]>("get_daily_categories", { days, device: device ?? null }),
   hourly: (date: string, device?: string) =>
     call<HourlyBucketOut[]>("get_hourly_buckets", { date, device: device ?? null }),
-  ranking: (date: string, device?: string) =>
-    call<AppRankingOut[]>("get_app_ranking", { date, device: device ?? null }),
+  ranking: (days: number, date: string, device?: string) =>
+    call<AppRankingOut[]>("get_app_ranking", { days, date, device: device ?? null }),
   categories: () => call<CategoryOut[]>("get_categories"),
   sessions: (date: string) => call<SessionOut[]>("get_sessions", { date }),
   // 空闲阈值配置

@@ -201,10 +201,11 @@ pub fn get_current_foreground(state: tauri::State<'_, Arc<AppState>>) -> Current
 #[tauri::command]
 pub fn get_overview(
     state: tauri::State<'_, Arc<AppState>>,
+    days: u32,
     date: String,
     device: Option<String>,
 ) -> Result<OverviewOut, String> {
-    state.db.get_overview(&date, &device).map_err(|e| e.to_string())
+    state.db.get_overview(days, &date, &device).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -384,12 +385,13 @@ pub fn get_hourly_buckets(
 #[tauri::command]
 pub fn get_app_ranking(
     state: tauri::State<'_, Arc<AppState>>,
+    days: u32,
     date: String,
     device: Option<String>,
 ) -> Result<Vec<AppRankingOut>, String> {
     state
         .db
-        .get_app_ranking(&date, &device)
+        .get_app_ranking(days, &date, &device)
         .map_err(|e| e.to_string())
 }
 
@@ -479,7 +481,7 @@ pub fn export_data(
     if ext == "csv" {
         state.db.export_csv(&path, &date).map_err(|e| e.to_string())?;
     } else {
-        let ranking = state.db.get_app_ranking(&date, &None).map_err(|e| e.to_string())?;
+        let ranking = state.db.get_app_ranking(0, &date, &None).map_err(|e| e.to_string())?;
         let json = serde_json::to_string_pretty(&ranking).map_err(|e| e.to_string())?;
         std::fs::write(&path, json).map_err(|e| e.to_string())?;
     }

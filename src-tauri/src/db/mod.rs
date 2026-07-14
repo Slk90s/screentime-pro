@@ -228,28 +228,39 @@ impl AppDb {
         rows.collect()
     }
 
-    /// 指定日期的 App 使用时长排行（按 device 过滤）
+    /// App 使用时长排行
+    ///
+    /// - `days == 0`：单日排行（按 `date` 精确匹配，用于「今日 / 点选某天详情」）
+    /// - `days > 0`：范围聚合排行（`date >= date('now','-N days')`，用于「近7/14/30天」）
+    /// 两种模式均按 device 过滤（空 device = 全部设备合并）。
     pub fn get_app_ranking(
         &self,
+        days: u32,
         date: &str,
         device: &Option<String>,
     ) -> rusqlite::Result<Vec<AppRankingOut>> {
         let conn = self.0.lock().unwrap();
-        let mut p: Vec<&dyn ToSql> = vec![&date];
-        let dev = if let Some(d) = device {
-            if !d.is_empty() {
-                p.push(d);
-                " AND s.device = ?2"
-            } else {
-                ""
-            }
+        // 日期过滤分支：单日用精确匹配，范围用日期窗口
+        let (date_clause, date_param): (&str, &dyn ToSql) = if days == 0 {
+            ("s.date = ?1", &date as &dyn ToSql)
         } else {
-            ""
+            (
+                "s.date >= date('now', '-' || ?1 || ' days')",
+                &days as &dyn ToSql,
+            )
         };
+        let (dev_clause, dev_param): (&str, Option<&dyn ToSql>) = match device {
+            Some(d) if !d.is_empty() => (" AND s.device = ?2", Some(d as &dyn ToSql)),
+            _ => ("", None),
+        };
+        let mut p: Vec<&dyn ToSql> = vec![date_param];
+        if let Some(dp) = dev_param {
+            p.push(dp);
+        }
         let mut stmt = conn.prepare(&format!(
             "SELECT a.id, a.name, a.category_id, SUM(s.duration_seconds), COUNT(*), a.icon_blob
              FROM sessions s JOIN apps a ON s.app_id = a.id
-             WHERE s.date = ?1{dev}
+             WHERE {date_clause}{dev_clause}
              GROUP BY a.id
              ORDER BY SUM(s.duration_seconds) DESC"
         ))?;
@@ -267,29 +278,42 @@ impl AppDb {
         rows.collect()
     }
 
-    /// 当日总览卡片数据（按 device 过滤）
+    /// 总览卡片数据
+    ///
+    /// - `days == 0`：单日总览（按 `date` 精确匹配，用于「今日 / 点选某天详情」）
+    /// - `days > 0`：范围聚合总览（`date >= date('now','-N days')`，用于「近7/14/30天」）
+    /// 两种模式均按 device 过滤（空 device = 全部设备合并）。
+    /// 范围模式额外计算 `avg_daily_seconds`（按有数据的实际天数均摊）。
     pub fn get_overview(
         &self,
+        days: u32,
         date: &str,
         device: &Option<String>,
     ) -> rusqlite::Result<OverviewOut> {
         let conn = self.0.lock().unwrap();
-        let mut p: Vec<&dyn ToSql> = vec![&date];
-        let dev = if let Some(d) = device {
-            if !d.is_empty() {
-                p.push(d);
-                " AND s.device = ?2"
-            } else {
-                ""
-            }
+        // 日期过滤分支：单日用精确匹配，范围用日期窗口
+        let (date_clause, date_param): (&str, &dyn ToSql) = if days == 0 {
+            ("s.date = ?1", &date as &dyn ToSql)
         } else {
-            ""
+            (
+                "s.date >= date('now', '-' || ?1 || ' days')",
+                &days as &dyn ToSql,
+            )
         };
+        let (dev_clause, dev_param): (&str, Option<&dyn ToSql>) = match device {
+            Some(d) if !d.is_empty() => (" AND s.device = ?2", Some(d as &dyn ToSql)),
+            _ => ("", None),
+        };
+        let mut p: Vec<&dyn ToSql> = vec![date_param];
+        if let Some(dp) = dev_param {
+            p.push(dp);
+        }
+
         let (total, count): (i64, i64) = conn
             .query_row(
                 &format!(
                     "SELECT COALESCE(SUM(s.duration_seconds),0), COUNT(DISTINCT s.app_id)
-                     FROM sessions s WHERE s.date=?1{dev}"
+                     FROM sessions s WHERE {date_clause}{dev_clause}"
                 ),
                 p.as_slice(),
                 |r| Ok((r.get(0)?, r.get(1)?)),
@@ -301,7 +325,7 @@ impl AppDb {
                 &format!(
                     "SELECT a.name, SUM(s.duration_seconds)
                      FROM sessions s JOIN apps a ON s.app_id=a.id
-                     WHERE s.date=?1{dev} GROUP BY a.id ORDER BY SUM(s.duration_seconds) DESC LIMIT 1"
+                     WHERE {date_clause}{dev_clause} GROUP BY a.id ORDER BY SUM(s.duration_seconds) DESC LIMIT 1"
                 ),
                 p.as_slice(),
                 |r| Ok((r.get(0)?, r.get(1)?)),
@@ -310,19 +334,44 @@ impl AppDb {
 
         let pickups: i64 = conn
             .query_row(
-                &format!("SELECT COUNT(*) FROM sessions s WHERE s.date=?1{dev}"),
+                &format!("SELECT COUNT(*) FROM sessions s WHERE {date_clause}{dev_clause}"),
                 p.as_slice(),
                 |r| r.get(0),
             )
             .unwrap_or(0);
 
+        // 日均：仅范围模式 days>0 时计算，按有数据的实际天数均摊（避免空档日拉低均值）
+        let avg_daily_seconds: i64 = if days > 0 {
+            let active_days: i64 = conn
+                .query_row(
+                    &format!(
+                        "SELECT COUNT(DISTINCT s.date) FROM sessions s WHERE {date_clause}{dev_clause}"
+                    ),
+                    p.as_slice(),
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            if active_days > 0 {
+                total / active_days
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
         Ok(OverviewOut {
-            date: date.to_string(),
+            date: if days == 0 {
+                date.to_string()
+            } else {
+                format!("近{}天", days)
+            },
             total_seconds: total,
             app_count: count,
             most_used_app: top.as_ref().map(|(n, _)| n.clone()),
             most_used_seconds: top.map(|(_, s)| s).unwrap_or(0),
             pickup_count: pickups,
+            avg_daily_seconds,
         })
     }
 

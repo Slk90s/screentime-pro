@@ -69,15 +69,20 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
     case "get_autostart_pref":
       return null;
     case "get_overview": {
+      const days = (args?.days as number) || 0;
       const date = (args?.date as string) || dateMinusDays(0);
-      const total = rand(6, 12) * 3600 + rand(0, 59) * 60;
+      // 范围模式（days>0）按天数放大，模拟累计；单日模式 scale=1
+      const scale = days === 0 ? 1 : Math.max(1, days / 7);
+      const total = (rand(6, 12) * 3600 + rand(0, 59) * 60) * scale;
+      const avg = days > 0 ? Math.round(total / days) : 0;
       return {
-        date,
+        date: days === 0 ? date : `近${days}天`,
         total_seconds: total,
         app_count: rand(8, 20),
         most_used_app: "微信",
-        most_used_seconds: rand(2, 4) * 3600,
+        most_used_seconds: (rand(2, 4) * 3600) * scale,
         pickup_count: rand(40, 90),
+        avg_daily_seconds: avg,
       } as OverviewOut;
     }
     case "get_daily_summaries": {
@@ -118,6 +123,8 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
       return arr;
     }
     case "get_app_ranking": {
+      const days = (args?.days as number) || 0;
+      const scale = days === 0 ? 1 : Math.max(1, days / 7);
       const apps = [
         { name: "微信", cat: "social" },
         { name: "Chrome", cat: "productivity" },
@@ -133,7 +140,7 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
           app_id: i + 1,
           app_name: a.name,
           category_id: a.cat,
-          total_seconds: rand(1, 5) * 3600 + rand(0, 59) * 60,
+          total_seconds: (rand(1, 5) * 3600 + rand(0, 59) * 60) * scale,
           session_count: rand(5, 40),
           icon_base64: null,
         }))

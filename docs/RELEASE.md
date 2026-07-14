@@ -40,7 +40,8 @@
 
 | 版本 | 发布日期 | 关键变更 | 是否推荐 |
 |------|----------|----------|----------|
-| v0.4.4 | 2026-07-11 | 修「跨天今天按钮」bug（Dashboard selectedDate 缓存旧日期 → 改为每次 todayStr() 实时取值）+ linux.rs 完整适配 x11rb 0.13 GetPropertyReply 新 API（value8/value32 访问器替代私有 value/value_len 字段）→ CI 三端构建首次全通过 | ⭐ Latest · 推荐升级 |
+| v0.4.5 | 2026-07-14 | 统计概述时间范围联动：切换「今天/近7/14/30天」时「设备使用时间」与「App 使用时长排行」同步按范围聚合刷新。后端 `get_overview`/`get_app_ranking` 新增 `days` 参数（days=0 单日 / days>0 范围聚合），前端 `loadDetails()` 按 `range` 传参；OverviewCard 文案随 range 动态适配（累计/日均时长）。 | ⭐ Latest · 推荐升级 |
+| v0.4.4 | 2026-07-11 | 修「跨天今天按钮」bug（Dashboard selectedDate 缓存旧日期 → 改为每次 todayStr() 实时取值）+ linux.rs 完整适配 x11rb 0.13 GetPropertyReply 新 API（value8/value32 访问器替代私有 value/value_len 字段）→ CI 三端构建首次全通过 | 旧版 |
 | v0.4.3 | 2026-07-10 | 修「default 幽灵设备」：migrate() 回填改用真实 device_id（取代字面量 'default'）+ sql/schema.sql 补 device 列 + 清理本机脏数据 | 旧版 |
 | v0.4.1 | 2026-07-09 | 修 macOS 辅助功能权限检测（AXIsProcessTrustedWithOptions）+ 修采样循环 tokio 嵌套死锁 + 11 项 bug 扫描修复 + 三端构建 | 旧版 |
 | v0.4.0 | 2026-07-09 | 新增按设备清理/导出/导入、自动归类联网搜索（Wikipedia + 本地字典 + LRU）、Conventions 文档 | ⚠️ 已知采样循环死锁，请立即升级 |

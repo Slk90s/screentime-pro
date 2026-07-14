@@ -18,15 +18,17 @@
         <span class="dur">{{ formatDuration(r.total_seconds) }}</span>
       </li>
     </ul>
-    <p class="empty" v-else>当天暂无使用记录</p>
+    <p class="empty" v-else>{{ isRange ? "该时间范围内暂无使用记录" : "当天暂无使用记录" }}</p>
   </section>
 </template>
 
 <script setup lang="ts">
+import { computed } from "vue";
 import { formatDuration } from "../utils/format";
 import type { AppRankingOut, CategoryOut } from "../types";
 
-const props = defineProps<{ ranking: AppRankingOut[]; categories: CategoryOut[] }>();
+const props = defineProps<{ ranking: AppRankingOut[]; categories: CategoryOut[]; range?: number }>();
+const isRange = computed(() => (props.range ?? 0) > 0);
 
 function catColor(id: string): string {
   return props.categories.find((c) => c.id === id)?.color || "#888780";

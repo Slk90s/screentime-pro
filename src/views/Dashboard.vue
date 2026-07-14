@@ -36,14 +36,14 @@
         <span class="tip">点击上方柱状图的某一天，可查看当天详情</span>
       </div>
 
-      <OverviewCard :overview="overview" />
+      <OverviewCard :overview="overview" :range="range" />
 
       <div class="row">
         <DailyBarChart :summaries="daily" :by-category="dayCats" :categories="categories" @select="onPickDay" />
         <HourlyStackedChart :buckets="hourly" :categories="categories" />
       </div>
 
-      <AppRanking :ranking="ranking" :categories="categories" />
+      <AppRanking :ranking="ranking" :categories="categories" :range="range" />
     </div>
 
     <!-- 标签页二：周/月同比分析 -->
@@ -125,29 +125,34 @@ async function loadRange() {
   daily.value = await tracker.daily(dailyDays, device.value);
   dayCats.value = await tracker.dailyCategories(catDays, device.value);
 }
-// 加载所选「某天」的详情（总览 / 小时分布 / 排行）
-async function loadDetails() {
-  overview.value = await tracker.overview(selectedDate.value, device.value);
-  hourly.value = await tracker.hourly(selectedDate.value, device.value);
-  ranking.value = await tracker.ranking(selectedDate.value, device.value);
+// 加载所选「某天 / 某范围」的详情（总览 / 小时分布 / 排行）
+// opts.days 缺省时取当前 range：range=0 单日（用 selectedDate），range>0 范围聚合
+// opts.date 缺省时取 selectedDate
+async function loadDetails(opts?: { days?: number; date?: string }) {
+  const days = opts?.days ?? range.value;
+  const date = opts?.date ?? selectedDate.value;
+  const dev = device.value;
+  overview.value = await tracker.overview(days, date, dev);
+  hourly.value = await tracker.hourly(date, dev);
+  ranking.value = await tracker.ranking(days, date, dev);
 }
-// 点击柱状图某天 -> 切换查看日期并刷新当天详情
+// 点击柱状图某天 -> 切换查看日期并强制以单日模式刷新当天详情
 function onPickDay(d: string) {
   selectedDate.value = d;
   showPicker.value = false;
-  loadDetails();
+  loadDetails({ days: 0, date: d });
 }
-// 从日历选择器选中日期
+// 从日历选择器选中日期 -> 强制单日模式
 function onPickDate(d: string) {
   selectedDate.value = d;
   showPicker.value = false;
-  loadDetails();
+  loadDetails({ days: 0, date: d });
 }
 // 回到今天（每次调用实时取系统当前日期，解决跨天后仍显示旧日期的 bug）
 function backToToday() {
   selectedDate.value = todayStr();
   showPicker.value = false;
-  loadDetails();
+  loadDetails({ days: 0, date: selectedDate.value });
 }
 // 顶部「今天」按钮：同时切换范围 + 刷新查看日期为当天
 function selectToday() {

@@ -67,7 +67,7 @@ pub struct CategoryOut {
     pub color: String,
 }
 
-/// 当日总览卡片
+/// 当日/范围总览卡片
 #[derive(Debug, Clone, Serialize)]
 pub struct OverviewOut {
     pub date: String,
@@ -76,6 +76,8 @@ pub struct OverviewOut {
     pub most_used_app: Option<String>,
     pub most_used_seconds: i64,
     pub pickup_count: i64,
+    /// 日均时长（秒）：仅范围聚合模式（days>0）时计算，单日模式为 0
+    pub avg_daily_seconds: i64,
 }
 
 /// 实时前台应用
