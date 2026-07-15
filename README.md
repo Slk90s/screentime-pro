@@ -57,8 +57,8 @@
 | Windows (x64) | `screentime-pro_{ver}_x86_64.exe` | 双击运行，需系统已装 **WebView2 运行时**（Win10/11 通常自带） |
 | Linux (x64) | `screentime-pro_{ver}_amd64.AppImage` / `.deb` | 由 CI 在 Linux 环境构建（详见下方「从源码构建」） |
 
-> 当前本仓库已包含 **macOS 0.4.4** 与 **Windows 0.4.4** 的构建产物（见 `release/v0.4.4/`）。
-> Linux 因本机构建环境限制，需在你自己的 Linux 机器或 GitHub Actions CI 中产出（见 `.github/workflows/build.yml`）。
+> 各平台最新安装包（macOS / Windows / Linux 三端）统一发布在 **[GitHub Releases](https://github.com/Slk90s/screentime-pro/releases)**（⭐ v0.4.5 Latest）。
+> 本地 `release/v0.4.5/` 仅作带版本号归档（不入库）；Linux 因本机构建环境限制需在 CI 中产出（见 `.github/workflows/build.yml`）。
 
 ---
 
@@ -221,7 +221,7 @@ screentime-pro/
 ├── .github/workflows/
 │   └── build.yml            # 三端自动构建（macOS / Windows / Linux）
 ├── sql/                  # schema.sql / seed_categories.sql / seed_rules.sql
-├── release/v0.4.4/       # 已构建的带版本号安装包（不入库，走 GitHub Releases）
+├── release/v0.4.5/       # 已构建的带版本号安装包（不入库，走 GitHub Releases）
 ├── README.md / LICENSE / .gitignore
 └── package.json / vite.config.ts / tsconfig*.json
 ```
@@ -257,7 +257,8 @@ screentime-pro/
 
 | 当前版本 | 历史摘要 |
 |----------|----------|
-| ⭐ **v0.4.4** (Latest) | 修「跨天今天按钮」+ Linux x11rb 0.13 完整适配（CI 三端通过） |
+| ⭐ **v0.4.5** (Latest) | 统计概述时间范围联动：切换「今天/近7/14/30天」时「设备使用时间」与「App 使用时长排行」同步按范围聚合刷新 |
+| v0.4.4 | 修「跨天今天按钮」+ Linux x11rb 0.13 完整适配（CI 三端通过） |
 | v0.4.3 | 修「default 幽灵设备」：迁移回填改用真实 device_id + schema 补 device 列 |
 | v0.4.1 | 修采样循环死锁 + 修 macOS 权限检测 + 三端完整构建 |
 | ⚠️ v0.4.0 | 自动归类联网搜索（已知 bug，已被 v0.4.1 取代） |
