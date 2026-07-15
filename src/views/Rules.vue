@@ -7,34 +7,32 @@
     <!-- ============ 规则列表 ============ -->
     <section class="card">
       <div class="head">
-        <h3>分类规则（自动归类引擎）</h3>
+        <h3>{{ t("rules.title") }}</h3>
         <div class="head-actions">
-          <button class="primary" @click="openCreate">＋ 新增规则</button>
-          <button @click="doReclassify">按规则重算历史</button>
+          <button class="primary" @click="openCreate">{{ t("rules.add") }}</button>
+          <button @click="doReclassify">{{ t("rules.reclassify") }}</button>
         </div>
       </div>
       <p class="hint">
-        采集到的应用会按「字段 + 匹配方式 + 匹配值」自动归入分类，无需导出后人工整理。
-        优先级大的规则先匹配；窗口标题规则需 Windows 默认可取 / macOS 授予「屏幕录制」权限。
-        v0.3.1 起，新增软件会自动加入清单（默认归入「其他」），可在弹窗里调整。
+        {{ t("rules.hint") }}
       </p>
 
       <table class="rule-table">
         <thead>
           <tr>
-            <th>字段</th>
-            <th>匹配方式</th>
-            <th>匹配值</th>
-            <th>归入分类</th>
-            <th>优先级</th>
-            <th>启用</th>
-            <th>操作</th>
+            <th>{{ t("rules.colField") }}</th>
+            <th>{{ t("rules.colMatch") }}</th>
+            <th>{{ t("rules.colPattern") }}</th>
+            <th>{{ t("rules.colCategory") }}</th>
+            <th>{{ t("rules.colPriority") }}</th>
+            <th>{{ t("rules.colEnabled") }}</th>
+            <th>{{ t("rules.colOps") }}</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="r in rules" :key="r.id">
-            <td>{{ fieldLabel(r.field) }}</td>
-            <td>{{ matchLabel(r.match_type) }}</td>
+            <td>{{ t("rules.field." + r.field) }}</td>
+            <td>{{ t("rules.match." + r.match_type) }}</td>
             <td class="pattern">{{ r.pattern }}</td>
             <td>
               <span class="cat-tag" :style="{ background: catColor(r.category_id) }">
@@ -42,14 +40,14 @@
               </span>
             </td>
             <td>{{ r.priority }}</td>
-            <td>{{ r.enabled ? "是" : "否" }}</td>
+            <td>{{ r.enabled ? t("rules.yes") : t("rules.no") }}</td>
             <td class="ops">
-              <button @click="openEdit(r)">编辑</button>
-              <button class="danger" @click="confirmRemove(r.id, r.pattern)">删除</button>
+              <button @click="openEdit(r)">{{ t("rules.edit") }}</button>
+              <button class="danger" @click="confirmRemove(r.id, r.pattern)">{{ t("rules.remove") }}</button>
             </td>
           </tr>
           <tr v-if="rules.length === 0">
-            <td colspan="7" class="empty">暂无规则</td>
+            <td colspan="7" class="empty">{{ t("rules.empty") }}</td>
           </tr>
         </tbody>
       </table>
@@ -59,49 +57,49 @@
     <Modal
       v-model="formOpen"
       :type="'info'"
-      :title="editingId === null ? '新增规则' : '编辑规则 #' + editingId"
-      :confirm-text="editingId === null ? '新增' : '保存'"
-      cancel-text="取消"
+      :title="editingId === null ? t('rules.createTitle') : t('rules.editTitle', { id: editingId })"
+      :confirm-text="editingId === null ? t('rules.addBtn') : t('rules.saveBtn')"
+      :cancel-text="t('common.cancel')"
       @confirm="submit"
       width="560px"
     >
       <div class="form-grid">
         <label>
-          字段
+          {{ t("rules.lblField") }}
           <select v-model="form.field">
-            <option value="process_name">进程名</option>
-            <option value="window_title">窗口标题</option>
-            <option value="exe_path">可执行路径</option>
-            <option value="bundle_id">包名 (Bundle ID)</option>
-            <option value="name">展示名</option>
+            <option value="process_name">{{ t("rules.field.process_name") }}</option>
+            <option value="window_title">{{ t("rules.field.window_title") }}</option>
+            <option value="exe_path">{{ t("rules.field.exe_path") }}</option>
+            <option value="bundle_id">{{ t("rules.field.bundle_id") }}</option>
+            <option value="name">{{ t("rules.field.name") }}</option>
           </select>
         </label>
         <label>
-          匹配方式
+          {{ t("rules.lblMatch") }}
           <select v-model="form.match_type">
-            <option value="contains">包含</option>
-            <option value="equals">相等</option>
-            <option value="prefix">前缀</option>
-            <option value="suffix">后缀</option>
-            <option value="regex">正则</option>
+            <option value="contains">{{ t("rules.match.contains") }}</option>
+            <option value="equals">{{ t("rules.match.equals") }}</option>
+            <option value="prefix">{{ t("rules.match.prefix") }}</option>
+            <option value="suffix">{{ t("rules.match.suffix") }}</option>
+            <option value="regex">{{ t("rules.match.regex") }}</option>
           </select>
         </label>
         <label class="grow">
-          匹配值
-          <input v-model="form.pattern" placeholder="如 wechat / netflix（忽略大小写）" />
+          {{ t("rules.lblPattern") }}
+          <input v-model="form.pattern" :placeholder="t('rules.patternPh')" />
         </label>
         <label>
-          归入分类
+          {{ t("rules.lblCategory") }}
           <select v-model="form.category_id">
-            <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+            <option v-for="c in categories" :key="c.id" :value="c.id">{{ catName(c.id) }}</option>
           </select>
         </label>
         <label>
-          优先级
+          {{ t("rules.lblPriority") }}
           <input type="number" v-model.number="form.priority" />
         </label>
         <label class="check">
-          <input type="checkbox" v-model="form.enabled" /> 启用
+          <input type="checkbox" v-model="form.enabled" /> {{ t("rules.lblEnabled") }}
         </label>
       </div>
     </Modal>
@@ -112,8 +110,8 @@
       :type="alertType"
       :title="alertTitle"
       :message="alertMsg"
-      :confirm-text="'确定'"
-      :cancel-text="alertType === 'info' ? '' : '取消'"
+      :confirm-text="t('common.confirm')"
+      :cancel-text="alertType === 'info' ? '' : t('common.cancel')"
       width="380px"
       @confirm="onAlertConfirm"
     />
@@ -129,9 +127,13 @@
 // 所有代码均带中文注释，符合项目「新增界面必须加注释」的规范。
 
 import { ref, onMounted } from "vue";
+import { useI18n } from "vue-i18n";
 import Modal from "../components/Modal.vue";
 import { tracker } from "../api/tracker";
+import { categoryName } from "../i18n/categories";
 import type { CategoryOut, RuleOut } from "../types";
+
+const { t } = useI18n();
 
 // 规则列表与分类字典
 const rules = ref<RuleOut[]>([]);
@@ -177,33 +179,9 @@ async function loadAll() {
   categories.value = await tracker.categories();
 }
 
-// 字段中文名
-function fieldLabel(f: string): string {
-  return (
-    {
-      process_name: "进程名",
-      window_title: "窗口标题",
-      exe_path: "可执行路径",
-      bundle_id: "包名",
-      name: "展示名",
-    }[f] || f
-  );
-}
-// 匹配方式中文名
-function matchLabel(m: string): string {
-  return (
-    {
-      contains: "包含",
-      equals: "相等",
-      prefix: "前缀",
-      suffix: "后缀",
-      regex: "正则",
-    }[m] || m
-  );
-}
-// 分类名（按 id 查字典；查不到显示 id）
+// 分类名（按 id 经 i18n 取本地化显示名；未知 id 回退到 id）
 function catName(id: string): string {
-  return categories.value.find((c) => c.id === id)?.name || id;
+  return categoryName(id);
 }
 // 分类颜色（用于标签背景）
 function catColor(id: string): string {
@@ -214,7 +192,7 @@ function catColor(id: string): string {
 async function submit() {
   const f = form.value;
   if (!f.pattern.trim()) {
-    showAlert("warn", "校验失败", "匹配值不能为空");
+    showAlert("warn", t("rules.validateFail"), t("rules.patternEmpty"));
     return;
   }
   try {
@@ -226,7 +204,7 @@ async function submit() {
         categoryId: f.category_id,
         priority: f.priority,
       });
-      showAlert("info", "已新增", `规则「${f.pattern}」已新增`);
+      showAlert("info", t("rules.added"), t("rules.addedMsg", { pattern: f.pattern }));
     } else {
       await tracker.updateRule({
         id: editingId.value,
@@ -237,14 +215,14 @@ async function submit() {
         priority: f.priority,
         enabled: f.enabled,
       });
-      showAlert("info", "已更新", `规则 #${editingId.value} 已更新`);
+      showAlert("info", t("rules.updated"), t("rules.updatedMsg", { id: editingId.value }));
     }
     await loadAll();
     resetForm();
     formOpen.value = false;
   } catch (e: any) {
     console.error("[Rules] submit failed:", e);
-    showAlert("warn", "操作失败", `操作失败：${e?.message || e}`);
+    showAlert("warn", t("rules.opFailed"), t("rules.opFailedMsg", { err: e?.message || e }));
   }
 }
 
@@ -284,16 +262,16 @@ function resetForm() {
 function confirmRemove(id: number, pattern: string) {
   showAlert(
     "confirm",
-    "删除规则",
-    `确定删除规则「${pattern}」吗？此操作不可恢复。`,
+    t("rules.removeTitle"),
+    t("rules.removeMsg", { pattern }),
     async () => {
       try {
         await tracker.deleteRule(id);
-        showAlert("info", "已删除", `规则「${pattern}」已删除`);
+        showAlert("info", t("rules.removed"), t("rules.removedMsg", { pattern }));
         await loadAll();
       } catch (e: any) {
         console.error("[Rules] deleteRule failed:", e);
-        showAlert("warn", "删除失败", `删除失败：${e?.message || e}`);
+        showAlert("warn", t("rules.removeFailed"), t("rules.removeFailedMsg", { err: e?.message || e }));
       }
     }
   );
@@ -303,11 +281,11 @@ function confirmRemove(id: number, pattern: string) {
 async function doReclassify() {
   try {
     const n = await tracker.reclassify();
-    showAlert("info", "重算完成", `已更新 ${n} 个应用的分类`);
+    showAlert("info", t("rules.reclassifyDone"), t("rules.reclassifyMsg", { n }));
     await loadAll();
   } catch (e: any) {
     console.error("[Rules] reclassify failed:", e);
-    showAlert("warn", "重算失败", `重算失败：${e?.message || e}`);
+    showAlert("warn", t("rules.reclassifyFailed"), t("rules.reclassifyFailedMsg", { err: e?.message || e }));
   }
 }
 

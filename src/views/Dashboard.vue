@@ -3,10 +3,10 @@
   <div class="dashboard">
     <!-- 顶部标签页：统计概览 / 趋势对比 / 分类规则 / 设置 -->
     <div class="tabs">
-      <button :class="{ active: tab === 'stats' }" @click="tab = 'stats'">统计概览</button>
-      <button :class="{ active: tab === 'trends' }" @click="tab = 'trends'">趋势对比</button>
-      <button :class="{ active: tab === 'rules' }" @click="tab = 'rules'">分类规则</button>
-      <button :class="{ active: tab === 'settings' }" @click="tab = 'settings'">设置</button>
+      <button :class="{ active: tab === 'stats' }" @click="tab = 'stats'">{{ t("nav.stats") }}</button>
+      <button :class="{ active: tab === 'trends' }" @click="tab = 'trends'">{{ t("nav.trends") }}</button>
+      <button :class="{ active: tab === 'rules' }" @click="tab = 'rules'">{{ t("nav.rules") }}</button>
+      <button :class="{ active: tab === 'settings' }" @click="tab = 'settings'">{{ t("nav.settings") }}</button>
     </div>
 
     <!-- 标签页一：统计概览 -->
@@ -14,10 +14,10 @@
       <div class="toolbar">
         <!-- 时间范围：今天 / 近 7/14/30 天 -->
         <div class="range">
-          <button :class="{ active: range === 0 }" @click="selectToday">今天</button>
-          <button :class="{ active: range === 7 }" @click="range = 7">近7天</button>
-          <button :class="{ active: range === 14 }" @click="range = 14">近14天</button>
-          <button :class="{ active: range === 30 }" @click="range = 30">近30天</button>
+          <button :class="{ active: range === 0 }" @click="selectToday">{{ t("range.today") }}</button>
+          <button :class="{ active: range === 7 }" @click="range = 7">{{ t("range.nDays", { range: 7 }) }}</button>
+          <button :class="{ active: range === 14 }" @click="range = 14">{{ t("range.nDays", { range: 14 }) }}</button>
+          <button :class="{ active: range === 30 }" @click="range = 30">{{ t("range.nDays", { range: 30 }) }}</button>
         </div>
         <!-- 设备切换（多设备合并） -->
         <DeviceSwitcher v-model="device" :devices="devices" />
@@ -30,10 +30,10 @@
 
       <!-- 所选日期（点击上方柱状图的某一天切换；默认今天） -->
       <div class="seldate">
-        <span>查看日期：<b>{{ selectedDate }}</b></span>
-        <button class="pick-btn" @click="showPicker = true" title="选择指定日期">📅 选择</button>
-        <button v-if="selectedDate !== todayStr()" class="today" @click="backToToday">回到今天</button>
-        <span class="tip">点击上方柱状图的某一天，可查看当天详情</span>
+        <span>{{ t("dashboard.viewDate") }}：<b>{{ selectedDate }}</b></span>
+        <button class="pick-btn" @click="showPicker = true" :title="t('dashboard.select')">{{ t("dashboard.select") }}</button>
+        <button v-if="selectedDate !== todayStr()" class="today" @click="backToToday">{{ t("dashboard.backToToday") }}</button>
+        <span class="tip">{{ t("dashboard.clickBarTip") }}</span>
       </div>
 
       <OverviewCard :overview="overview" :range="range" />
@@ -67,6 +67,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import OverviewCard from "../components/OverviewCard.vue";
 import DailyBarChart from "../components/DailyBarChart.vue";
 import HourlyStackedChart from "../components/HourlyStackedChart.vue";
@@ -87,6 +88,8 @@ import type {
   HourlyBucketOut,
   OverviewOut,
 } from "../types";
+
+const { t } = useI18n();
 
 // 当前激活的标签页
 const tab = ref<"stats" | "trends" | "rules" | "settings">("stats");

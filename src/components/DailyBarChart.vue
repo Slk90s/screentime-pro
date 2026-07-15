@@ -2,13 +2,13 @@
   <!-- iOS 风格「按天」堆叠柱状图：每天一根柱，按分类着色堆叠；附周几标签与日均参考线 -->
   <section class="card">
     <div class="head">
-      <h3>近 {{ summaries.length }} 天每日使用时长</h3>
-      <span class="avg">日均 {{ formatDuration(avgSeconds) }}</span>
+      <h3>{{ t("dailyBar.title", { n: summaries.length }) }}</h3>
+      <span class="avg">{{ t("dailyBar.avg", { dur: formatDuration(avgSeconds) }) }}</span>
     </div>
     <div class="wrap"><canvas ref="cv"></canvas></div>
     <div class="legend" v-if="categories.length">
       <span v-for="c in categories" :key="c.id" class="lg">
-        <i :style="{ background: c.color }"></i>{{ c.name }}
+        <i :style="{ background: c.color }"></i>{{ categoryName(c.id) }}
       </span>
     </div>
   </section>
@@ -16,9 +16,14 @@
 
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import Chart from "chart.js/auto";
+import { i18n } from "../i18n";
+import { categoryName } from "../i18n/categories";
 import type { CategoryOut, DailySummaryOut, DayCategoryOut } from "../types";
 import { formatDuration, formatHours } from "../utils/format";
+
+const { t } = useI18n();
 
 const props = defineProps<{
   // 每天的总时长与日期（用于标签、日均线、排序）
@@ -35,14 +40,19 @@ const emit = defineEmits<{ select: [date: string] }>();
 const cv = ref<HTMLCanvasElement>();
 let chart: Chart | null = null;
 
-const WEEK = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+// 周几短名（按当前语言本地化；2023-01-01 为周日）
+function weekdayShort(i: number): string {
+  const localeTag = i18n.global.locale.value === "en-US" ? "en-US" : "zh-CN";
+  const fmt = new Intl.DateTimeFormat(localeTag, { weekday: "short" });
+  return fmt.format(new Date(2023, 0, 1 + i));
+}
 
 // 由 YYYY-MM-DD 求周几 + M/D 短标签
 function dayLabel(date: string): string {
   const d = new Date(date + "T00:00:00");
   if (isNaN(d.getTime())) return date.slice(5);
   const md = `${d.getMonth() + 1}/${d.getDate()}`;
-  return `${WEEK[d.getDay()]}\n${md}`;
+  return `${weekdayShort(d.getDay())}\n${md}`;
 }
 
 // 计算日均（秒）
@@ -75,7 +85,7 @@ function render() {
       }));
 
   const datasets = orderedCats.map((c) => ({
-    label: c.name,
+    label: categoryName(c.id),
     // 堆叠数据：该分类在每天的总秒数（缺失为 0）
     data: dates.map((d) => {
       const m = byDate.get(d);
@@ -119,10 +129,11 @@ function render() {
               const i = items[0].dataIndex;
               return dates[i];
             },
-            label: (c) => `${c.dataset.label}：${formatHours((c.parsed.y ?? 0) * 3600)} 小时`,
+            label: (c) =>
+              `${c.dataset.label}：${formatHours((c.parsed.y ?? 0) * 3600)} ${t("dailyBar.hourUnit")}`,
             footer: (items) => {
               const tot = items.reduce((a, b) => a + (b.parsed.y ?? 0), 0);
-              return `合计：${formatHours(tot * 3600)} 小时`;
+              return `${t("dailyBar.total")}${formatHours(tot * 3600)} ${t("dailyBar.hourUnit")}`;
             },
           },
         },
@@ -136,7 +147,7 @@ function render() {
         y: {
           stacked: true,
           beginAtZero: true,
-          ticks: { callback: (v) => `${v}h` },
+          ticks: { callback: (v) => `${v}${t("duration.hourShort")}` },
           grid: { color: "rgba(0,0,0,0.05)" },
         },
       },
@@ -148,6 +159,11 @@ onMounted(render);
 watch(() => [props.summaries, props.byCategory, props.categories], render, {
   deep: true,
 });
+// 语言切换时重绘（Chart.js 不响应响应式 locale，且 x 轴周几需重算）
+watch(
+  () => i18n.global.locale.value,
+  render,
+);
 onBeforeUnmount(() => chart?.destroy());
 </script>
 

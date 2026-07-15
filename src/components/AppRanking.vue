@@ -1,7 +1,7 @@
 <template>
   <!-- App 使用时长排行榜（按当天时长降序） -->
   <section class="card">
-    <h3>App 使用时长排行</h3>
+    <h3>{{ t("ranking.title") }}</h3>
     <ul class="list" v-if="ranking.length">
       <li v-for="(r, i) in ranking" :key="r.app_id">
         <span class="idx">{{ i + 1 }}</span>
@@ -18,15 +18,18 @@
         <span class="dur">{{ formatDuration(r.total_seconds) }}</span>
       </li>
     </ul>
-    <p class="empty" v-else>{{ isRange ? "该时间范围内暂无使用记录" : "当天暂无使用记录" }}</p>
+    <p class="empty" v-else>{{ isRange ? t("ranking.emptyRange") : t("ranking.emptyDay") }}</p>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { formatDuration } from "../utils/format";
+import { categoryName } from "../i18n/categories";
 import type { AppRankingOut, CategoryOut } from "../types";
 
+const { t } = useI18n();
 const props = defineProps<{ ranking: AppRankingOut[]; categories: CategoryOut[]; range?: number }>();
 const isRange = computed(() => (props.range ?? 0) > 0);
 
@@ -34,7 +37,7 @@ function catColor(id: string): string {
   return props.categories.find((c) => c.id === id)?.color || "#888780";
 }
 function catName(id: string): string {
-  return props.categories.find((c) => c.id === id)?.name || "其他";
+  return categoryName(id);
 }
 </script>
 

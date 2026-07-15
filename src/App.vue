@@ -10,32 +10,32 @@
       <!-- 实时指示：显示「正在记录：XXX」，用于验证确实在采集其他软件 -->
       <div class="live">
         <span class="dot" :class="{ on: tracking }"></span>
-        <span class="live-label">{{ tracking ? "记录中" : "已暂停" }}</span>
+        <span class="live-label">{{ tracking ? t("app.recording") : t("app.paused") }}</span>
         <span class="live-name">{{ live.name || "—" }}</span>
         <!-- ⚠️ Tauri 2 自动把 Rust 字段转 camelCase，所以是 windowTitle/sessionSeconds/idleSeconds，
              不是 snake_case（v0.4.0 之前用 snake_case 导致 v-if 全为假、UI 静默失效） -->
         <span class="live-title" v-if="live.windowTitle">· {{ live.windowTitle }}</span>
-        <span class="live-session" v-if="tracking && (live.sessionSeconds ?? 0) > 0">已记录 {{ fmtDur(live.sessionSeconds ?? 0) }}</span>
-        <span class="live-idle" v-if="tracking">空闲 {{ live.idleSeconds ?? 0 }}s</span>
+        <span class="live-session" v-if="tracking && (live.sessionSeconds ?? 0) > 0">{{ t("app.recorded", { dur: fmtDur(live.sessionSeconds ?? 0) }) }}</span>
+        <span class="live-idle" v-if="tracking">{{ t("app.idle", { n: live.idleSeconds ?? 0 }) }}</span>
       </div>
     </header>
 
     <!-- WebView2 缺失横幅：Windows 启动时若检测到未安装 WebView2 Runtime，提示用户去下载 -->
     <div v-if="showWebview2Warning && !webview2Dismissed" class="perm-banner perm-banner--warn">
-      <span>⚠️ 未检测到 WebView2 运行时，本程序依赖它显示界面。请先安装 Microsoft Edge WebView2 Runtime 后再启动。</span>
+      <span>{{ t("app.webview2Warning") }}</span>
       <div class="perm-actions">
-        <button @click="openWebview2Download">去下载</button>
-        <button class="perm-dismiss" @click="webview2Dismissed = true" title="暂时关闭提示">×</button>
+        <button @click="openWebview2Download">{{ t("app.webview2Download") }}</button>
+        <button class="perm-dismiss" @click="webview2Dismissed = true" :title="t('app.dismissTip')">×</button>
       </div>
     </div>
 
     <!-- 权限引导横幅：macOS 未授予辅助功能权限时提示（空闲检测需要） -->
     <!-- v-show 而非 v-if：关闭后仍保留 DOM，重新检测到未授权时可再次显示 -->
     <div v-if="showPermWarning && !permDismissed" class="perm-banner">
-      <span>⚠️ 未授予「辅助功能」权限，空闲检测与部分采集可能不准确。请到系统设置开启后重启本程序。</span>
+      <span>{{ t("app.permWarning") }}</span>
       <div class="perm-actions">
-        <button @click="openSettings">前往系统设置</button>
-        <button class="perm-dismiss" @click="permDismissed = true" title="暂时关闭提示">×</button>
+        <button @click="openSettings">{{ t("app.openSettings") }}</button>
+        <button class="perm-dismiss" @click="permDismissed = true" :title="t('app.dismissTip')">×</button>
       </div>
     </div>
 
@@ -55,10 +55,13 @@
 // 4. macOS 权限缺失时弹出引导横幅
 
 import { ref, onMounted, onBeforeUnmount, computed } from "vue";
+import { useI18n } from "vue-i18n";
 import Dashboard from "./views/Dashboard.vue";
 import { tracker } from "./api/tracker";
 import { formatDuration } from "./utils/format";
 import type { CurrentForegroundOut, PermissionStatus } from "./types";
+
+const { t } = useI18n();
 
 // 是否正在追踪
 const tracking = ref(false);

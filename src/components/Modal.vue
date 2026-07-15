@@ -29,7 +29,7 @@
     <div v-if="modelValue" class="modal-mask" @mousedown.self="onMaskClick">
       <div class="modal-container" :style="{ width }" role="dialog" aria-modal="true">
         <header class="modal-header" :class="type">
-          <h3>{{ title }}</h3>
+          <h3>{{ resolvedTitle }}</h3>
           <button class="modal-close" @click="onCancel" aria-label="关闭">×</button>
         </header>
         <div class="modal-body">
@@ -39,11 +39,11 @@
         <footer class="modal-footer">
           <slot name="footer">
             <template v-if="type === 'confirm' || type === 'warn'">
-              <button class="modal-btn cancel" @click="onCancel">{{ cancelText }}</button>
-              <button class="modal-btn primary" @click="onConfirm">{{ confirmText }}</button>
+              <button class="modal-btn cancel" @click="onCancel">{{ resolvedCancel }}</button>
+              <button class="modal-btn primary" @click="onConfirm">{{ resolvedConfirm }}</button>
             </template>
             <template v-else>
-              <button class="modal-btn primary" @click="onConfirm">{{ confirmText }}</button>
+              <button class="modal-btn primary" @click="onConfirm">{{ resolvedConfirm }}</button>
             </template>
           </slot>
         </footer>
@@ -53,7 +53,10 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, watch } from "vue";
+import { onMounted, onUnmounted, watch, computed } from "vue";
+import { useI18n } from "vue-i18n";
+
+const { t } = useI18n();
 
 const props = withDefaults(
   defineProps<{
@@ -68,14 +71,16 @@ const props = withDefaults(
   }>(),
   {
     type: "info",
-    title: "提示",
     message: "",
-    confirmText: "确定",
-    cancelText: "取消",
     width: "480px",
     closeOnMask: true,
   }
 );
+
+// 文案默认值走 i18n；调用方显式传入时优先
+const resolvedTitle = computed(() => props.title ?? t("modal.titleDefault"));
+const resolvedConfirm = computed(() => props.confirmText ?? t("common.confirm"));
+const resolvedCancel = computed(() => props.cancelText ?? t("common.cancel"));
 
 const emit = defineEmits<{
   (e: "update:modelValue", val: boolean): void;

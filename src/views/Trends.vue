@@ -4,8 +4,8 @@
     <div class="toolbar">
       <!-- 周期切换：本周 / 本月 -->
       <div class="seg">
-        <button :class="{ active: period === 'week' }" @click="period = 'week'">本周</button>
-        <button :class="{ active: period === 'month' }" @click="period = 'month'">本月</button>
+        <button :class="{ active: period === 'week' }" @click="period = 'week'">{{ t("trends.week") }}</button>
+        <button :class="{ active: period === 'month' }" @click="period = 'month'">{{ t("trends.month") }}</button>
       </div>
       <!-- 设备切换（多设备合并） -->
       <DeviceSwitcher v-model="localDevice" :devices="devices" />
@@ -14,20 +14,20 @@
     <!-- 概览数字卡 -->
     <div class="cards">
       <div class="stat">
-        <div class="label">{{ data.current.label }} 总时长</div>
+        <div class="label">{{ t("trends.totalDuration", { label: periodLabel("current") }) }}</div>
         <div class="val">{{ formatDuration(data.current.total_seconds) }}</div>
       </div>
       <div class="stat">
-        <div class="label">环比（{{ data.prev.label }}）</div>
+        <div class="label">{{ t("trends.prevSuffix", { label: periodLabel("prev") }) }}</div>
         <div class="val" :class="deltaClass">{{ deltaText }}</div>
-        <div class="sub">上期 {{ formatDuration(data.prev.total_seconds) }}</div>
+        <div class="sub">{{ t("trends.prevTotal", { dur: formatDuration(data.prev.total_seconds) }) }}</div>
       </div>
       <div class="stat" v-if="data.yoy">
-        <div class="label">同比（去年同期）</div>
-        <div class="val up">去年 {{ formatDuration(data.yoy!.total_seconds) }}</div>
+        <div class="label">{{ t("trends.yoyLabel") }}</div>
+        <div class="val up">{{ t("trends.lastYear", { dur: formatDuration(data.yoy!.total_seconds) }) }}</div>
       </div>
       <div class="stat">
-        <div class="label">使用应用数</div>
+        <div class="label">{{ t("trends.appCount") }}</div>
         <div class="val">{{ data.current.app_count }}</div>
       </div>
     </div>
@@ -35,19 +35,19 @@
     <div class="row">
       <!-- 时长对比柱状图 -->
       <section class="card">
-        <h3>时长对比（小时）</h3>
+        <h3>{{ t("trends.cmpTitle") }}</h3>
         <div class="wrap"><canvas ref="cmpCv"></canvas></div>
       </section>
       <!-- 本期分类占比环形图 -->
       <section class="card">
-        <h3>{{ data.current.label }} 分类占比</h3>
+        <h3>{{ t("trends.catTitle", { label: periodLabel("current") }) }}</h3>
         <div class="wrap"><canvas ref="catCv"></canvas></div>
       </section>
     </div>
 
     <!-- 本期 Top 应用 -->
     <section class="card">
-      <h3>{{ data.current.label }} 使用时长 Top 应用</h3>
+      <h3>{{ t("trends.topTitle", { label: periodLabel("current") }) }}</h3>
       <ul class="apps">
         <li v-for="a in data.current.top_apps" :key="a.app_name">
           <span class="dot" :style="{ background: colorOf(a.category_id) }"></span>
@@ -55,7 +55,7 @@
           <span class="cat">{{ nameOf(a.category_id) }}</span>
           <span class="dur">{{ formatDuration(a.total_seconds) }}</span>
         </li>
-        <li v-if="data.current.top_apps.length === 0" class="empty">该周期暂无数据</li>
+        <li v-if="data.current.top_apps.length === 0" class="empty">{{ t("trends.empty") }}</li>
       </ul>
     </section>
   </div>
@@ -63,11 +63,16 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, watch, computed } from "vue";
+import { useI18n } from "vue-i18n";
 import Chart from "chart.js/auto";
+import { i18n } from "../i18n";
+import { categoryName } from "../i18n/categories";
 import DeviceSwitcher from "../components/DeviceSwitcher.vue";
 import { tracker } from "../api/tracker";
 import { formatDuration } from "../utils/format";
 import type { CategoryOut, DeviceInfo, PeriodStat, TrendsOut } from "../types";
+
+const { t } = useI18n();
 
 // 父组件传入：当前设备（"" = 全部）与设备列表
 const props = defineProps<{ device: string; devices: DeviceInfo[] }>();
@@ -82,17 +87,26 @@ watch(
 const period = ref<"week" | "month">("week");
 const categories = ref<CategoryOut[]>([]);
 
-// 默认空数据，避免首屏空指针
-function emptyStat(label: string): PeriodStat {
-  return { label, total_seconds: 0, app_count: 0, by_category: [], top_apps: [] };
+// 默认空数据，避免首屏空指针（label 由前端按语言生成，不依赖后端中文）
+function emptyStat(): PeriodStat {
+  return { label: "", total_seconds: 0, app_count: 0, by_category: [], top_apps: [] };
 }
 const data = ref<TrendsOut>({
   period: "week",
-  current: emptyStat("本周"),
-  prev: emptyStat("上周"),
+  current: emptyStat(),
+  prev: emptyStat(),
   yoy: null,
   delta_total_pct: 0,
 });
+
+// 按当前周期 + 语言生成「本期/上期」显示名（替代后端返回的中文 label）
+function periodLabel(role: "current" | "prev"): string {
+  const map =
+    period.value === "week"
+      ? { current: t("trends.week"), prev: t("trends.lastWeek") }
+      : { current: t("trends.month"), prev: t("trends.lastMonth") };
+  return map[role];
+}
 
 const cmpCv = ref<HTMLCanvasElement>();
 const catCv = ref<HTMLCanvasElement>();
@@ -104,7 +118,7 @@ function colorOf(catId: string): string {
   return categories.value.find((c) => c.id === catId)?.color || "#888780";
 }
 function nameOf(catId: string): string {
-  return categories.value.find((c) => c.id === catId)?.name || catId;
+  return categoryName(catId);
 }
 
 // 环比百分比展示
@@ -125,14 +139,14 @@ function renderCharts() {
   if (!cmpCv.value || !catCv.value) return;
   // 1) 时长对比：本期 / 上期 / 去年同期
   cmpChart?.destroy();
-  const labels = [data.value.current.label, data.value.prev.label];
+  const labels = [periodLabel("current"), periodLabel("prev")];
   const values = [
     +(data.value.current.total_seconds / 3600).toFixed(1),
     +(data.value.prev.total_seconds / 3600).toFixed(1),
   ];
   const colors = ["#FF7E27", "#9aa0a6"];
   if (data.value.yoy) {
-    labels.push(data.value.yoy.label);
+    labels.push(t("trends.yoy"));
     values.push(+(data.value.yoy.total_seconds / 3600).toFixed(1));
     colors.push("#378ADD");
   }
@@ -140,13 +154,16 @@ function renderCharts() {
     type: "bar",
     data: {
       labels,
-      datasets: [{ label: "小时", data: values, backgroundColor: colors, borderRadius: 6, maxBarThickness: 48 }],
+      datasets: [{ label: t("dailyBar.hourUnit"), data: values, backgroundColor: colors, borderRadius: 6, maxBarThickness: 48 }],
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => `${c.parsed.y} 小时` } } },
-      scales: { y: { beginAtZero: true, ticks: { callback: (v) => `${v}h` } } },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (c) => `${c.parsed.y} ${t("dailyBar.hourUnit")}` } },
+      },
+      scales: { y: { beginAtZero: true, ticks: { callback: (v) => `${v}${t("duration.hourShort")}` } } },
     },
   });
 
@@ -163,7 +180,7 @@ function renderCharts() {
       maintainAspectRatio: false,
       plugins: {
         legend: { position: "right", labels: { boxWidth: 12, font: { size: 12 } } },
-        tooltip: { callbacks: { label: (c) => `${c.label}: ${c.parsed} 小时` } },
+        tooltip: { callbacks: { label: (c) => `${c.label}: ${c.parsed} ${t("dailyBar.hourUnit")}` } },
       },
     },
   });
@@ -173,6 +190,11 @@ onMounted(load);
 // 周期或设备变化时重新拉取
 watch(period, load);
 watch(localDevice, load);
+// 语言切换时重绘图表（Chart.js 不响应响应式 locale）
+watch(
+  () => i18n.global.locale.value,
+  () => renderCharts(),
+);
 onBeforeUnmount(() => {
   cmpChart?.destroy();
   catChart?.destroy();

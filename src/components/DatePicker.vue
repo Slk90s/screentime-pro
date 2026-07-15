@@ -5,7 +5,7 @@
       <!-- 头部：上月 / 年月 / 下月 -->
       <header class="dp-header">
         <button @click="prevMonth" class="dp-nav">&lt;</button>
-        <span class="dp-title">{{ year }}年{{ month + 1 }}月</span>
+        <span class="dp-title">{{ dpTitle }}</span>
         <button @click="nextMonth" class="dp-nav">&gt;</button>
       </header>
 
@@ -34,7 +34,7 @@
 
       <!-- 快捷操作：今天 -->
       <footer class="dp-footer">
-        <button @click="$emit('select', todayStr())">今天</button>
+        <button @click="$emit('select', todayStr())">{{ t("datePicker.today") }}</button>
       </footer>
     </div>
   </div>
@@ -52,6 +52,10 @@
  */
 
 import { ref, computed } from "vue";
+import { useI18n } from "vue-i18n";
+import { i18n } from "../i18n";
+
+const { t } = useI18n();
 
 const props = defineProps<{
   visible: boolean;
@@ -63,14 +67,24 @@ defineEmits<{
   close: [];
 }>();
 
-const weekdays = ["日", "一", "二", "三", "四", "五", "六"];
+// 星期标题（按当前语言本地化；2023-01-01 为周日）
+const weekdays = computed(() => {
+  const localeTag = i18n.global.locale.value === "en-US" ? "en-US" : "zh-CN";
+  const fmt = new Intl.DateTimeFormat(localeTag, { weekday: "short" });
+  return Array.from({ length: 7 }, (_, i) => fmt.format(new Date(2023, 0, 1 + i)));
+});
 
 // 当前显示的年/月（可切换）
 const viewYear = ref(new Date().getFullYear());
 const viewMonth = ref(new Date().getMonth()); // 0-indexed
 
-const year = computed(() => viewYear.value);
-const month = computed(() => viewMonth.value);
+// 标题（年 + 月，按当前语言本地化）
+const dpTitle = computed(() => {
+  const localeTag = i18n.global.locale.value === "en-US" ? "en-US" : "zh-CN";
+  return new Intl.DateTimeFormat(localeTag, { year: "numeric", month: "long" }).format(
+    new Date(viewYear.value, viewMonth.value, 1),
+  );
+});
 
 // 今天字符串（YYYY-MM-DD）
 function todayStr(): string {

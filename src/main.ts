@@ -2,6 +2,7 @@
 import { createApp } from "vue";
 import App from "./App.vue";
 import { installGlobalErrorHandlers, log } from "@/lib/logger";
+import { i18n } from "./i18n";
 import "./style.css";
 
 // v0.4.2 日志：捕获全局未处理错误，写入与 Rust 同一日志文件
@@ -12,4 +13,4 @@ log.info("前端启动", { version: "0.4.2" });
 // 在 Windows(WebView2)/macOS/Linux 下统一屏蔽，避免误操作与界面穿帮）
 document.addEventListener("contextmenu", (e) => e.preventDefault());
 
-createApp(App).mount("#app");
+createApp(App).use(i18n).mount("#app");

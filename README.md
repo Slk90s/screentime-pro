@@ -5,7 +5,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](https://github.com/)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-0.4.5-orange)](./release)
+[![Version](https://img.shields.io/badge/version-0.5.0-orange)](./release)
 
 ---
 
@@ -38,7 +38,8 @@
 
 | 版本 | 发布时间 | 状态 | 关键说明 |
 |------|----------|------|----------|
-| **v0.4.5** | 2026-07-14 | ⭐ **Latest · 推荐** | 统计概述时间范围联动：切换「今天/近7/14/30天」时「设备使用时间」与「App 使用时长排行」同步按范围聚合刷新（后端 overview/ranking 新增 days 参数，前端 loadDetails 传 range） |
+| **v0.5.0** | 2026-07-14 | ⭐ **Latest · 推荐** | 多语言国际化（i18n）：新增 zh-CN / en-US 双语切换，设置页下拉即时切换无需重载；前端自生成周期标签 / 分类名 / 时长格式化；图表随语言重渲染（零后端改动） |
+| v0.4.5 | 2026-07-14 | 旧版 | 统计概述时间范围联动：切换「今天/近7/14/30天」时「设备使用时间」与「App 使用时长排行」同步按范围聚合刷新（后端 overview/ranking 新增 days 参数，前端 loadDetails 传 range） |
 | v0.4.4 | 2026-07-11 | 旧版 | 修「跨天今天按钮」+ Linux CI 三端通过：Dashboard 今天按钮实时取系统日期 + linux.rs 完整适配 x11rb 0.13 GetPropertyReply 新 API |
 | v0.4.3 | 2026-07-10 | 旧版 | 修「default 幽灵设备」：迁移回填改用真实 device_id（取代字面量 'default'）+ schema 补 device 列 |
 | v0.4.2 | 2026-07-10 | 旧版 | 新增统一日志系统（4 处核心埋点 + Settings 一键导出 + 15MB 上限） |
@@ -57,22 +58,22 @@
 | Windows (x64) | `screentime-pro_{ver}_x86_64.exe` | 双击运行，需系统已装 **WebView2 运行时**（Win10/11 通常自带） |
 | Linux (x64) | `screentime-pro_{ver}_amd64.AppImage` / `.deb` | 由 CI 在 Linux 环境构建（详见下方「从源码构建」） |
 
-> 各平台最新安装包（macOS / Windows / Linux 三端）统一发布在 **[GitHub Releases](https://github.com/Slk90s/screentime-pro/releases)**（⭐ v0.4.5 Latest）。
-> 本地 `release/v0.4.5/` 仅作带版本号归档（不入库）；Linux 因本机构建环境限制需在 CI 中产出（见 `.github/workflows/build.yml`）。
+> 各平台最新安装包（macOS / Windows / Linux 三端）统一发布在 **[GitHub Releases](https://github.com/Slk90s/screentime-pro/releases)**（⭐ v0.5.0 Latest）。
+> 本地 `release/v0.5.0/` 仅作带版本号归档（不入库）；Linux 因本机构建环境限制需在 CI 中产出（见 `.github/workflows/build.yml`）。
 
 ---
 
 ## 🚀 快速开始
 
-> 💡 **下载入口**：所有平台的最新版本请从 **[GitHub Releases](https://github.com/Slk90s/screentime-pro/releases)** 下载（⭐ Latest 自动指向 v0.4.5）。
+> 💡 **下载入口**：所有平台的最新版本请从 **[GitHub Releases](https://github.com/Slk90s/screentime-pro/releases)** 下载（⭐ Latest 自动指向 v0.5.0）。
 
 ### macOS
-1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `ScreenTime Pro_0.4.5_aarch64.dmg`，打开并拖入「应用程序」。
+1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `ScreenTime Pro_0.5.0_aarch64.dmg`，打开并拖入「应用程序」。
 2. 首次运行：系统设置 › 隐私与安全性 › **辅助功能** 中授予本应用权限（空闲检测必需）。
 3. 程序默认开机自启、启动即开始追踪，菜单栏/托盘常驻。
 
 ### Windows
-1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `screentime-pro_0.4.5_x86_64.exe`（NSIS 安装包）。
+1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `screentime-pro_0.5.0_x86_64.exe`（NSIS 安装包）。
 2. **首次安装**：若系统未装 WebView2 运行时，安装器会**自动下载并安装**（需联网，几秒到几分钟）。Win10 1809+ / Win11 通常已内置，无需此步。
 3. 托盘右键「退出」可彻底关闭；「设置」页可开关开机自启。
 
@@ -221,7 +222,7 @@ screentime-pro/
 ├── .github/workflows/
 │   └── build.yml            # 三端自动构建（macOS / Windows / Linux）
 ├── sql/                  # schema.sql / seed_categories.sql / seed_rules.sql
-├── release/v0.4.5/       # 已构建的带版本号安装包（不入库，走 GitHub Releases）
+├── release/v0.5.0/       # 已构建的带版本号安装包（不入库，走 GitHub Releases）
 ├── README.md / LICENSE / .gitignore
 └── package.json / vite.config.ts / tsconfig*.json
 ```
@@ -257,7 +258,7 @@ screentime-pro/
 
 | 当前版本 | 历史摘要 |
 |----------|----------|
-| ⭐ **v0.4.5** (Latest) | 统计概述时间范围联动：切换「今天/近7/14/30天」时「设备使用时间」与「App 使用时长排行」同步按范围聚合刷新 |
+| ⭐ **v0.5.0** (Latest) | 多语言国际化（i18n）：新增 zh-CN / en-US 双语切换，设置页下拉即时切换无需重载；前端自生成周期标签 / 分类名 / 时长格式化；图表随语言重渲染（零后端改动） |
 | v0.4.4 | 修「跨天今天按钮」+ Linux x11rb 0.13 完整适配（CI 三端通过） |
 | v0.4.3 | 修「default 幽灵设备」：迁移回填改用真实 device_id + schema 补 device 列 |
 | v0.4.1 | 修采样循环死锁 + 修 macOS 权限检测 + 三端完整构建 |

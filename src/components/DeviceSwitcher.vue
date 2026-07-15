@@ -4,9 +4,9 @@
     <button
       :class="{ active: modelValue === '' }"
       @click="$emit('update:modelValue', '')"
-      title="合并所有设备的数据"
+      :title="t('device.allTooltip')"
     >
-      全部设备
+      {{ t("device.all") }}
     </button>
     <button
       v-for="d in devices"
@@ -21,7 +21,10 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from "vue-i18n";
 import type { DeviceInfo } from "../types";
+
+const { t } = useI18n();
 
 // modelValue 为本机设备 id；空字符串 "" 表示合并全部设备
 defineProps<{ modelValue: string; devices: DeviceInfo[] }>();
