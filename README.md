@@ -21,7 +21,7 @@
 - **多设备合并**：不同电脑的数据按「时间 + 应用 + 设备」去重后合并查看。
 - **系统托盘常驻**：关闭窗口不退出，后台继续采样；支持开机自启。
 - **数据导出 / 导入**：JSON 全量备份与多设备合并。
-- **桌宠（🧪 Beta 测试版功能）**：透明置顶、可拖拽的 3D 潮玩熊猫，随前台应用自动切换状态、点击有跳跃 / 压扁 / 抖动互动、随机气泡对话、眼神与嘴会动。⚠️ 该功能仍处于测试阶段、可能不稳定，可在「设置」页随时关闭。
+- **桌宠（🧪 Beta 测试版功能）**：透明置顶、可自由拖拽的 3D 潮玩熊猫——随当前前台应用自动切换表情状态，点击可触发跳跃 / 压扁 / 抖动互动，随机弹出气泡对话，并具备眼神漂移 + 眨眼、嘴部张合等微表情。⚠️ 该功能仍处于 Beta 测试阶段（可能不稳定），可在「设置」页随时开关。
 
 ---
 
@@ -39,7 +39,7 @@
 
 | 版本 | 发布时间 | 状态 | 关键说明 |
 |------|----------|------|----------|
-| **v0.6.2-beta.25** | 2026-07-28 | 🧪 **Beta（开发中，未发 Release）** | 桌宠熊猫「重切图 + 眼神/嘴动态化」：将烤死表情的单张 PNG 拆为 body/eyes/nose/mouth 四层对齐透明图（眼神漂移+眨眼、嘴 5 态张合、鼻缩放）；修 `PetWindow` 140×140 硬编码导致熊猫被压进小盒、四周留大白边；气泡改贴窗顶内侧更贴近熊猫。⚠️ 桌宠为测试版功能，可能不稳定，可在「设置」页关闭 |
+| **v0.6.2-beta.25** | 2026-07-28 | 🧪 **Beta（已发布）** | 桌宠熊猫「重切图 + 眼神/嘴动态化」：将烤死表情的单张 PNG 拆为 body/eyes/nose/mouth 四层对齐透明图（眼神漂移+眨眼、嘴 5 态张合、鼻缩放）；修 `PetWindow` 140×140 硬编码导致熊猫被压进小盒、四周留大白边；气泡改贴窗顶内侧更贴近熊猫。⚠️ 桌宠为测试版功能，可能不稳定，可在「设置」页关闭 |
 | **v0.6.2-beta.1** | 2026-07-24 | ⭐ **Latest · Beta** | 解耦皮肤系统 + 新增 Pop Mart 3D 潮玩桌宠：右键菜单"皮肤"切换 2D 部件合成（Panda-2D）和 Pop Mart 3D 卡（戴黄帽弹吉他熊猫，1282×2850 portrait），状态用 emoji 浮层表达；不变动任何原 v0.6.1-beta.1 组件，新皮肤按 `skins/<id>/` 即插即用，便于后续 Live2D / 待办小组件 / 番茄钟等扩展 |
 | v0.5.0 | 2026-07-14 | 旧版 | 多语言国际化（i18n）：新增 zh-CN / en-US 双语切换，设置页下拉即时切换无需重载；前端自生成周期标签 / 分类名 / 时长格式化；图表随语言重渲染（零后端改动） |
 | v0.4.5 | 2026-07-14 | 旧版 | 统计概述时间范围联动：切换「今天/近7/14/30天」时「设备使用时间」与「App 使用时长排行」同步按范围聚合刷新（后端 overview/ranking 新增 days 参数，前端 loadDetails 传 range） |
@@ -58,25 +58,25 @@
 | 平台 | 文件名格式 | 说明 |
 |------|-----------|------|
 | macOS (Apple Silicon) | `ScreenTime Pro_{ver}_aarch64.dmg` | 拖入「应用程序」即可，需授予「辅助功能」权限 |
-| Windows (x64) | `screentime-pro_{ver}_x86_64.exe` | 双击运行，需系统已装 **WebView2 运行时**（Win10/11 通常自带） |
+| Windows (x64) | `ScreenTime Pro_{ver}_x64-setup.exe` | 双击运行（NSIS 安装包），需系统已装 **WebView2 运行时**（Win10/11 通常自带） |
 | Linux (x64) | `screentime-pro_{ver}_amd64.AppImage` / `.deb` | 由 CI 在 Linux 环境构建（详见下方「从源码构建」） |
 
-> 各平台最新安装包（macOS / Windows / Linux 三端）统一发布在 **[GitHub Releases](https://github.com/Slk90s/screentime-pro/releases)**（⭐ v0.6.2-beta.1 Latest）。
-> 本地 `release/v0.6.2-beta.1/` 仅作带版本号归档（不入库）；Linux 因本机构建环境限制需在 CI 中产出（见 `.github/workflows/build.yml`）。
+> 各平台最新安装包（macOS / Windows / Linux 三端）统一发布在 **[GitHub Releases](https://github.com/Slk90s/screentime-pro/releases)**（⭐ v0.6.2-beta.25 Latest）。
+> 本地 `release/v0.6.2-beta.25/` 仅作带版本号归档（不入库）；Linux 因本机构建环境限制需在 CI 中产出（见 `.github/workflows/build.yml`）。
 
 ---
 
 ## 🚀 快速开始
 
-> 💡 **下载入口**：所有平台的最新版本请从 **[GitHub Releases](https://github.com/Slk90s/screentime-pro/releases)** 下载（⭐ Latest 自动指向 v0.6.2-beta.1）。
+> 💡 **下载入口**：所有平台的最新版本请从 **[GitHub Releases](https://github.com/Slk90s/screentime-pro/releases)** 下载（⭐ Latest 自动指向 v0.6.2-beta.25）。
 
 ### macOS
-1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `ScreenTime.Pro_0.6.1-beta.1_aarch64.dmg`，打开并拖入「应用程序」。
+1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `ScreenTime Pro_0.6.2-beta.25_aarch64.dmg`，打开并拖入「应用程序」。
 2. 首次运行：系统设置 › 隐私与安全性 › **辅助功能** 中授予本应用权限（空闲检测必需）。
 3. 程序默认开机自启、启动即开始追踪，菜单栏/托盘常驻。
 
 ### Windows
-1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `ScreenTime.Pro_0.6.1-beta.1_x64-setup.exe`（NSIS 安装包）。
+1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `ScreenTime Pro_0.6.2-beta.25_x64-setup.exe`（NSIS 安装包）。
 2. **首次安装**：若系统未装 WebView2 运行时，安装器会**自动下载并安装**（需联网，几秒到几分钟）。Win10 1809+ / Win11 通常已内置，无需此步。
 3. 托盘右键「退出」可彻底关闭；「设置」页可开关开机自启。
 
@@ -225,7 +225,7 @@ screentime-pro/
 ├── .github/workflows/
 │   └── build.yml            # 三端自动构建（macOS / Windows / Linux）
 ├── sql/                  # schema.sql / seed_categories.sql / seed_rules.sql
-├── release/v0.6.1-beta.1/ # 已构建的带版本号安装包（不入库，走 GitHub Releases）
+├── release/v0.6.2-beta.25/ # 已构建的带版本号安装包（不入库，走 GitHub Releases）
 ├── README.md / LICENSE / .gitignore
 └── package.json / vite.config.ts / tsconfig*.json
 ```
@@ -261,8 +261,8 @@ screentime-pro/
 
 | 当前版本 | 历史摘要 |
 |----------|----------|
-| 🧪 **v0.6.2-beta.25**（开发中，未发 Release） | 桌宠熊猫「重切图 + 眼神/嘴动态化」：拆 body/eyes/nose/mouth 四层对齐 PNG，眼神漂移+眨眼、嘴 5 态张合；修 PetWindow 140×140 硬编码留白边；气泡贴窗顶更贴近熊猫。⚠️ 桌宠为测试版功能 |
-| ⭐ **v0.6.2-beta.1** (Latest) | 解耦皮肤系统 + 新增 Pop Mart 3D 潮玩桌宠：右键菜单"皮肤"切换 2D 部件合成（Panda-2D）和 Pop Mart 3D 卡（戴黄帽弹吉他熊猫 portrait），状态用 emoji 浮层表达；新皮肤按 `skins/<id>/` 即插即用，便于后续 Live2D / 待办小组件 / 番茄钟等扩展 |
+| ⭐ **v0.6.2-beta.25**（已发布） | 桌宠熊猫「重切图 + 眼神/嘴动态化」：拆 body/eyes/nose/mouth 四层对齐 PNG，眼神漂移+眨眼、嘴 5 态张合；修 PetWindow 140×140 硬编码留白边；气泡贴窗顶更贴近熊猫。⚠️ 桌宠为测试版功能 |
+| **v0.6.2-beta.1** | 解耦皮肤系统 + 新增 Pop Mart 3D 潮玩桌宠：右键菜单"皮肤"切换 2D 部件合成（Panda-2D）和 Pop Mart 3D 卡（戴黄帽弹吉他熊猫 portrait），状态用 emoji 浮层表达；新皮肤按 `skins/<id>/` 即插即用，便于后续 Live2D / 待办小组件 / 番茄钟等扩展 |
 | v0.6.1-beta.1 | 桌面宠物（QQ 企鹅风格）：透明置顶可拖拽熊猫，22 张 sprite + 部件合成渲染，14 状态自动联动（监听前台应用）+ 右键菜单/喂食/点击交互，零后端改动 |
 | v0.5.0 | 多语言国际化（i18n）：新增 zh-CN / en-US 双语切换，设置页下拉即时切换无需重载；前端自生成周期标签 / 分类名 / 时长格式化；图表随语言重渲染（零后端改动） |
 | v0.4.4 | 修「跨天今天按钮」+ Linux x11rb 0.13 完整适配（CI 三端通过） |
