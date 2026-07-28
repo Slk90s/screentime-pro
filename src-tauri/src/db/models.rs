@@ -90,6 +90,9 @@ pub struct CurrentForegroundOut {
     pub tracking: bool,
     /// 前台窗口标题（macOS 需屏幕录制权限、Windows 默认可取；用于细粒度分类）
     pub window_title: Option<String>,
+    /// 应用包标识（macOS = bundleIdentifier，如 com.microsoft.VSCode；Windows/Linux 暂为 None）
+    /// v0.6.2-beta.2：暴露给前端，供桌宠状态映射按 bundle_id 精准匹配（比 process_name 更稳定）
+    pub bundle_id: Option<String>,
     /// 当前前台应用已连续运行的时长（秒）；无进行中时段时为 0
     pub session_seconds: i64,
 }

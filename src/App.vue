@@ -1,5 +1,25 @@
+<!--
+  App.vue
+  应用根组件：主窗口（使用时间统计 UI）+ 桌宠独立 webview 分支（PetWindow）+ 桌宠菜单独立 webview 分支（PetMenuWindow，v0.6.2-beta.17）。
+
+  设计思路：
+  - 通过 isPetWindow 区分「主窗口」与「桌宠透明置顶窗口」两个 Tauri webview
+  - isPetMenuWindow 区分桌宠菜单独立 webview（独立 Tauri 窗口，菜单可拖到全桌面）
+  - 顶部实时指示栏读取 get_current_foreground 返回值（snake_case），用于验证确实在采集其他软件
+  - 路由用动态组件 + keep-alive，按侧边栏切换 Dashboard / Trends / Rules / Settings
+
+  修改历史：
+    - 2026-07-08 @v0.2.0: 初始创建 - 主窗口骨架 + 桌宠窗口分支
+    - 2026-07-24 @v0.6.1-beta.1: 修复 - 顶部实时栏 IPC 字段名 bug（camelCase → snake_case，与 Rust 返回值对齐）
+    - 2026-07-25 @v0.6.2-beta.17: 新增 - 桌宠右键菜单独立 webview 分支
+-->
 <template>
-  <div class="app">
+  <!-- v0.6.0-beta 桌宠窗口分支：独立 webview 渲染 PetWindow（透明/置顶/无主 UI） -->
+  <PetWindow v-if="isPetWindow" />
+  <!-- v0.6.2-beta.17 桌宠菜单独立 webview 分支：在独立 Tauri 窗口内渲染菜单，
+       position:fixed 相对自己 webview 视口（≈ 全桌面），菜单可自由拖到任意位置 -->
+  <PetMenuWindow v-else-if="isPetMenuWindow" />
+  <div v-else class="app">
     <!-- 顶部栏：品牌 + 实时记录指示（启动即自动追踪，无需手动开关） -->
     <header class="topbar">
       <div class="brand">
@@ -12,11 +32,11 @@
         <span class="dot" :class="{ on: tracking }"></span>
         <span class="live-label">{{ tracking ? t("app.recording") : t("app.paused") }}</span>
         <span class="live-name">{{ live.name || "—" }}</span>
-        <!-- ⚠️ Tauri 2 自动把 Rust 字段转 camelCase，所以是 windowTitle/sessionSeconds/idleSeconds，
-             不是 snake_case（v0.4.0 之前用 snake_case 导致 v-if 全为假、UI 静默失效） -->
-        <span class="live-title" v-if="live.windowTitle">· {{ live.windowTitle }}</span>
-        <span class="live-session" v-if="tracking && (live.sessionSeconds ?? 0) > 0">{{ t("app.recorded", { dur: fmtDur(live.sessionSeconds ?? 0) }) }}</span>
-        <span class="live-idle" v-if="tracking">{{ t("app.idle", { n: live.idleSeconds ?? 0 }) }}</span>
+        <!-- 字段名与 Rust 返回值一致（snake_case）：Tauri v2 仅转换命令参数为 camelCase，
+             返回值原样序列化，故此处读 window_title / session_seconds / idle_seconds -->
+        <span class="live-title" v-if="live.window_title">· {{ live.window_title }}</span>
+        <span class="live-session" v-if="tracking && (live.session_seconds ?? 0) > 0">{{ t("app.recorded", { dur: fmtDur(live.session_seconds ?? 0) }) }}</span>
+        <span class="live-idle" v-if="tracking">{{ t("app.idle", { n: live.idle_seconds ?? 0 }) }}</span>
       </div>
     </header>
 
@@ -25,7 +45,7 @@
       <span>{{ t("app.webview2Warning") }}</span>
       <div class="perm-actions">
         <button @click="openWebview2Download">{{ t("app.webview2Download") }}</button>
-        <button class="perm-dismiss" @click="webview2Dismissed = true" :title="t('app.dismissTip')">×</button>
+        <button class="perm-dismiss" @click="webview2Dismissed = true" :title="t('app.dismissTip')"><AppIcon name="x" /></button>
       </div>
     </div>
 
@@ -35,7 +55,7 @@
       <span>{{ t("app.permWarning") }}</span>
       <div class="perm-actions">
         <button @click="openSettings">{{ t("app.openSettings") }}</button>
-        <button class="perm-dismiss" @click="permDismissed = true" :title="t('app.dismissTip')">×</button>
+        <button class="perm-dismiss" @click="permDismissed = true" :title="t('app.dismissTip')"><AppIcon name="x" /></button>
       </div>
     </div>
 
@@ -56,6 +76,17 @@
 
 import { ref, onMounted, onBeforeUnmount, computed } from "vue";
 import { useI18n } from "vue-i18n";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+
+// v0.6.0-beta 桌宠窗口检测：当前 webview label 是 'pet' 时只渲染 PetWindow（透明/置顶）
+const isPetWindow = getCurrentWebviewWindow().label === "pet";
+// v0.6.2-beta.17 桌宠菜单窗口检测：label 是 'pet-menu' 时只渲染 PetMenuWindow
+const isPetMenuWindow = getCurrentWebviewWindow().label === "pet-menu";
+
+// 仅在桌宠窗口引入 PetWindow 组件，避免主窗口打包
+import PetWindow from "./pet/PetWindow.vue";
+// 仅在菜单窗口引入 PetMenuWindow 组件，避免桌宠窗口和主窗口打包
+import PetMenuWindow from "./pet/PetMenuWindow.vue";
 import Dashboard from "./views/Dashboard.vue";
 import { tracker } from "./api/tracker";
 import { formatDuration } from "./utils/format";
@@ -66,15 +97,15 @@ const { t } = useI18n();
 // 是否正在追踪
 const tracking = ref(false);
 // 实时前台应用（每 2 秒刷新一次）
-// ⚠️ 字段名必须是 camelCase（Tauri 2 转换约定）
+// 字段名与 Rust 端 CurrentForegroundOut 返回值一致（snake_case），Tauri v2 不转换返回值
 const live = ref<CurrentForegroundOut>({
   name: "",
-  processName: "",
-  categoryId: "other",
-  idleSeconds: 0,
+  process_name: "",
+  category_id: "other",
+  idle_seconds: 0,
   tracking: false,
-  windowTitle: null,
-  sessionSeconds: 0,
+  window_title: null,
+  session_seconds: 0,
 });
 // 系统权限状态
 const perm = ref<PermissionStatus>({ accessibility: true, screen_capture: true });

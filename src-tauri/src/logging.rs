@@ -105,8 +105,8 @@ const MAX_LOG_FILES: usize = 3;
 /// 删除超出保留数量的旧日志文件
 ///
 /// 算法：
-/// 1. 列出目录下所有 `app.log.YYYY-MM-DD` 文件
-/// 2. 按文件名（日期）倒序排序
+/// 1. 列出目录下所有 `app.YYYY-MM-DD.log` 滚动日志文件
+/// 2. 按日期字符串（YYYY-MM-DD）倒序排序（字典序 = 时间序）
 /// 3. 保留前 MAX_LOG_FILES 个，删除其余
 ///
 /// 失败不报错（清理失败不能影响启动）
@@ -118,12 +118,14 @@ fn cleanup_old_logs(dir: &Path, keep: usize) {
         Err(_) => return,
     };
 
-    // 收集所有匹配的日志文件，按日期字符串排序（YYYY-MM-DD 字典序 = 时间序）
+    // 收集所有滚动日志文件（app.<date>.log），按日期排序
     let mut files: Vec<_> = entries
         .filter_map(|e| e.ok())
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().to_string();
-            if name.starts_with("app.log.") {
+            // 仅滚动日志走日期清理；tauri-plugin-log 的 ScreenTime Pro.log 是
+            // 单文件、无日期，保留不动（其体积控制由 tauri-plugin-log 自己负责）。
+            if name.starts_with("app.") && name.ends_with(".log") {
                 Some((name, e.path()))
             } else {
                 None
@@ -141,6 +143,50 @@ fn cleanup_old_logs(dir: &Path, keep: usize) {
     }
 }
 
+/// 识别「本程序写入的日志文件」
+///
+/// 真实文件名（tracing_appender DAILY + prefix="app", suffix="log"）：
+///   `app.YYYY-MM-DD.log`
+/// `tauri-plugin-log` 默认输出（写到 `app_log_dir`）：
+///   `<productName>.log` → 如 `ScreenTime Pro.log`
+///
+/// **历史踩坑**（v0.6.2-beta.16）：旧版 `dir_size()` 用
+/// `n.starts_with("app.log")` 过滤，但真实文件 `app.2026-07-25.log`
+/// 第三字符是 `.` 而不是 `l`，filter 漏掉 → `get_log_size` 命令恒返回 0，
+/// Settings 页始终显示「0 B」。同时 `cleanup_old_logs()` 的
+/// `starts_with("app.log.")` 也错（差一个字符）。
+///
+/// **修正策略**：仅信任我们生成的两类文件名，**不**把目录里其他用户的
+/// 文件（比如手动拖入的 `notes.log`）也算成我们的日志占用：
+///   - 滚动日志：`app.<YYYY-MM-DD>.log`（日期恰好 10 字符 + 前后两个点）
+///   - 插件日志：`ScreenTime Pro.log`（productName 拼 `.log`）
+fn is_our_log_file(name: &str) -> bool {
+    // 1) 滚动日志 app.<YYYY-MM-DD>.log
+    if let Some(rest) = name.strip_prefix("app.") {
+        // 期望形如 "2026-07-25.log"（10 + 4 = 14 字符）
+        if rest.len() == 14 && rest.ends_with(".log") {
+            let date_part = &rest[..10];
+            // YYYY-MM-DD 形式：4位-2位-2位，3 处 '-' 中后两处为分隔
+            let bytes = date_part.as_bytes();
+            if bytes[4] == b'-' && bytes[7] == b'-' {
+                let all_digits = bytes
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i != 4 && *i != 7)
+                    .all(|(_, c)| c.is_ascii_digit());
+                if all_digits {
+                    return true;
+                }
+            }
+        }
+    }
+    // 2) tauri-plugin-log 默认输出
+    if name == "ScreenTime Pro.log" {
+        return true;
+    }
+    false
+}
+
 /// 估算当前日志目录占用的总大小（字节）
 ///
 /// 用于 Settings 页展示「日志占 X MB」+ 决定是否提示清理
@@ -152,15 +198,10 @@ pub fn dir_size(dir: &Path) -> std::io::Result<u64> {
     }
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
-        let path = entry.path();
-        if path.is_file()
-            && path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| n.starts_with("app.log"))
-                .unwrap_or(false)
-        {
-            total += entry.metadata()?.len();
+        if let Some(name) = entry.path().file_name().and_then(|n| n.to_str()) {
+            if entry.path().is_file() && is_our_log_file(name) {
+                total += entry.metadata()?.len();
+            }
         }
     }
     Ok(total)

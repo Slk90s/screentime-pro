@@ -14,6 +14,12 @@ mod error;
 mod logging;
 mod tracker;
 
+// v0.6.0-beta 桌宠子系统（独立模块，零侵入既有逻辑）
+mod pet;
+
+// v0.6.2-beta.15：系统 CPU 负载监测（跨平台；驱动桌宠"暴躁升温"状态）
+mod system_load;
+
 use std::sync::{Arc, Mutex};
 
 use classifier::Rule;
@@ -197,6 +203,67 @@ pub fn run() {
             // ===== 启动即自动追踪（无需手动触发）=====
             commands::begin_tracking(&app_state);
 
+            // ===== v0.6.2-beta.15：系统 CPU 负载监测线程 =====
+            // 5s 间隔采样一次；连续 3 次（=15s）> 80% 时向 pet 窗口发 overheating 事件；
+            // 连续 2 次降至 < 60% 时发 cooled 事件恢复。
+            let monitor = Arc::new(system_load::CpuMonitor::new());
+            let app_handle = app.handle().clone();
+            std::thread::Builder::new()
+                .name("system-load-monitor".into())
+                .spawn(move || {
+                    use std::time::Duration;
+                    const OVERHEAT_PCT: f32 = 0.80;
+                    const COOL_PCT: f32 = 0.60;
+                    const SUSTAIN_OVERHEAT: u32 = 3;
+                    const SUSTAIN_COOL: u32 = 2;
+                    let mut hot_streak = 0u32;
+                    let mut cool_streak = 0u32;
+                    let mut is_overheating = false;
+                    // 预热：先读一次让 monitor 拿到基线
+                    let _ = monitor.cpu_usage();
+                    loop {
+                        std::thread::sleep(Duration::from_secs(5));
+                        let usage = match monitor.cpu_usage() {
+                            Some(u) => u,
+                            None => continue,
+                        };
+                        if !is_overheating {
+                            if usage >= OVERHEAT_PCT {
+                                hot_streak += 1;
+                                cool_streak = 0;
+                                if hot_streak >= SUSTAIN_OVERHEAT {
+                                    is_overheating = true;
+                                    let _ = app_handle.emit_to(
+                                        "pet",
+                                        "pet-system-overload",
+                                        usage,
+                                    );
+                                    tracing::warn!(usage, "system overheating → pet 升温");
+                                }
+                            } else {
+                                hot_streak = 0;
+                            }
+                        } else {
+                            if usage < COOL_PCT {
+                                cool_streak += 1;
+                                hot_streak = 0;
+                                if cool_streak >= SUSTAIN_COOL {
+                                    is_overheating = false;
+                                    let _ = app_handle.emit_to(
+                                        "pet",
+                                        "pet-system-cool",
+                                        usage,
+                                    );
+                                    tracing::info!(usage, "system cooled → pet 恢复");
+                                }
+                            } else {
+                                cool_streak = 0;
+                            }
+                        }
+                    }
+                })
+                .ok(); // spawn 失败仅 log，跳过 system-load monitor；不阻塞 setup
+
             // ===== 构建系统托盘（macOS 显示在菜单栏右上角）=====
             // 菜单：显示主窗口 / 退出
             let show_item = MenuItemBuilder::with_id("show", "显示主窗口")
@@ -317,6 +384,17 @@ pub fn run() {
             commands::export_logs,
             commands::get_log_size,
             commands::get_log_dir,
+            // 桌宠（v0.6.0-beta）：pet 窗口生命周期 + 鼠标穿透
+            pet::create_pet_window,
+            pet::show_pet_window,
+            pet::hide_pet_window,
+            pet::move_pet_window,
+            pet::set_pet_cursor_passthrough,
+            // v0.6.2-beta.17：桌宠右键菜单独立窗口（解决 teleport 模式菜单无法跨桌面拖拽）
+            pet::create_pet_menu_window,
+            pet::show_pet_menu_window,
+            pet::hide_pet_menu_window,
+            pet::move_pet_menu_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

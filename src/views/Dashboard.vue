@@ -31,7 +31,7 @@
       <!-- 所选日期（点击上方柱状图的某一天切换；默认今天） -->
       <div class="seldate">
         <span>{{ t("dashboard.viewDate") }}：<b>{{ selectedDate }}</b></span>
-        <button class="pick-btn" @click="showPicker = true" :title="t('dashboard.select')">{{ t("dashboard.select") }}</button>
+        <button class="pick-btn" @click="showPicker = true" :title="t('dashboard.select')"><AppIcon name="calendar" /> {{ t("dashboard.select") }}</button>
         <button v-if="selectedDate !== todayStr()" class="today" @click="backToToday">{{ t("dashboard.backToToday") }}</button>
         <span class="tip">{{ t("dashboard.clickBarTip") }}</span>
       </div>

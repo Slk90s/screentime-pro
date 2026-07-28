@@ -63,18 +63,18 @@ export interface OverviewOut {
   avg_daily_seconds?: number;
 }
 
-// ⚠️ Tauri 2 自动把 Rust 字段转 camelCase 给 JS，所以 TS 类型必须用 camelCase。
-// 否则 vue-tsc 会报 TS2551 「Property 'X' does not exist on type ...」，
-// 且运行时访问 snake_case 字段会得到 undefined（v0.4.0 之前就是这样导致
-// 「已记录 X秒」永不显示）。
+// 实时前台应用：对应 Rust 端 CurrentForegroundOut（db/models.rs，serde 默认无 rename_all）。
+// ⚠️ 关键约定：Tauri v2 仅对【命令参数】做 camelCase→snake_case 转换，【命令返回值】按
+// serde 原样序列化（即 snake_case）。因此此处必须用 snake_case，与 App.vue 读取字段一致；
+// 误写成 camelCase 会导致运行时访问得到 undefined（v0.6.0-beta 主窗口顶部栏曾因此静默失效）。
 export interface CurrentForegroundOut {
   name: string;
-  processName: string;
-  categoryId: string;
-  idleSeconds: number;
+  process_name: string;
+  category_id: string;
+  idle_seconds: number;
   tracking: boolean;
-  windowTitle?: string | null;
-  sessionSeconds: number; // 当前前台应用已连续运行时长（秒）
+  window_title?: string | null;
+  session_seconds: number; // 当前前台应用已连续运行时长（秒）
 }
 
 export interface ExportResult {

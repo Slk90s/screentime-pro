@@ -20,17 +20,29 @@
       <table class="rule-table">
         <thead>
           <tr>
-            <th>{{ t("rules.colField") }}</th>
-            <th>{{ t("rules.colMatch") }}</th>
-            <th>{{ t("rules.colPattern") }}</th>
-            <th>{{ t("rules.colCategory") }}</th>
-            <th>{{ t("rules.colPriority") }}</th>
-            <th>{{ t("rules.colEnabled") }}</th>
+            <th class="sortable" @click="setSort('field')">
+              {{ t("rules.colField") }}<span class="sort-ind">{{ sortMark("field") }}</span>
+            </th>
+            <th class="sortable" @click="setSort('match_type')">
+              {{ t("rules.colMatch") }}<span class="sort-ind">{{ sortMark("match_type") }}</span>
+            </th>
+            <th class="sortable" @click="setSort('pattern')">
+              {{ t("rules.colPattern") }}<span class="sort-ind">{{ sortMark("pattern") }}</span>
+            </th>
+            <th class="sortable" @click="setSort('category_id')">
+              {{ t("rules.colCategory") }}<span class="sort-ind">{{ sortMark("category_id") }}</span>
+            </th>
+            <th class="sortable" @click="setSort('priority')">
+              {{ t("rules.colPriority") }}<span class="sort-ind">{{ sortMark("priority") }}</span>
+            </th>
+            <th class="sortable" @click="setSort('enabled')">
+              {{ t("rules.colEnabled") }}<span class="sort-ind">{{ sortMark("enabled") }}</span>
+            </th>
             <th>{{ t("rules.colOps") }}</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="r in rules" :key="r.id">
+          <tr v-for="r in sortedRules" :key="r.id">
             <td>{{ t("rules.field." + r.field) }}</td>
             <td>{{ t("rules.match." + r.match_type) }}</td>
             <td class="pattern">{{ r.pattern }}</td>
@@ -126,7 +138,7 @@
 // 注：开机自启开关已移至 Settings.vue，本页只管分类规则。
 // 所有代码均带中文注释，符合项目「新增界面必须加注释」的规范。
 
-import { ref, onMounted } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import Modal from "../components/Modal.vue";
 import { tracker } from "../api/tracker";
@@ -138,6 +150,66 @@ const { t } = useI18n();
 // 规则列表与分类字典
 const rules = ref<RuleOut[]>([]);
 const categories = ref<CategoryOut[]>([]);
+
+// v0.6.2-beta.16：表格排序状态
+// - 默认按分类（category_id）升序分组 + 同分类内按匹配值（pattern）字母序
+// - 单击列头：设为该列升序；再次点击该列：切降序；点击其他列：切到该列升序
+type SortKey =
+  | "field"
+  | "match_type"
+  | "pattern"
+  | "category_id"
+  | "priority"
+  | "enabled";
+type SortDir = "asc" | "desc";
+const sortKey = ref<SortKey>("category_id");
+const sortDir = ref<SortDir>("asc");
+function setSort(k: SortKey) {
+  if (sortKey.value === k) {
+    // 同列再次点击：切换升降序
+    sortDir.value = sortDir.value === "asc" ? "desc" : "asc";
+  } else {
+    // 切到新列：升序
+    sortKey.value = k;
+    sortDir.value = "asc";
+  }
+}
+function sortMark(k: SortKey): string {
+  if (sortKey.value !== k) return "";
+  return sortDir.value === "asc" ? " ▲" : " ▼";
+}
+
+// 按当前 sortKey/sortDir 排序的规则列表（默认 category_id asc + pattern asc）
+const sortedRules = computed<RuleOut[]>(() => {
+  const list = rules.value.slice();
+  const k = sortKey.value;
+  const dir = sortDir.value === "asc" ? 1 : -1;
+  list.sort((a, b) => {
+    const av = (a as any)[k];
+    const bv = (b as any)[k];
+    // 字符串走 localeCompare（兼顾中文 + 大小写不敏感）；布尔/数字按数值
+    let cmp: number;
+    if (typeof av === "boolean" && typeof bv === "boolean") {
+      cmp = (av === bv ? 0 : av ? 1 : -1);
+    } else if (typeof av === "number" && typeof bv === "number") {
+      cmp = av - bv;
+    } else {
+      cmp = String(av ?? "").localeCompare(String(bv ?? ""), "zh-CN", {
+        sensitivity: "base",
+      });
+    }
+    if (cmp !== 0) return cmp * dir;
+    // 同主键再按 pattern asc 兜底（看匹配值字母序）
+    if (k !== "pattern") {
+      const pa = String((a as any).pattern ?? "");
+      const pb = String((b as any).pattern ?? "");
+      const pcmp = pa.localeCompare(pb, "zh-CN", { sensitivity: "base" });
+      if (pcmp !== 0) return pcmp;
+    }
+    return a.id - b.id;
+  });
+  return list;
+});
 
 // 弹窗控制
 // - formOpen: 新增/编辑表单弹窗
@@ -339,6 +411,19 @@ onMounted(loadAll);
   border-bottom: 1px solid var(--border, #e5e7eb);
   padding: 8px 10px;
   text-align: left;
+}
+/* v0.6.2-beta.16：可排序列头 */
+.rule-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.rule-table th.sortable:hover {
+  background: rgba(255, 126, 39, 0.08); /* 机械师橙淡底 */
+}
+.sort-ind {
+  font-size: 10px;
+  color: var(--brand, #FF7E27);
+  margin-left: 4px;
 }
 .rule-table .pattern {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

@@ -1,6 +1,7 @@
 // 前端入口：创建 Vue 应用并挂载到 #app
 import { createApp } from "vue";
 import App from "./App.vue";
+import AppIcon from "@/components/AppIcon.vue";
 import { installGlobalErrorHandlers, log } from "@/lib/logger";
 import { i18n } from "./i18n";
 import "./style.css";
@@ -13,4 +14,7 @@ log.info("前端启动", { version: "0.4.2" });
 // 在 Windows(WebView2)/macOS/Linux 下统一屏蔽，避免误操作与界面穿帮）
 document.addEventListener("contextmenu", (e) => e.preventDefault());
 
-createApp(App).use(i18n).mount("#app");
+const app = createApp(App);
+// 全局注册矢量图标组件（替代 emoji 表情）
+app.component("AppIcon", AppIcon);
+app.use(i18n).mount("#app");

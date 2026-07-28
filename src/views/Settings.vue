@@ -1,114 +1,360 @@
 <template>
-  <!-- 设置页：设备名 / 空闲阈值 / 保留天数 / 开机自启 / 备份与多设备合并 / 关于
-       v0.3.1：所有操作反馈改用 Modal 弹窗（避免大屏下 toast 被忽略） -->
+  <!-- 设置页（v0.6.2-beta.19 重构）
+       视觉：每功能一卡片，head 区域 圆角色块图标 + 标题/副标题，body 区域放交互控件。
+       功能不裁：原 Settings 全部功能（设备名/空闲阈值/保留天数/语言/自启/备份导入/日志/危险区/桌宠/皮肤/编辑器/检查更新/关于）全部保留。 -->
   <div class="settings">
-    <section class="card">
-      <h3>{{ t("settings.deviceData") }}</h3>
+    <!-- ============ 顶部品牌色横条 + 标题 ============ -->
+    <div class="settings-header">
+      <div class="header-bar" />
+      <h2>设置</h2>
+    </div>
 
-      <div class="field">
-        <label>{{ t("settings.deviceName") }}</label>
-        <input v-model="deviceName" type="text" :placeholder="t('settings.deviceNamePh')" />
-        <p class="hint">{{ t("settings.deviceNameHint") }}</p>
-      </div>
-
-      <div class="field">
-        <label>{{ t("settings.idleThreshold") }}</label>
-        <input v-model.number="idleMin" type="number" min="1" max="60" />
-        <p class="hint">{{ t("settings.idleHint") }}</p>
-      </div>
-
-      <div class="field">
-        <label>{{ t("settings.retention") }}</label>
-        <input v-model.number="retention" type="number" min="30" max="3650" />
-        <p class="hint">{{ t("settings.retentionHint") }}</p>
-      </div>
-
-      <div class="field row">
-        <label>{{ t("settings.autostart") }}</label>
-        <input v-model="autostart" type="checkbox" @change="onAutostart" />
-      </div>
-
-      <div class="field row">
-        <label>{{ t("language.label") }}</label>
-        <select :value="i18n.global.locale.value" @change="onLangChange">
-          <option value="zh-CN">{{ t("language.zhCN") }}</option>
-          <option value="en-US">{{ t("language.enUS") }}</option>
-        </select>
-      </div>
-
-      <button class="save" @click="onSave">{{ t("settings.save") }}</button>
-    </section>
-
-    <section class="card">
-      <h3>{{ t("settings.backupMerge") }}</h3>
-      <p class="hint">
-        {{ t("settings.backupHint") }}
-      </p>
-      <div class="btns">
-        <button @click="onExport">{{ t("settings.export") }}</button>
-        <button @click="pickImport">{{ t("settings.import") }}</button>
-        <input
-          ref="fileInput"
-          type="file"
-          accept="application/json,.json"
-          hidden
-          @change="onImport"
-        />
-      </div>
-
-      <div class="diag-zone">
-        <h4>{{ t("settings.diag") }}</h4>
-        <p class="hint" v-html="t('settings.diagHint')"></p>
-        <p class="hint" v-if="logSize !== null" v-html="t('settings.logSize', { size: formatBytes(logSize) })"></p>
-        <div class="btns">
-          <button @click="exportLogs">{{ t("settings.exportLogs") }}</button>
-          <button class="reveal" @click="revealLogDir">{{ t("settings.openLogDir") }}</button>
-          <button @click="refreshLogSize">{{ t("settings.refresh") }}</button>
+    <!-- ============ 语言 ============ -->
+    <div class="setting-card">
+      <div class="card-head">
+        <div class="head-icon icon-orange">
+          <AppIcon name="language" :size="20" />
+        </div>
+        <div class="head-text">
+          <h3>{{ t("settings.languageTitle") }}</h3>
+          <p>{{ t("settings.languageDesc") }}</p>
         </div>
       </div>
-
-      <div class="danger-zone">
-        <h4>{{ t("settings.danger") }}</h4>
-        <div class="btns">
-          <button class="danger" @click="confirmCleanAll">{{ t("settings.cleanOld", { days: retention }) }}</button>
-          <button class="danger" @click="openDevicePrune">{{ t("settings.pruneByDevice") }}</button>
+      <div class="card-body">
+        <div class="radio-pills">
+          <label class="radio-pill" :class="{ active: i18n.global.locale.value === 'zh-CN' }">
+            <input
+              type="radio"
+              name="lang"
+              value="zh-CN"
+              :checked="i18n.global.locale.value === 'zh-CN'"
+              @change="onLangChange"
+            />
+            <span class="radio-dot" />
+            <span>简体中文</span>
+          </label>
+          <label class="radio-pill" :class="{ active: i18n.global.locale.value === 'en-US' }">
+            <input
+              type="radio"
+              name="lang"
+              value="en-US"
+              :checked="i18n.global.locale.value === 'en-US'"
+              @change="onLangChange"
+            />
+            <span class="radio-dot" />
+            <span>English</span>
+          </label>
         </div>
-        <p class="hint danger-hint">{{ t("settings.dangerHint") }}</p>
       </div>
-    </section>
+    </div>
 
-    <section class="card">
-      <h3>{{ t("settings.about") }}</h3>
-      <div class="about">
-        <div>
-          <span>{{ t("settings.appVersion") }}</span>
-          <b class="mono">{{ version }}</b>
-          <button class="check-update" @click="onCheckUpdate" :disabled="checking">
+    <!-- ============ 通用（设备名 / 空闲阈值 / 保留天数 / 开机自启）============ -->
+    <div class="setting-card">
+      <div class="card-head">
+        <div class="head-icon icon-blue">
+          <AppIcon name="settings" :size="20" />
+        </div>
+        <div class="head-text">
+          <h3>{{ t("settings.generalTitle") }}</h3>
+          <p>{{ t("settings.generalDesc") }}</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="form-row">
+          <label>{{ t("settings.deviceName") }}</label>
+          <input
+            v-model="deviceName"
+            type="text"
+            class="text-input"
+            :placeholder="t('settings.deviceNamePh')"
+          />
+          <p class="field-hint">{{ t("settings.deviceNameHint") }}</p>
+        </div>
+
+        <div class="form-row">
+          <label>{{ t("settings.idleThreshold") }}</label>
+          <input
+            v-model.number="idleMin"
+            type="number"
+            min="1"
+            max="60"
+            class="text-input narrow"
+          />
+          <p class="field-hint">{{ t("settings.idleHint") }}</p>
+        </div>
+
+        <div class="form-row">
+          <label>{{ t("settings.retention") }}</label>
+          <input
+            v-model.number="retention"
+            type="number"
+            min="30"
+            max="3650"
+            class="text-input narrow"
+          />
+          <p class="field-hint">{{ t("settings.retentionHint") }}</p>
+        </div>
+
+        <div class="form-row row">
+          <label>{{ t("settings.autostart") }}</label>
+          <label class="toggle-switch" :class="{ on: autostart }">
+            <input
+              type="checkbox"
+              :checked="autostart"
+              @change="onAutostart($event)"
+            />
+            <span class="toggle-slider" />
+            <span class="toggle-state">
+              {{ autostart ? t("settings.autostartOn") : t("settings.autostartOff") }}
+            </span>
+          </label>
+        </div>
+
+        <div class="card-actions">
+          <button class="primary-btn" @click="onSave">
+            <AppIcon name="save" :size="14" /> {{ t("settings.save") }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 设备 ID ============ -->
+    <div class="setting-card">
+      <div class="card-head">
+        <div class="head-icon icon-blue">
+          <AppIcon name="keyRound" :size="20" />
+        </div>
+        <div class="head-text">
+          <h3>{{ t("settings.deviceIdTitle") }}</h3>
+          <p>{{ t("settings.deviceIdDesc") }}</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="id-bar">
+          <code class="id-mono">{{ settings.device_id || "—" }}</code>
+          <div class="id-actions">
+            <button class="ghost-btn" @click="copy(settings.device_id || '')">
+              <AppIcon name="copy" :size="14" /> {{ t("common.copy") }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 备份与多设备合并 ============ -->
+    <div class="setting-card">
+      <div class="card-head">
+        <div class="head-icon icon-green">
+          <AppIcon name="database" :size="20" />
+        </div>
+        <div class="head-text">
+          <h3>{{ t("settings.backupMerge") }}</h3>
+          <p>{{ t("settings.backupHint") }}</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="btn-row">
+          <button class="ghost-btn" @click="onExport">
+            <AppIcon name="download" :size="14" /> {{ t("settings.export") }}
+          </button>
+          <button class="ghost-btn" @click="pickImport">
+            <AppIcon name="upload" :size="14" /> {{ t("settings.import") }}
+          </button>
+          <input
+            ref="fileInput"
+            type="file"
+            accept="application/json,.json"
+            hidden
+            @change="onImport"
+          />
+        </div>
+
+        <div class="sub-zone">
+          <h4><AppIcon name="tool" :size="14" /> {{ t("settings.diag") }}</h4>
+          <p class="field-hint" v-html="t('settings.diagHint')" />
+          <p class="field-hint" v-if="logSize !== null" v-html="t('settings.logSize', { size: formatBytes(logSize) })" />
+          <div class="btn-row">
+            <button class="ghost-btn" @click="exportLogs">
+              <AppIcon name="clipboard" :size="14" /> {{ t("settings.exportLogs") }}
+            </button>
+            <button class="ghost-btn" @click="revealLogDir">
+              <AppIcon name="folder" :size="14" /> {{ t("settings.openLogDir") }}
+            </button>
+            <button class="ghost-btn" @click="refreshLogSize">
+              <AppIcon name="refresh" :size="14" /> {{ t("settings.refresh") }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 桌宠（开关 + 操作 + 皮肤 + 编辑器）============ -->
+    <div class="setting-card pet-card">
+      <div class="card-head">
+        <div class="head-icon icon-pink">
+          <AppIcon name="paw" :size="20" />
+        </div>
+        <div class="head-text">
+          <h3>{{ t("pet.settings.title") }}</h3>
+          <p>{{ t("pet.settings.enabledDesc") }}</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="form-row row">
+          <label>{{ t("pet.settings.enabled") }}</label>
+          <label class="toggle-switch" :class="{ on: petStore.enabled }">
+            <input
+              type="checkbox"
+              :checked="petStore.enabled"
+              @change="onTogglePet(($event.target as HTMLInputElement).checked)"
+            />
+            <span class="toggle-slider" />
+            <span class="toggle-state">
+              {{ petStore.enabled ? t("pet.settings.on") : t("pet.settings.off") }}
+            </span>
+          </label>
+        </div>
+
+        <div class="btn-row" v-if="petStore.enabled">
+          <button class="ghost-btn" @click="onShowPet">
+            <AppIcon name="eye" :size="14" /> {{ t("pet.settings.open") }}
+          </button>
+          <button class="ghost-btn" @click="onHidePet">
+            <AppIcon name="eyeOff" :size="14" /> {{ t("pet.settings.close") }}
+          </button>
+          <button class="ghost-btn" @click="onResetPetPos">
+            <AppIcon name="rotateCcw" :size="14" /> {{ t("pet.settings.resetPos") }}
+          </button>
+        </div>
+
+        <!-- 皮肤 -->
+        <div class="sub-zone">
+          <h4><AppIcon name="sparkles" :size="14" /> {{ t("pet.settings.skinTitle") }}</h4>
+          <p class="field-hint">{{ t("pet.settings.skinDesc") }}</p>
+          <div class="pet-skin-grid">
+            <button
+              v-for="s in skinList"
+              :key="s.id"
+              type="button"
+              class="pet-skin-tile"
+              :class="{ 'is-active': s.id === activeSkinId }"
+              :aria-pressed="s.id === activeSkinId"
+              @click="pickSkin(s.id)"
+            >
+              <div class="pet-skin-head">
+                <span class="pet-skin-emoji" :aria-hidden="true">
+                  {{ s.id === 'popmart-3d' ? '🎁' : '🐾' }}
+                </span>
+                <span class="pet-skin-name">{{ s.name }}</span>
+              </div>
+              <div class="pet-skin-desc">{{ s.description }}</div>
+            </button>
+          </div>
+        </div>
+
+        <p v-if="petStore.isHungry && petStore.enabled" class="pet-hungry">
+          <AppIcon name="leaf" :size="14" /> {{ t("pet.feed.full") }} → {{ t("pet.feed.title") }}
+        </p>
+
+        <div class="card-actions" v-if="petStore.enabled">
+          <button class="ghost-btn" @click="showEditor = true">
+            <AppIcon name="penTool" :size="14" />
+            {{ t("pet.settings.editor") }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 桌宠编辑器（Teleport 到 body，避免被 card 裁剪） -->
+    <Teleport to="body">
+      <PetSpriteEditor :visible="showEditor" @close="showEditor = false" />
+    </Teleport>
+
+    <!-- ============ 检查更新 ============ -->
+    <div class="setting-card">
+      <div class="card-head">
+        <div class="head-icon icon-blue">
+          <AppIcon name="refresh" :size="20" />
+        </div>
+        <div class="head-text">
+          <h3>{{ t("settings.updateTitle") }}</h3>
+          <p>{{ t("settings.updateDesc") }}</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="btn-row btn-row-end">
+          <button class="primary-btn outline" :disabled="checking" @click="onCheckUpdate">
+            <AppIcon name="refresh" :size="14" />
             {{ checking ? t("settings.checking") : t("settings.checkUpdate") }}
           </button>
         </div>
-        <div
-          v-if="updateResult"
-          class="update-result"
-          :class="{ outdated: updateResult.has_update }"
-        >
+        <p v-if="updateResult" class="field-hint" :class="{ outdated: updateResult.has_update }">
           <template v-if="updateResult.has_update">
             {{ t("settings.foundNew") }} <b>v{{ updateResult.latest }}</b>（当前 v{{ updateResult.current }}）
-            <button class="link-btn" @click="goDownload(updateResult.url)">{{ t("settings.goDownload") }}</button>
+            <button class="link-btn" @click="goDownload(updateResult.url)">
+              {{ t("settings.goDownload") }}
+            </button>
           </template>
           <template v-else>
             {{ t("settings.upToDate", { current: updateResult.current }) }}
           </template>
-        </div>
-        <div>
-          <span>{{ t("settings.deviceId") }}</span>
-          <b class="mono">{{ settings.device_id || "—" }}</b>
-        </div>
-        <div><span>{{ t("settings.storage") }}</span><b>{{ t("settings.storage") }}</b></div>
+        </p>
       </div>
-    </section>
+    </div>
 
-    <!-- ============ 通用反馈/确认弹窗（替代原 toast 顶部横条）============ -->
+    <!-- ============ 关于 ============ -->
+    <div class="setting-card">
+      <div class="card-head">
+        <div class="head-icon icon-blue">
+          <AppIcon name="info" :size="20" />
+        </div>
+        <div class="head-text">
+          <h3>{{ t("settings.about") }}</h3>
+          <p>{{ t("settings.aboutDesc") }}</p>
+        </div>
+      </div>
+      <div class="card-body about-list">
+        <div class="meta-row">
+          <span class="meta-label">{{ t("settings.appVersion") }}</span>
+          <span class="meta-value mono">{{ version }}</span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-label">{{ t("settings.deviceId") }}</span>
+          <span class="meta-value mono">{{ settings.device_id || "—" }}</span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-label">{{ t("settings.storageLabel") }}</span>
+          <span class="meta-value">{{ t("settings.storage") }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 危险区 ============ -->
+    <div class="setting-card danger-card">
+      <div class="card-head">
+        <div class="head-icon icon-red">
+          <AppIcon name="warning" :size="20" />
+        </div>
+        <div class="head-text">
+          <h3>{{ t("settings.danger") }}</h3>
+          <p>{{ t("settings.dangerZoneDesc") }}</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="btn-row">
+          <button class="danger-btn" @click="confirmCleanAll">
+            <AppIcon name="trash" :size="14" />
+            {{ t("settings.cleanOld", { days: retention }) }}
+          </button>
+          <button class="danger-btn" @click="openDevicePrune">
+            <AppIcon name="trash" :size="14" /> {{ t("settings.pruneByDevice") }}
+          </button>
+        </div>
+        <p class="danger-hint">{{ t("settings.dangerHint") }}</p>
+      </div>
+    </div>
+
+    <!-- ============ 通用反馈/确认弹窗 ============ -->
     <Modal
       v-model="alertOpen"
       :type="alertType"
@@ -120,7 +366,7 @@
       @confirm="onAlertConfirm"
     />
 
-    <!-- ============ 导出成功后的弹窗（带「在访达中显示 / 复制路径」操作）============ -->
+    <!-- ============ 导出成功后的弹窗 ============ -->
     <Modal
       v-model="exportDialogOpen"
       type="info"
@@ -137,7 +383,7 @@
       </template>
     </Modal>
 
-    <!-- ============ 日志导出成功后的弹窗（v0.4.2 新增）============ -->
+    <!-- ============ 日志导出成功后的弹窗 ============ -->
     <Modal
       v-model="logExportDialogOpen"
       type="info"
@@ -188,7 +434,7 @@
                 <span
                   v-else-if="!d.device_name || d.device_name === d.device_id"
                   class="default-tag"
-                  title="该设备没有设置名称（可能是从旧版备份导入的数据）"
+                  :title="t('settings.unnamedTip', '该设备没有设置名称（可能是从旧版备份导入的数据）')"
                 >{{ t("settings.unnamed") }}</span>
               </div>
               <div class="device-meta">
@@ -202,7 +448,7 @@
               </div>
             </div>
           </label>
-          <p class="hint" v-html="t('settings.pruneHint', { days: retention })"></p>
+          <p class="field-hint" v-html="t('settings.pruneHint', { days: retention })" />
         </div>
       </div>
     </Modal>
@@ -210,27 +456,117 @@
 </template>
 
 <script setup lang="ts">
-// 设置页
-// 关键变更：
-// - 所有反馈改用 Modal 弹窗（替代顶部 toast 横条）
-// - 按设备清理改用弹窗 + 多选 checkbox（不再用文本输入框）
-// - 检查更新失败时把错误消息放进弹窗，用户能看到具体 HTTP 码/响应
+// 设置页（v0.6.2-beta.19 重构）
+// - 视觉：按"图标 + 标题/描述 + 控件"卡片化重组（原 card 列表 → 多功能分卡）
+// - 功能：100% 保留，script 段内方法、状态、副作用与原实现一致
+// - 关键变更：
+//   1. 语言 radio 改成"胶囊式"组件（截图风格），仍走 i18n.setLocale
+//   2. 设备 ID 抽出独立卡片，仅"复制"按钮（截图里的"重置"按钮非原功能，移除避免调用未注册的 reset_device_id）
+//   3. 备份与诊断合并到一张卡（"数据库"图标）
+//   4. 桌宠卡含 开关 / 操作按钮 / 皮肤 / 编辑器入口
+//   5. 危险区改为独立卡片，警示色
 
-import { ref, onMounted } from "vue";
+import { ref, onMounted, onBeforeUnmount, computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import Modal from "../components/Modal.vue";
+import AppIcon from "../components/AppIcon.vue";
 import { tracker } from "../api/tracker";
 import { i18n, setLocale, type Locale } from "../i18n";
 import type { DeviceStats, SettingsOut, UpdateInfo } from "../types";
 import { formatDuration } from "../utils/format";
+import { petStore } from "../pet/stores/petStore";
+import PetSpriteEditor from "../pet/components/PetSpriteEditor.vue";
+import { skinRegistry } from "../pet/skins/registry";
+import "../pet/skins";
 
 const { t } = useI18n();
 
-// 语言下拉切换：更新并持久化（图表等会经 watch(locale) 自动重绘）
+// 桌宠编辑器显示状态
+const showEditor = ref(false);
+
+// v0.6.2-beta.2：皮肤选择器
+const skinList = computed(() => skinRegistry.list());
+const activeSkinId = computed(() => skinRegistry.active().id);
+function pickSkin(id: string): void {
+  skinRegistry.setActive(id);
+}
+
+// v0.6.2-beta.3：跨窗口皮肤同步
+let unlistenSkin: (() => void) | null = null;
+let unlistenPetEnabled: (() => void) | null = null;
+onMounted(async () => {
+  try {
+    unlistenSkin = await listen("pet-skin-changed", () => {
+      skinRegistry.reloadActive();
+    });
+  } catch (e) {
+    console.error("[Settings] 监听 pet-skin-changed 失败", e);
+  }
+  try {
+    unlistenPetEnabled = await listen("pet-enabled-changed", () => {
+      petStore.reload();
+    });
+  } catch (e) {
+    console.error("[Settings] 监听 pet-enabled-changed 失败", e);
+  }
+});
+onBeforeUnmount(() => {
+  if (unlistenSkin) unlistenSkin();
+  if (unlistenPetEnabled) unlistenPetEnabled();
+});
+
+// 语言切换
 function onLangChange(e: Event) {
-  setLocale((e.target as HTMLSelectElement).value as Locale);
+  setLocale((e.target as HTMLInputElement).value as Locale);
+}
+
+// 桌宠控制
+async function onTogglePet(checked: boolean) {
+  petStore.setEnabled(checked);
+  if (checked) {
+    invoke("create_pet_window")
+      .then(() => invoke("show_pet_window"))
+      .then(() => {
+        const pos = petStore.position;
+        return invoke("move_pet_window", { x: pos.x, y: pos.y });
+      })
+      .catch((err) => {
+        console.error("[pet] 切换桌宠失败", err);
+        showAlert("warn", t("common.error"), String(err));
+      });
+  } else {
+    invoke("hide_pet_window").catch((err) => {
+      console.error("[pet] 隐藏桌宠失败", err);
+    });
+  }
+}
+async function onShowPet() {
+  try {
+    await invoke("create_pet_window");
+    await invoke("show_pet_window");
+    const pos = petStore.position;
+    await invoke("move_pet_window", { x: pos.x, y: pos.y });
+  } catch (err) {
+    console.error("[pet] 显示桌宠失败", err);
+    showAlert("warn", t("common.error"), String(err));
+  }
+}
+async function onHidePet() {
+  try {
+    await invoke("hide_pet_window");
+  } catch (err) {
+    console.error("[pet] 隐藏桌宠失败", err);
+  }
+}
+function onResetPetPos() {
+  const screenW = window.screen.width;
+  const screenH = window.screen.height;
+  petStore.setPosition(screenW - 200, screenH - 240);
+  const pos = petStore.position;
+  invoke("move_pet_window", { x: pos.x, y: pos.y }).catch(() => {});
 }
 
 const settings = ref<SettingsOut>({
@@ -242,14 +578,10 @@ const settings = ref<SettingsOut>({
   autostart: false,
 });
 
-// 应用版本：动态读取打包版本（tauri.conf.json），避免 UI 写死导致与实际不符
-const version = ref("0.4.1");
-
-// 检查更新状态
+const version = ref("");
 const checking = ref(false);
 const updateResult = ref<UpdateInfo | null>(null);
 
-// 表单绑定
 const deviceName = ref("");
 const idleMin = ref(5);
 const retention = ref(365);
@@ -257,12 +589,11 @@ const autostart = ref(false);
 
 const fileInput = ref<HTMLInputElement>();
 
-// ============ 通用弹窗（替代原 showToast）============
+// ============ 通用弹窗 ============
 const alertOpen = ref(false);
 const alertType = ref<"info" | "confirm" | "warn">("info");
 const alertTitle = ref("");
 const alertMsg = ref("");
-/** 通用弹窗 confirm 时执行的回调（用于「清理」「删除」等异步操作） */
 let pendingConfirm: (() => void | Promise<void>) | null = null;
 function showAlert(
   type: "info" | "confirm" | "warn",
@@ -284,17 +615,15 @@ function onAlertConfirm() {
   }
 }
 
-// ============ 导出成功专用弹窗 ============
+// ============ 导出/按设备清理 ============
 const exportDialogOpen = ref(false);
 const exportPath = ref("");
 
-// ============ 按设备清理弹窗 ============
 const pruneDialogOpen = ref(false);
 const deviceStats = ref<DeviceStats[]>([]);
 const selectedDeviceIds = ref<string[]>([]);
 
 async function openDevicePrune() {
-  // 打开前先拉取设备列表
   pruneDialogOpen.value = true;
   selectedDeviceIds.value = [];
   try {
@@ -308,13 +637,9 @@ function formatSeconds(s: number): string {
   return formatDuration(s);
 }
 
-// 按设备清理：弹窗确认后，对每个选中设备做「先备份再全删」
-const backupResultPath = ref("");
-
 async function onConfirmPruneByDevice() {
   const ids = selectedDeviceIds.value;
   if (ids.length === 0) {
-    // 留空 = 清全部设备 → 走原来的 pruneData（保留天数），不做自动备份
     try {
       const n = await tracker.pruneData(retention.value);
       showAlert("info", t("settings.cleaned"), t("settings.cleanedOld", { n, days: retention.value }));
@@ -324,8 +649,7 @@ async function onConfirmPruneByDevice() {
     }
     return;
   }
-  // 选中具体设备 → 每个都先备份再全删
-  pruneDialogOpen.value = false; // 关闭列表弹窗
+  pruneDialogOpen.value = false;
   let totalDeleted = 0;
   const backups: string[] = [];
   try {
@@ -334,8 +658,6 @@ async function onConfirmPruneByDevice() {
       totalDeleted += res.deleted_count;
       backups.push(res.backup_path);
     }
-    // 弹结果弹窗：列出所有备份路径 + 在访达中显示 / 复制全部
-    backupResultPath.value = backups.join("\n");
     showAlert(
       "info",
       t("settings.cleaned"),
@@ -343,11 +665,7 @@ async function onConfirmPruneByDevice() {
     );
   } catch (e) {
     console.error("按设备清理失败", e);
-    showAlert(
-      "warn",
-      t("settings.cleanFailed"),
-      t("settings.cleanFailedMsg", { err: e instanceof Error ? e.message : String(e) })
-    );
+    showAlert("warn", t("settings.cleanFailed"), t("settings.cleanFailedMsg", { err: e instanceof Error ? e.message : String(e) }));
   }
 }
 
@@ -362,21 +680,19 @@ function confirmCleanAll() {
         showAlert("info", t("settings.cleaned"), t("settings.cleanedSimple", { n }));
       } catch (e) {
         console.error("清理失败", e);
-        showAlert(
-          "warn",
-          t("settings.cleanFailed"),
-          t("settings.cleanFailedMsg", { err: e instanceof Error ? e.message : String(e) })
-        );
+        showAlert("warn", t("settings.cleanFailed"), t("settings.cleanFailedMsg", { err: e instanceof Error ? e.message : String(e) }));
       }
     }
   );
 }
 
+// （v0.6.2-beta.19 移除"重置设备 ID"按钮：后端未实现 reset_device_id 命令，截图里的"重置"按钮只用作视觉示意，保留会让用户点了报错。设备 ID 不可重置：它绑定了 sessions 数据。）
+
 onMounted(async () => {
   try {
     version.value = await getVersion();
   } catch {
-    /* 浏览器预览模式忽略，保留默认 */
+    /* 浏览器预览模式忽略 */
   }
   try {
     const s = await tracker.getSettings();
@@ -390,13 +706,17 @@ onMounted(async () => {
   }
 });
 
-// 切换开机自启（单独调用后端命令，即时生效）
-async function onAutostart() {
+// 切换开机自启（v0.6.2-beta.23：去掉成功弹窗；v0.6.2-beta.24：乐观更新 + 失败回滚）
+// 关键：<input> 是单向 :checked 绑定，vue 下次 render 会用 autostart.value 强制覆盖原生 checked，
+// 若这里不翻转 autostart.value，toggle 会"弹回"，表现成"点不动"。故先乐观翻转，失败再回滚。
+async function onAutostart(e: Event) {
+  const next = (e.target as HTMLInputElement).checked;
+  autostart.value = next; // 乐观更新：立即反映到 :checked 与 :class="{ on }"
   try {
-    await tracker.setAutostart(autostart.value);
-    showAlert("info", t("settings.updated"), autostart.value ? t("settings.autostartOn") : t("settings.autostartOff"));
-  } catch (e) {
-    showAlert("warn", t("settings.autostartFailed"), t("settings.autostartFailedMsg", { err: e instanceof Error ? e.message : String(e) }));
+    await tracker.setAutostart(next);
+  } catch (err) {
+    autostart.value = !next; // 失败回滚
+    showAlert("warn", t("settings.autostartFailed"), t("settings.autostartFailedMsg", { err: err instanceof Error ? err.message : String(err) }));
   }
 }
 
@@ -410,11 +730,7 @@ async function onSave() {
     showAlert("info", t("settings.saved"), t("settings.savedMsg"));
   } catch (e) {
     console.error("保存设置失败", e);
-    showAlert(
-      "warn",
-      t("settings.saveFailed"),
-      t("settings.saveFailedMsg", { err: e instanceof Error ? e.message : String(e) })
-    );
+    showAlert("warn", t("settings.saveFailed"), t("settings.saveFailedMsg", { err: e instanceof Error ? e.message : String(e) }));
   }
 }
 
@@ -425,15 +741,10 @@ async function onExport() {
     exportDialogOpen.value = true;
   } catch (e) {
     console.error("导出失败", e);
-    showAlert(
-      "warn",
-      t("settings.exportFailed"),
-      t("settings.exportFailedMsg", { err: e instanceof Error ? e.message : String(e) })
-    );
+    showAlert("warn", t("settings.exportFailed"), t("settings.exportFailedMsg", { err: e instanceof Error ? e.message : String(e) }));
   }
 }
 
-// 在系统文件管理器中打开导出文件（macOS 访达 / Windows 资源管理器 / Linux 文件管理器）
 async function reveal(path: string) {
   try {
     await tracker.revealPath(path);
@@ -451,7 +762,6 @@ async function copy(path: string) {
   }
 }
 
-// ============ 日志导出（v0.4.2 引入）============
 const logSize = ref<number | null>(null);
 const logExportDialogOpen = ref(false);
 const logExportPath = ref("");
@@ -478,34 +788,23 @@ async function exportLogs() {
     const res = await invoke<{ path: string }>("export_logs");
     logExportPath.value = res.path;
     logExportDialogOpen.value = true;
-    // 导出后刷新大小
     void refreshLogSize();
   } catch (e) {
     console.error("导出日志失败", e);
-    showAlert(
-      "warn",
-      t("settings.exportFailed"),
-      t("settings.exportFailedMsg", { err: e instanceof Error ? e.message : String(e) })
-    );
+    showAlert("warn", t("settings.exportFailed"), t("settings.exportFailedMsg", { err: e instanceof Error ? e.message : String(e) }));
   }
 }
 
 async function revealLogDir() {
-  // 通过 reveal_path 命令打开日志所在目录
   try {
     const logDir = await invoke<string>("get_log_dir");
     await tracker.revealPath(logDir);
   } catch (e) {
     console.error("打开日志目录失败", e);
-    showAlert(
-      "warn",
-      t("settings.openFailed"),
-      t("settings.openFailedMsg", { err: e instanceof Error ? e.message : String(e) })
-    );
+    showAlert("warn", t("settings.openFailed"), t("settings.openFailedMsg", { err: e instanceof Error ? e.message : String(e) }));
   }
 }
 
-// 挂载时拉一次日志大小
 onMounted(() => {
   void refreshLogSize();
 });
@@ -523,51 +822,33 @@ async function onImport(e: Event) {
     showAlert("info", t("settings.importSuccess"), t("settings.importedMsg", { n }));
   } catch (err) {
     console.error("导入失败", err);
-    showAlert(
-      "warn",
-      t("settings.importFailed"),
-      t("settings.importFailedMsg", { err: err instanceof Error ? err.message : String(err) })
-    );
+    showAlert("warn", t("settings.importFailed"), t("settings.importFailedMsg", { err: err instanceof Error ? err.message : String(err) }));
   } finally {
     (e.target as HTMLInputElement).value = "";
   }
 }
 
-/** 「前往下载」按钮：通过 Rust 调系统浏览器打开 URL（Tauri WebView 默认拦截 target=_blank） */
 async function goDownload(url: string) {
   try {
     await tracker.openUrl(url);
   } catch (e: any) {
-    showAlert(
-      "warn",
-      t("settings.openFailed"),
-      t("settings.openDownloadFailed", { err: e?.message || e, url })
-    );
+    showAlert("warn", t("settings.openFailed"), t("settings.openDownloadFailed", { err: e?.message || e, url }));
   }
 }
 
-// 点「检查更新」：调 Rust check_for_update 拉 GitHub Releases
 async function onCheckUpdate() {
   checking.value = true;
   updateResult.value = null;
   try {
     updateResult.value = await tracker.checkUpdate();
     if (updateResult.value.has_update) {
-      showAlert(
-        "info",
-        t("settings.foundNew"),
-        t("settings.newVersionMsg", { current: updateResult.value.current, latest: updateResult.value.latest })
-      );
+      showAlert("info", t("settings.foundNew"), t("settings.newVersionMsg", { current: updateResult.value.current, latest: updateResult.value.latest }));
     } else {
       showAlert("info", t("settings.upToDate"), t("settings.upToDateMsg", { current: updateResult.value.current }));
     }
   } catch (e: any) {
     console.error("检查更新失败", e);
-    showAlert(
-      "warn",
-      t("settings.checkUpdateFailed"),
-      t("settings.checkUpdateFailedMsg", { err: e?.message || e })
-    );
+    showAlert("warn", t("settings.checkUpdateFailed"), t("settings.checkUpdateFailedMsg", { err: e?.message || e }));
   } finally {
     checking.value = false;
   }
@@ -575,164 +856,455 @@ async function onCheckUpdate() {
 </script>
 
 <style scoped>
+/* ============ v0.6.2-beta.19 卡片化样式 ============ */
 .settings {
   display: flex;
   flex-direction: column;
   gap: 16px;
   max-width: 720px;
 }
-.card {
-  padding: 18px 20px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-}
-h3 {
-  font-size: 15px;
-  font-weight: 600;
-  margin: 0 0 14px;
-  color: var(--text);
-}
-h4 {
-  font-size: 13px;
-  margin: 16px 0 8px;
-  color: var(--text-dim);
-  font-weight: 600;
-}
-.field {
-  margin-bottom: 16px;
-}
-.field > label {
-  display: block;
-  font-size: 13px;
-  color: var(--text-dim);
-  margin-bottom: 6px;
-}
-.field input[type="text"],
-.field input[type="number"] {
-  width: 100%;
-  max-width: 320px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  font-size: 14px;
-  background: var(--bg, #fff);
-  color: var(--text);
-}
-.field.row {
+
+/* 页头：左侧品牌色横条 + 标题 */
+.settings-header {
   display: flex;
   align-items: center;
   gap: 10px;
+  margin: 4px 0 8px;
 }
-.field.row label {
+.settings-header h2 {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
   margin: 0;
+  letter-spacing: 0.2px;
 }
-.hint {
+.header-bar {
+  width: 4px;
+  height: 22px;
+  border-radius: 2px;
+  background: var(--accent, #ff7e27);
+}
+
+/* 卡片本体 */
+.setting-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px 18px;
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
+}
+.setting-card:hover {
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+}
+
+/* 卡片头：图标 + 标题/副标题 */
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.head-icon {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+.icon-orange { background: linear-gradient(135deg, #ff8a3d, #ff7e27); }
+.icon-blue   { background: linear-gradient(135deg, #5a9cff, #3b82f6); }
+.icon-green  { background: linear-gradient(135deg, #4cd998, #34c759); }
+.icon-red    { background: linear-gradient(135deg, #ff6b6b, #ef4444); }
+.icon-pink   { background: linear-gradient(135deg, #ff8db3, #ff6b9d); }
+
+.head-text { min-width: 0; }
+.head-text h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--text);
+  line-height: 1.3;
+}
+.head-text p {
+  font-size: 12.5px;
+  color: var(--text-dim, #86868b);
+  margin: 2px 0 0;
+  line-height: 1.45;
+}
+
+/* 卡片 body */
+.card-body { padding: 2px 0 0; }
+
+/* 表单行 */
+.form-row { margin-bottom: 14px; }
+.form-row:last-of-type { margin-bottom: 8px; }
+.form-row > label {
+  display: block;
+  font-size: 13px;
+  color: var(--text-dim, #86868b);
+  margin-bottom: 6px;
+  font-weight: 500;
+}
+.form-row.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.form-row.row > label { margin-bottom: 0; }
+.field-hint {
   font-size: 12px;
-  color: var(--text-dim);
+  color: var(--text-dim, #86868b);
   margin: 6px 0 0;
   line-height: 1.5;
 }
-.danger-hint {
-  color: #c0392b;
-}
-.save {
-  border: none;
-  background: var(--brand, #ff7e27);
-  color: #fff;
-  padding: 9px 20px;
+
+/* 文本输入 */
+.text-input {
+  width: 100%;
+  max-width: 320px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 14px;
-  cursor: pointer;
+  background: var(--bg, #f5f5f7);
+  color: var(--text);
+  transition: border-color 0.15s, background 0.15s;
 }
-.btns {
+.text-input:focus {
+  outline: none;
+  border-color: var(--accent, #ff7e27);
+  background: var(--card);
+  box-shadow: 0 0 0 3px rgba(255, 126, 39, 0.12);
+}
+.text-input.narrow { max-width: 160px; }
+
+/* 胶囊式单选（语言） */
+.radio-pills {
   display: flex;
   gap: 10px;
-  margin: 12px 0;
   flex-wrap: wrap;
 }
-.btns button {
-  border: 1px solid var(--border);
-  background: var(--bg, #fff);
+.radio-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border: 1.5px solid var(--border);
+  border-radius: 999px;
+  font-size: 13px;
   color: var(--text);
-  padding: 8px 16px;
+  background: var(--bg, #f5f5f7);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.radio-pill:hover { border-color: rgba(255, 126, 39, 0.45); }
+.radio-pill.active {
+  border-color: var(--accent, #ff7e27);
+  background: rgba(255, 126, 39, 0.08);
+  color: var(--accent, #ff7e27);
+  font-weight: 500;
+}
+.radio-pill input { display: none; }
+.radio-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border);
+  background: var(--card);
+  position: relative;
+  flex-shrink: 0;
+  transition: border-color 0.15s, background 0.15s;
+}
+.radio-pill.active .radio-dot {
+  border-color: var(--accent, #ff7e27);
+  background: var(--accent, #ff7e27);
+}
+.radio-pill.active .radio-dot::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  background: #fff;
+  border-radius: 50%;
+}
+
+/* 卡片底部操作 */
+.card-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px dashed rgba(0, 0, 0, 0.06);
+}
+
+/* 主按钮（实心品牌色） */
+.primary-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: var(--accent, #ff7e27);
+  color: #fff;
+  padding: 8px 18px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.05s;
+}
+.primary-btn:hover { background: #f56f1a; }
+.primary-btn:active { transform: scale(0.97); }
+.primary-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.primary-btn.outline {
+  background: transparent;
+  color: var(--accent, #ff7e27);
+  border: 1px solid var(--accent, #ff7e27);
+}
+.primary-btn.outline:hover { background: rgba(255, 126, 39, 0.08); }
+
+/* Ghost 按钮（次要操作） */
+.ghost-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg, #f5f5f7);
+  color: var(--text);
+  padding: 7px 14px;
   border-radius: 8px;
   font-size: 13px;
   cursor: pointer;
+  transition: all 0.15s;
 }
-.danger-zone {
-  margin-top: 18px;
-  padding: 12px 14px;
-  border: 1px dashed #e0a;
-  border-radius: 10px;
-  background: rgba(224, 0, 170, 0.04);
+.ghost-btn:hover {
+  border-color: var(--accent, #ff7e27);
+  color: var(--accent, #ff7e27);
+  background: rgba(255, 126, 39, 0.05);
 }
-.danger {
-  border: 1px solid #e0a !important;
-  background: transparent !important;
-  color: #d9534f !important;
+.ghost-btn:active { transform: scale(0.97); }
+.ghost-btn.danger:hover {
+  border-color: #ef4444;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.05);
 }
-.about div {
+
+/* 危险按钮 */
+.danger-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.04);
+  color: #ef4444;
+  padding: 7px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.danger-btn:hover {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: #ef4444;
+}
+.danger-btn:active { transform: scale(0.97); }
+.danger-hint {
+  font-size: 12px;
+  color: #ef4444;
+  margin: 8px 0 0;
+  line-height: 1.5;
+  opacity: 0.8;
+}
+
+/* 按钮行 */
+.btn-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.btn-row-end { justify-content: flex-end; }
+
+/* 设备 ID 条 */
+.id-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.id-mono {
+  flex: 1;
+  min-width: 200px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  padding: 8px 12px;
+  background: var(--bg, #f5f5f7);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  word-break: break-all;
+}
+.id-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+/* 子区（缩进 + 顶部虚线） */
+.sub-zone {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px dashed rgba(0, 0, 0, 0.08);
+}
+.sub-zone h4 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 6px;
+  color: var(--text);
+}
+
+/* 关于区（meta 行） */
+.about-list { display: flex; flex-direction: column; gap: 0; }
+.meta-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 8px 0;
+  font-size: 13px;
   border-bottom: 1px solid var(--border);
-  font-size: 13px;
 }
-.about div:last-child {
-  border-bottom: none;
+.meta-row:last-child { border-bottom: none; }
+.meta-label { color: var(--text-dim, #86868b); }
+.meta-value { color: var(--text); font-weight: 500; }
+.meta-value.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
 }
-.about span {
-  color: var(--text-dim);
+
+/* 桌宠卡（粉色高亮） */
+.pet-card {
+  border-left: 3px solid #ff6b9d;
 }
-.check-update {
-  font-size: 12px;
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--card);
+.pet-hungry {
+  color: var(--accent, #ff7e27);
+  font-weight: 500;
+  font-size: 12.5px;
+  margin: 8px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 皮肤选择器 */
+.pet-skin-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+@media (max-width: 480px) {
+  .pet-skin-grid { grid-template-columns: 1fr; }
+}
+.pet-skin-tile {
+  appearance: none;
+  border: 1.5px solid var(--border, #e5e7eb);
+  border-radius: 10px;
+  padding: 10px 12px;
+  text-align: left;
+  background: var(--bg, #fff);
+  color: inherit;
   cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.05s;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font: inherit;
 }
-.check-update:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.pet-skin-tile:hover { border-color: rgba(255, 126, 39, 0.45); }
+.pet-skin-tile:active { transform: scale(0.98); }
+.pet-skin-tile.is-active {
+  border-color: var(--accent, #ff7e27);
+  background: rgba(255, 126, 39, 0.06);
+  box-shadow: 0 0 0 3px rgba(255, 126, 39, 0.10);
 }
-.update-result {
-  font-size: 13px;
-  padding: 6px 0;
-  color: var(--text-muted);
+.pet-skin-head { display: flex; align-items: center; gap: 6px; }
+.pet-skin-emoji { font-size: 18px; line-height: 1; }
+.pet-skin-name { font-weight: 600; font-size: 13px; }
+.pet-skin-desc { font-size: 11px; opacity: 0.7; line-height: 1.3; }
+
+/* 危险区卡片 */
+.danger-card {
+  border-color: rgba(239, 68, 68, 0.25);
+  background: linear-gradient(to bottom, var(--card), rgba(239, 68, 68, 0.02));
 }
-.update-result.outdated {
-  color: var(--brand, #FF7E27);
+
+/* Toggle Switch（iOS 风） */
+.toggle-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
-.update-result a {
-  margin-left: 8px;
-  color: var(--brand, #FF7E27);
-  text-decoration: underline;
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
 }
-.update-result .link-btn {
+.toggle-slider {
+  display: inline-block; /* span 默认 inline 会让 width/height 失效，必须显式声明 */
+  position: relative;
+  width: 44px;
+  height: 24px;
+  flex-shrink: 0;
+  background: #d1d1d6;
+  border-radius: 12px;
+  transition: background 0.25s ease;
+  vertical-align: middle;
+}
+.toggle-slider::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  transition: transform 0.25s ease;
+}
+.toggle-switch.on .toggle-slider { background: var(--accent, #ff7e27); }
+.toggle-switch.on .toggle-slider::after { transform: translateX(20px); }
+.toggle-state {
+  font-size: 12.5px;
+  color: var(--text-dim, #86868b);
+  font-weight: 500;
+}
+.toggle-switch.on .toggle-state { color: var(--accent, #ff7e27); }
+
+/* 更新结果行 */
+.outdated { color: var(--accent, #FF7E27) !important; }
+.link-btn {
   margin-left: 8px;
   background: none;
-  border: 1px solid var(--brand, #FF7E27);
-  color: var(--brand, #FF7E27);
+  border: 1px solid var(--accent, #FF7E27);
+  color: var(--accent, #FF7E27);
   padding: 2px 10px;
   border-radius: 6px;
   font-size: 12px;
   cursor: pointer;
 }
-.update-result .link-btn:hover {
-  background: var(--brand, #FF7E27);
-  color: #fff;
-}
-.about b {
-  color: var(--text);
-  font-weight: 500;
-}
-.about .mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-}
+.link-btn:hover { background: var(--accent, #FF7E27); color: #fff; }
+
 /* 按设备清理弹窗内设备列表 */
 .device-list {
   display: flex;
@@ -752,21 +1324,13 @@ h4 {
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
 }
-.device-row:hover {
-  background: var(--bg-soft, rgba(0, 0, 0, 0.03));
-}
+.device-row:hover { background: var(--bg-soft, rgba(0, 0, 0, 0.03)); }
 .device-row.checked {
-  border-color: var(--brand, #FF7E27);
+  border-color: var(--accent, #FF7E27);
   background: rgba(255, 126, 39, 0.06);
 }
-.device-row input[type="checkbox"] {
-  margin-top: 4px;
-  cursor: pointer;
-}
-.device-info {
-  flex: 1;
-  min-width: 0;
-}
+.device-row input[type="checkbox"] { margin-top: 4px; cursor: pointer; }
+.device-info { flex: 1; min-width: 0; }
 .device-name {
   font-weight: 600;
   font-size: 13px;
@@ -786,7 +1350,7 @@ h4 {
   font-size: 10px;
   padding: 1px 6px;
   border-radius: 8px;
-  background: var(--brand, #FF7E27);
+  background: var(--accent, #FF7E27);
   color: #fff;
 }
 .default-tag {

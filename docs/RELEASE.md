@@ -40,7 +40,9 @@
 
 | 版本 | 发布日期 | 关键变更 | 是否推荐 |
 |------|----------|----------|----------|
-| v0.5.0 | 2026-07-14 | 多语言国际化（i18n）：新增 zh-CN / en-US 双语切换，设置页下拉即时切换无需重载；前端自生成周期标签 / 分类名 / 时长格式化（vue-i18n + Intl）；图表随语言重渲染。零后端改动。 | ⭐ Latest · 推荐升级 |
+| v0.6.2-beta.1 | 2026-07-24 | 解耦皮肤系统（`src/pet/skins/` 注册表模式）+ 新增 Pop Mart 3D 潮玩桌宠（戴黄帽弹吉他熊猫 portrait）。右键菜单新增"皮肤"切换段，无后端改动。**未触动任何 v0.6.1-beta.1 原有组件**（PetCanvas/Body/Layer/编辑器/引擎/composables/types 一律禁碰）。后续 Live2D / 待办 / 番茄钟等"类似桌宠"小组件按相同 `skins/` 或 `widgets/` 模式即插即用。 | ⭐ Latest · Beta |
+| v0.6.1-beta.1 | 2026-07-21 | 桌面宠物（QQ 企鹅风格）+ 修复主窗口顶部实时栏 IPC 字段名 bug（window_title/session_seconds/idle_seconds 此前用驼峰导致恒为 undefined，已与 Rust 返回值对齐为蛇形）；其余同 v0.6.0-beta.1。Rust 端新增 5 个 pet 命令 + capabilities/pet.json。 | 旧版 |
+| v0.5.0 | 2026-07-14 | 多语言国际化（i18n）：新增 zh-CN / en-US 双语切换，设置页下拉即时切换无需重载；前端自生成周期标签 / 分类名 / 时长格式化（vue-i18n + Intl）；图表随语言重渲染。零后端改动。 | 旧版 |
 | v0.4.5 | 2026-07-14 | 统计概述时间范围联动：切换「今天/近7/14/30天」时「设备使用时间」与「App 使用时长排行」同步按范围聚合刷新。后端 `get_overview`/`get_app_ranking` 新增 `days` 参数（days=0 单日 / days>0 范围聚合），前端 `loadDetails()` 按 `range` 传参；OverviewCard 文案随 range 动态适配（累计/日均时长）。 | 旧版 |
 | v0.4.4 | 2026-07-11 | 修「跨天今天按钮」bug（Dashboard selectedDate 缓存旧日期 → 改为每次 todayStr() 实时取值）+ linux.rs 完整适配 x11rb 0.13 GetPropertyReply 新 API（value8/value32 访问器替代私有 value/value_len 字段）→ CI 三端构建首次全通过 | 旧版 |
 | v0.4.3 | 2026-07-10 | 修「default 幽灵设备」：migrate() 回填改用真实 device_id（取代字面量 'default'）+ sql/schema.sql 补 device 列 + 清理本机脏数据 | 旧版 |
@@ -169,5 +171,5 @@ bash scripts/release-github.sh --draft
 
 ---
 
-**最后更新**：2026-07-11 @v0.4.4
+**最后更新**：2026-07-24 @v0.6.2-beta.1
 **维护人**：所有 AI / 开发者

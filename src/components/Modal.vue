@@ -30,7 +30,7 @@
       <div class="modal-container" :style="{ width }" role="dialog" aria-modal="true">
         <header class="modal-header" :class="type">
           <h3>{{ resolvedTitle }}</h3>
-          <button class="modal-close" @click="onCancel" aria-label="关闭">×</button>
+          <button class="modal-close" @click="onCancel" aria-label="关闭"><AppIcon name="x" /></button>
         </header>
         <div class="modal-body">
           <div v-if="message" class="modal-message">{{ message }}</div>

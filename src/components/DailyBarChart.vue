@@ -141,7 +141,13 @@ function render() {
       scales: {
         x: {
           stacked: true,
-          ticks: { font: { size: 11 }, autoSkip: false, maxRotation: 0 },
+          ticks: {
+            font: { size: 10 },
+            autoSkip: true,
+            maxRotation: 0,
+            // 30天数据量过大，限制X轴标签数避免重叠；≤14天让Chart.js自动处理
+            maxTicksLimit: props.summaries.length > 14 ? 15 : undefined,
+          },
           grid: { display: false },
         },
         y: {

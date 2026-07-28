@@ -183,6 +183,7 @@ pub fn get_current_foreground(state: tauri::State<'_, Arc<AppState>>) -> Current
                 idle_seconds: idle,
                 tracking,
                 window_title: app.window_title,
+                bundle_id: app.bundle_id,
                 session_seconds,
             }
         }
@@ -193,6 +194,7 @@ pub fn get_current_foreground(state: tauri::State<'_, Arc<AppState>>) -> Current
             idle_seconds: idle,
             tracking,
             window_title: None,
+            bundle_id: None,
             session_seconds,
         },
     }
