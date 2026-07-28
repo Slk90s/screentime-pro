@@ -5,9 +5,8 @@
 
 #![cfg(target_os = "windows")]
 
-use windows::Win32::System::SystemInformation::{
-    GetSystemTimes, FILETIME,
-};
+use windows::Win32::Foundation::FILETIME;
+use windows::Win32::System::SystemInformation::GetSystemTimes;
 
 #[derive(Default)]
 pub struct Inner {
