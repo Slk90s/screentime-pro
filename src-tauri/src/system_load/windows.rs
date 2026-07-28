@@ -1,12 +1,13 @@
 //! Windows CPU 使用率监测（GetSystemTimes）
 //!
 //! 取 idle / kernel / user 三个时长；diff 计算使用率。
-//! 用 windows crate 0.58 内置签名（已在 Cargo.toml 中启用 Win32_System_SystemInformation）。
+//! 用 windows crate 0.58 内置签名（`GetSystemTimes` 位于 `Win32::System::Threading`，
+//! `FILETIME` 位于 `Win32::Foundation`；二者特性均已在 Cargo.toml 启用）。
 
 #![cfg(target_os = "windows")]
 
 use windows::Win32::Foundation::FILETIME;
-use windows::Win32::System::SystemInformation::GetSystemTimes;
+use windows::Win32::System::Threading::GetSystemTimes;
 
 #[derive(Default)]
 pub struct Inner {
