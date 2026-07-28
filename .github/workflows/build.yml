@@ -25,7 +25,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          args: --ci --target x86_64-pc-windows-msvc
+          args: --ci --target x86_64-pc-windows-msvc --bundles nsis
           release: false
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -33,7 +33,6 @@ jobs:
           name: windows-build
           path: |
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
 
   # ---------- Linux ----------
   linux:
