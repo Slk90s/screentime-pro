@@ -57,9 +57,9 @@
 
 | 平台 | 文件名格式 | 说明 |
 |------|-----------|------|
-| macOS (Apple Silicon) | `ScreenTime Pro_{ver}_aarch64.dmg` | 拖入「应用程序」即可，需授予「辅助功能」权限 |
-| Windows (x64) | `ScreenTime Pro_{ver}_x64-setup.exe` | 双击运行（NSIS 安装包），需系统已装 **WebView2 运行时**（Win10/11 通常自带） |
-| Linux (x64) | `screentime-pro_{ver}_amd64.AppImage` / `.deb` | 由 CI 在 Linux 环境构建（详见下方「从源码构建」） |
+| macOS (Apple Silicon) | `ScreenTime-Pro_{ver}_aarch64.dmg` | 拖入「应用程序」即可，需授予「辅助功能」权限 |
+| Windows (x64) | `ScreenTime-Pro_{ver}_x64-setup.exe` | 双击运行（NSIS 安装包），需系统已装 **WebView2 运行时**（Win10/11 通常自带） |
+| Linux (x64) | `ScreenTime-Pro_{ver}_amd64.AppImage` / `.deb` | 由 CI 在 Linux 环境构建（详见下方「从源码构建」） |
 
 > 各平台最新安装包（macOS / Windows / Linux 三端）统一发布在 **[GitHub Releases](https://github.com/Slk90s/screentime-pro/releases)**（⭐ v0.6.2-beta.25 Latest）。
 > 本地 `release/v0.6.2-beta.25/` 仅作带版本号归档（不入库）；Linux 因本机构建环境限制需在 CI 中产出（见 `.github/workflows/build.yml`）。
@@ -71,12 +71,12 @@
 > 💡 **下载入口**：所有平台的最新版本请从 **[GitHub Releases](https://github.com/Slk90s/screentime-pro/releases)** 下载（⭐ Latest 自动指向 v0.6.2-beta.25）。
 
 ### macOS
-1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `ScreenTime Pro_0.6.2-beta.25_aarch64.dmg`，打开并拖入「应用程序」。
+1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `ScreenTime-Pro_0.6.2-beta.25_aarch64.dmg`，打开并拖入「应用程序」。
 2. 首次运行：系统设置 › 隐私与安全性 › **辅助功能** 中授予本应用权限（空闲检测必需）。
 3. 程序默认开机自启、启动即开始追踪，菜单栏/托盘常驻。
 
 ### Windows
-1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `ScreenTime Pro_0.6.2-beta.25_x64-setup.exe`（NSIS 安装包）。
+1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `ScreenTime-Pro_0.6.2-beta.25_x64-setup.exe`（NSIS 安装包）。
 2. **首次安装**：若系统未装 WebView2 运行时，安装器会**自动下载并安装**（需联网，几秒到几分钟）。Win10 1809+ / Win11 通常已内置，无需此步。
 3. 托盘右键「退出」可彻底关闭；「设置」页可开关开机自启。
 
