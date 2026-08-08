@@ -14,10 +14,12 @@
  *   - 2026-07-24 @v0.6.2-beta.5: 废弃 - 移除 panda-2d 引导，仅注册 popmart-3d
  */
 import popmartManifest from './popmart3d';
+import spidermanManifest from './spiderman';
 import { skinRegistry } from './registry';
 
-// 注册唯一内置皮肤（v0.6.2-beta.5 起仅 popmart-3d）
+// 注册内置皮肤（v0.6.2-beta.5 起 popmart-3d 为默认；beta.30 新增 spiderman）
 skinRegistry.register(popmartManifest);
+skinRegistry.register(spidermanManifest);
 
 // 重新导出供其他模块使用
 export { skinRegistry } from './registry';

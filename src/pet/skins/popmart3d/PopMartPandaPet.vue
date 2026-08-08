@@ -2,25 +2,18 @@
   pet/skins/popmart3d/PopMartPandaPet.vue
   "Pop Mart 3D 潮玩" 皮肤渲染器（v0.6.2 起）。
 
-  v0.6.2-beta.25 设计变更：
-  - 原单张烤死表情的 PNG 拆为四层独立透明 PNG：
-      body(无眼/无鼻底图) + eyes(两眼弧) + nose(小鼻子) + mouth(合成小嘴)
-    渲染时按 body→mouth→nose→eyes 顺序叠放，每层同 499×640 同坐标。
-  - 眼睛可动（v0.6.2-beta.25）：
-      · JS 定时器每 2s 微调视线 (随机 ±2px)
-      · JS 定时器每 3~5s 眨眼 (scaleY 收缩 150ms)
-      · 不同 PetState 叠加持续视线偏移 (surprised/sad/angry/...)
-  - 嘴可动（v0.6.2-beta.25）：
-      · 状态为 happy/chatting/surprised/angry/developing → 张合 (scaleY 打开)
-      · 状态为 idle/sleeping/sad → 闭合
-  - 保留原有 16 状态 CSS 动画与点击 jump/squash/jolt（作用于整体 .popmart-pet__art，
-    四层一起运动；点击动画作用于根 .popmart-pet）
+  v0.6.2-beta.27 设计变更：
+  - 放弃四层 body / eyes / nose / mouth 切图：切片错位 + body 底图羽化填色，
+    会在五官边缘产生重影/光晕，是「图片割裂」的根因；CSS 投影只能缓解阴影浮层。
+  - 改为单张透明 PNG 渲染，从根本上消除层间错位与重影。
+  - 眼睛/嘴的动态由 emoji 浮层与整体状态动画替代；保留整体 idle 浮动、状态专属动画、
+    点击动效、拖拽走路、系统过载升温等全部交互。
 
   设计：
-  - 主视觉：透明底的 3D 熊猫（戴黄帽抱吉他），浮动在桌宠窗内
-  - 状态差异：emoji 浮层 + CSS 动画 + 眼睛/嘴动效
-  - 透明底生成：原图 → PIL 抠出 eyes/nose 透明层 + 底图对应区域羽化填肤色
-  - 投影：filter: drop-shadow 增强浮动立体感
+  - 主视觉：透明底的 3D 熊猫（戴黄帽抱吉他），以 6 帧序列循环播放，营造呼吸 + 眯眼的微动态
+  - 状态差异：emoji 浮层 + CSS 动画 + 整体 art 动效
+  - 透明底：由多模态模型生成 + PIL 色键输出统一透明 PNG；帧序列由同一张源图 PIL 合成，绝对一致
+  - 投影：filter: drop-shadow 作用于每帧静态 img，增强浮动立体感
 
   解耦点：父组件 PetSkinRenderer 把 props.state 传入即可，状态机/前台监听/喂食都不感知这是哪种皮肤。
 
@@ -31,44 +24,27 @@
     - 2026-07-24 @v0.6.2-beta.7: 动效 - 复合 idle + 6 个状态专属动画
     - 2026-07-25 @v0.6.2-beta.15: 拖拽走路 + 系统过载升温
     - 2026-07-28 @v0.6.2-beta.25: 分层 - 拆 body/eyes/nose/mouth 四层，眼神+嘴动态化
+    - 2026-08-05 @v0.6.2-beta.26: 优化 - 将四层独立投影改为整体统一投影，消除五官割裂感
+    - 2026-08-06 @v0.6.2-beta.27: 重构 - 单张透明 PNG 替代四层切图，从根上修复割裂
+    - 2026-08-06 @v0.6.2-beta.27: 性能 - 投影由动画 art 层下移静态 sprite，消除透明置顶窗每帧重算投影的卡顿；升温态去掉 hue-rotate 滤镜动画（仅保留 transform 抖动）
+    - 2026-08-06 @v0.6.2-beta.28: 体验 - 表情 emoji 浮层由压在脸上改为聚到熊猫头顶上方；idle 增加呼吸缩放让桌宠更"活"
+    - 2026-08-06 @v0.6.2-beta.29: 动画 - 单张 PNG 升级为 6 帧序列（PIL 合成：呼吸缩放 + 眯眼），CSS 逐帧播放；idle 仅保留 translate/rotate 浮动，避免与帧序列双重缩放
 -->
 <template>
   <div class="popmart-pet" :class="containerClass">
     <!--
-      四层同坐标叠放：body(底图) → mouth(嘴) → nose(鼻) → eyes(眼)
-      每层都 width:100% height:100% object-fit:contain，container 也是，
-      故四层在同一可视矩形内对齐（assets 尺寸一致 499×640）。
-      整体 .popmart-pet__art 承载 idle / 状态 / 点击的复合动画。
+      6 帧透明 PNG 序列：同一只熊猫源图 PIL 合成，帧间仅有呼吸缩放 + 眯眼差异。
+      用 CSS opacity + steps(1) 做逐帧播放；.popmart-pet__art 仍承载 idle / 状态 / 点击 / 拖拽走路 / 过载升温 的复合动画。
     -->
     <div class="popmart-pet__art">
       <img
-        :src="bodyUrl"
-        class="popmart-pet__layer popmart-pet__body"
-        :alt="`Pop Mart panda body ${state}`"
+        v-for="(url, i) in frameUrls"
+        :key="i"
+        :src="url"
+        class="popmart-pet__frame"
+        :alt="`Pop Mart panda frame ${i}`"
         draggable="false"
-      />
-      <img
-        :src="mouthUrl"
-        class="popmart-pet__layer popmart-pet__mouth"
-        :class="{ 'is-talking': isTalking }"
-        :style="mouthStyle"
-        alt="mouth"
-        draggable="false"
-      />
-      <img
-        :src="noseUrl"
-        class="popmart-pet__layer popmart-pet__nose"
-        :style="noseStyle"
-        alt="nose"
-        draggable="false"
-      />
-      <img
-        :src="eyesUrl"
-        class="popmart-pet__layer popmart-pet__eyes"
-        :class="{ 'is-blinking': isBlinking }"
-        :style="eyeStyle"
-        :alt="`Pop Mart panda eyes ${state}`"
-        draggable="false"
+        :style="{ animationDelay: `-${(FRAME_COUNT - i) * FRAME_DURATION}s` }"
       />
     </div>
 
@@ -86,13 +62,23 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
+import { computed } from 'vue';
 import type { PetState } from '../../types';
-import bodyUrl from './assets/popmart-panda-body.png';
-import eyesUrl from './assets/popmart-panda-eyes.png';
-import noseUrl from './assets/popmart-panda-nose.png';
-import mouthUrl from './assets/popmart-panda-mouth.png';
+import frame0 from './assets/popmart-panda-frame-0.png';
+import frame1 from './assets/popmart-panda-frame-1.png';
+import frame2 from './assets/popmart-panda-frame-2.png';
+import frame3 from './assets/popmart-panda-frame-3.png';
+import frame4 from './assets/popmart-panda-frame-4.png';
+import frame5 from './assets/popmart-panda-frame-5.png';
 import { usePetBadges } from '../../composables/usePetBadges';
+
+/** 帧动画总时长（秒） */
+const FRAME_TOTAL_DURATION = 1.2;
+/** 帧数 */
+const FRAME_COUNT = 6;
+/** 单帧时长 */
+const FRAME_DURATION = FRAME_TOTAL_DURATION / FRAME_COUNT;
+const frameUrls = [frame0, frame1, frame2, frame3, frame4, frame5];
 
 const props = defineProps<{ state: PetState; overrideBadges?: string[] | null }>();
 const { getCustomBadge } = usePetBadges();
@@ -130,92 +116,6 @@ const badges = computed<string[]>(() => {
 });
 const badgeLayout = computed(() => STATE_BADGE_LAYOUT[props.state] ?? 'single');
 const containerClass = computed(() => `state-${props.state}`);
-
-// ---- 眼神 + 眨眼（v0.6.2-beta.25） ----
-// 持续视线偏移（按状态）：surprised=上看、sad=下看+左、angry=右看、gaming=盯、happy=微左
-const STATE_EYE_OFFSET: Partial<Record<PetState, { x: number; y: number }>> = {
-  idle: { x: 0, y: 0 },
-  working: { x: -0.5, y: 1 },     // 微低
-  developing: { x: 0, y: 1 },      // 盯屏幕下
-  designing: { x: 1, y: -0.5 },
-  gaming: { x: 1, y: 0.5 },        // 盯前方
-  chatting: { x: 0, y: 0 },
-  meeting: { x: 0, y: -1 },
-  listening: { x: 0.5, y: 0 },
-  shopping: { x: 1, y: 0 },
-  eating: { x: 0, y: 1.5 },
-  sleeping: { x: 0, y: 0 },        // 闭眼态（眼睛仍叠但动画被吞）
-  slacking: { x: -1, y: 1 },
-  happy: { x: 0.5, y: -0.5 },
-  sad: { x: -1.2, y: 1.2 },        // 下左
-  angry: { x: 1.5, y: -0.5 },      // 瞪右上
-  surprised: { x: 0, y: -1.8 },    // 上看
-};
-const eyeGazeX = ref(0);
-const eyeGazeY = ref(0);
-let gazeTimer: number | null = null;
-
-// idle 微漂（每 1.8s 轻微随机偏移 ±1.5px，叠加在状态偏移上）
-function driftGaze(): void {
-  const stateOffset = STATE_EYE_OFFSET[props.state] ?? { x: 0, y: 0 };
-  eyeGazeX.value = stateOffset.x + (Math.random() - 0.5) * 1.6;
-  eyeGazeY.value = stateOffset.y + (Math.random() - 0.5) * 1.2;
-}
-
-// 眨眼（每 3.2~5.0s 触发，闭 150ms）
-const isBlinking = ref(false);
-let blinkTimer: number | null = null;
-function scheduleBlink(): void {
-  const delay = 3200 + Math.random() * 1800;
-  blinkTimer = window.setTimeout(() => {
-    isBlinking.value = true;
-    window.setTimeout(() => { isBlinking.value = false; }, 140);
-    scheduleBlink();
-  }, delay);
-}
-
-const eyeStyle = computed(() => ({
-  transform: `translate(${eyeGazeX.value}px, ${eyeGazeY.value}px)`,
-}));
-
-// ---- 嘴部张合 ----
-const TALKING_STATES: PetState[] = ['happy', 'chatting', 'surprised', 'angry', 'developing'];
-const isTalking = computed(() => TALKING_STATES.includes(props.state));
-// 嘴部微动：说话时小幅垂直呼吸 (scaleY 1↔1.4)
-const mouthBobY = ref(0);
-let mouthTimer: number | null = null;
-function scheduleMouthBob(): void {
-  mouthTimer = window.setTimeout(() => {
-    if (isTalking.value) {
-      mouthBobY.value = Math.sin(Date.now() / 120) * 0.6;
-    } else {
-      mouthBobY.value = 0;
-    }
-    scheduleMouthBob();
-  }, 140);
-}
-const mouthStyle = computed(() => ({
-  transform: `translateY(${mouthBobY.value}px)`,
-}));
-
-// ---- 鼻子：轻动（惊讶/开心时缩放） ----
-const noseStyle = computed(() => {
-  if (props.state === 'surprised') return { transform: 'scale(1.15)' };
-  if (props.state === 'happy') return { transform: 'scale(1.06)' };
-  return {};
-});
-
-onMounted(() => {
-  driftGaze();
-  gazeTimer = window.setInterval(driftGaze, 1800);
-  scheduleBlink();
-  scheduleMouthBob();
-});
-onBeforeUnmount(() => {
-  if (gazeTimer !== null) clearInterval(gazeTimer);
-  if (blinkTimer !== null) clearTimeout(blinkTimer);
-  if (mouthTimer !== null) clearTimeout(mouthTimer);
-});
 </script>
 
 <style scoped>
@@ -235,7 +135,7 @@ onBeforeUnmount(() => {
   transition: transform 0.2s ease;
 }
 
-/* ========== 四层叠放 art 容器 ========== */
+/* ========== 单张精灵 art 容器 ========== */
 .popmart-pet__art {
   position: relative;
   width: 100%;
@@ -243,55 +143,42 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  /* 复合 idle + 状态 + 点击 动画 全部作用于此层 */
+  /* 复合 idle + 状态 + 点击 + 拖拽 + 过载 动画 全部作用于此层（仅 transform，确保进入 GPU 合成层、不每帧重绘） */
   animation: pm-panda-idle 4.2s ease-in-out infinite;
   transform-origin: 50% 90%;
   will-change: transform;
 }
 
-.popmart-pet__layer {
+.popmart-pet__frame {
   position: absolute;
   width: 100%;
   height: 100%;
   object-fit: contain;
   display: block;
   pointer-events: none;
+  /* 投影放在静态 img 上（img 不跑动画）：投影只光栅化一次并缓存；
+     若放到上方 .art 会与 transform 动画同层，导致透明置顶窗每帧重算投影 → 卡顿 */
   filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.28))
           drop-shadow(0 1px 2px rgba(0, 0, 0, 0.18));
+  /* 帧序列：默认不可见，由 pm-frame-play 在各自时间窗内显示一帧；
+     不用 steps() —— 此处是逐帧 opacity 硬切，steps(1) 反而会让每帧整周期常显 */
+  opacity: 0;
+  animation: pm-frame-play 1.2s infinite;
 }
-.popmart-pet__body {
-  z-index: 1;
-}
-.popmart-pet__mouth {
-  z-index: 2;
-  /* 嘴默认 scaleY(1)；说话时张开 (CSS keyframe) */
-  transform-origin: 50% 50%;
-  transition: transform 0.18s ease;
-}
-.popmart-pet__mouth.is-talking {
-  animation: pm-mouth-talk 0.36s ease-in-out infinite alternate;
-  transform-origin: 50% 50%;
-}
-.popmart-pet__nose {
-  z-index: 3;
-  transition: transform 0.2s ease;
-}
-.popmart-pet__eyes {
-  z-index: 4;
-  transform-origin: 50% 50%;
-  transition: transform 0.25s ease;
-}
-.popmart-pet__eyes.is-blinking {
-  animation: pm-blink 0.14s ease-in-out;
-  transform-origin: 50% 50%;
+@keyframes pm-frame-play {
+  0%, 16.66% { opacity: 1; }
+  16.67%, 100% { opacity: 0; }
 }
 
 /* ========== 状态级动画（作用于整体 art） ========== */
 .popmart-pet.state-sleeping .popmart-pet__art {
   animation: pm-panda-breathe 3.6s ease-in-out infinite;
 }
-.popmart-pet.state-sleeping .popmart-pet__layer {
-  filter: brightness(0.92);
+.popmart-pet.state-sleeping .popmart-pet__frame {
+  /* 保留投影前缀，仅叠加变暗；静态 filter 在状态切换时算一次，不随动画重绘 */
+  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.28))
+          drop-shadow(0 1px 2px rgba(0, 0, 0, 0.18))
+          brightness(0.92);
 }
 .popmart-pet.state-working .popmart-pet__art,
 .popmart-pet.state-developing .popmart-pet__art,
@@ -331,53 +218,72 @@ onBeforeUnmount(() => {
 .popmart-pet.is-walking .popmart-pet__art {
   animation: pm-panda-walk 0.42s linear infinite;
 }
-/* 系统过载升温 */
+/* 系统过载升温：仅用 transform 抖动（合成层便宜，透明窗每帧零重绘）；
+   🔥 视觉提示由 PetWindow 的 .pet-overheat-badge 提供；
+   不再用 hue-rotate 滤镜动画——hue-rotate 每帧重算颜色，是顶级开销且破坏合成层 */
 .popmart-pet.is-heating .popmart-pet__art {
-  animation:
-    pm-panda-overheat-shake 0.18s linear infinite,
-    pm-panda-overheat-tint 1.2s ease-in-out infinite alternate;
+  animation: pm-panda-overheat-shake 0.18s linear infinite;
 }
-.popmart-pet.is-heating .popmart-pet__layer {
-  filter:
-    drop-shadow(0 4px 8px rgba(0, 0, 0, 0.28))
-    drop-shadow(0 1px 2px rgba(0, 0, 0, 0.18))
-    hue-rotate(-12deg) saturate(1.6) brightness(1.05);
+/* v0.7.0：喂食反应（菜单 pet-fed → 桌宠进食点头 + 飘「好吃」气泡）；
+   与 is-heating 同特异性，置于其后保证进食反馈优先 */
+.popmart-pet.is-fed .popmart-pet__art {
+  animation: pm-panda-nod 0.7s ease-in-out 2;
 }
 
-/* ========== 表情/眼/嘴 keyframes ========== */
-@keyframes pm-blink {
-  0%, 100% { transform: scaleY(1); }
-  50%      { transform: scaleY(0.08); }
+/* ========== 表情浮层（emoji 装饰） ========== */
+/* v0.6.2-beta.28：聚到窗口顶部（熊猫头顶上方），不再压在脸上 */
+.popmart-pet__badges {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 2px;
+  max-width: 92%;
+  pointer-events: none;
+  z-index: 6;
 }
-@keyframes pm-mouth-talk {
-  0%   { transform: scaleY(1)   translateY(0); }
-  100% { transform: scaleY(1.7) translateY(0); }
+/* 不同状态仅微调间距，统一贴在头顶 */
+.popmart-pet__badges.double { gap: 2px 3px; }
+.popmart-pet__badges.triple { gap: 2px 3px; }
+.popmart-pet__badges.scatter { gap: 3px; }
+.popmart-pet__badge {
+  display: inline-block;
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 8px;
+  padding: 1px 4px;
+  margin: 1px;
+  font-family: -apple-system, "Segoe UI Emoji", sans-serif;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+  animation: pm-badge-pop 0.6s ease-out backwards;
 }
-@keyframes pm-panda-overheat-shake {
-  0%, 100% { transform: translate(0, 0); }
-  25%      { transform: translate(-0.8px, 0.4px) rotate(-0.4deg); }
-  50%      { transform: translate(0.7px, -0.5px) rotate(0.3deg); }
-  75%      { transform: translate(-0.4px, -0.4px) rotate(-0.2deg); }
+@keyframes pm-badge-pop {
+  0% { opacity: 0; transform: scale(0.4); }
+  100% { opacity: 1; transform: scale(1); }
 }
-@keyframes pm-panda-overheat-tint {
-  0%   { filter: brightness(1.0) hue-rotate(-10deg); }
-  50%  { filter: brightness(1.1) hue-rotate(-18deg) saturate(1.5); }
-  100% { filter: brightness(1.0) hue-rotate(-10deg); }
-}
-@keyframes pm-panda-walk {
-  0%   { transform: rotate(-3deg) translateY(0); }
-  25%  { transform: rotate(0deg) translateY(-2px); }
-  50%  { transform: rotate(3deg) translateY(0); }
-  75%  { transform: rotate(0deg) translateY(-2px); }
-  100% { transform: rotate(-3deg) translateY(0); }
-}
+
+/* ========== 点击动效（作用于根） ========== */
+.popmart-pet.pet-anim-bounce { animation: pm-click-bounce 0.4s ease; }
+.popmart-pet.pet-anim-shake  { animation: pm-click-shake 0.4s ease; }
+.popmart-pet.pet-anim-spin   { animation: pm-click-spin 0.6s ease; }
+.popmart-pet.pet-anim-shrink { animation: pm-click-shrink 0.5s ease; }
+.popmart-pet.pet-anim-jump   { animation: pm-click-jump 0.45s cubic-bezier(0.3, 1.5, 0.5, 1); }
+.popmart-pet.pet-anim-squash { animation: pm-click-squash 0.5s ease; }
+.popmart-pet.pet-anim-jolt   { animation: pm-click-jolt 0.32s ease; }
+
+/* ========== 所有 keyframes ========== */
+/* v0.6.2-beta.28：加入呼吸缩放（scaleY 起伏），让桌宠静止时也"活着"；
+   v0.6.2-beta.29：移除 idle 的 scale，呼吸改由 6 帧 PIL 序列承担，避免双重缩放 */
 @keyframes pm-panda-idle {
-  0%   { transform: translateY(0) rotate(-0.6deg) scale(1); }
-  20%  { transform: translateY(-3px) rotate(0.8deg) scale(1.005); }
-  40%  { transform: translateY(-5px) rotate(-0.4deg) scale(1.012); }
-  60%  { transform: translateY(-3px) rotate(0.6deg) scale(1.008); }
-  80%  { transform: translateY(-1px) rotate(-0.8deg) scale(1.002); }
-  100% { transform: translateY(0) rotate(-0.6deg) scale(1); }
+  0%   { transform: translateY(0) rotate(-0.8deg); }
+  25%  { transform: translateY(-4px) rotate(0.8deg); }
+  50%  { transform: translateY(-7px) rotate(-0.4deg); }
+  75%  { transform: translateY(-3px) rotate(0.6deg); }
+  100% { transform: translateY(0) rotate(-0.8deg); }
 }
 @keyframes pm-panda-breathe {
   0%, 100% { transform: scale(1); }
@@ -429,53 +335,19 @@ onBeforeUnmount(() => {
   0%, 100% { transform: translateY(0) rotate(0); }
   50%      { transform: translateY(2px) rotate(-3deg); }
 }
-
-/* ========== 表情浮层（emoji 装饰） ========== */
-.popmart-pet__badges {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
+@keyframes pm-panda-walk {
+  0%   { transform: rotate(-3deg) translateY(0); }
+  25%  { transform: rotate(0deg) translateY(-2px); }
+  50%  { transform: rotate(3deg) translateY(0); }
+  75%  { transform: rotate(0deg) translateY(-2px); }
+  100% { transform: rotate(-3deg) translateY(0); }
 }
-.popmart-pet__badges.single {
-  display: flex; align-items: center; justify-content: center;
+@keyframes pm-panda-overheat-shake {
+  0%, 100% { transform: translate(0, 0); }
+  25%      { transform: translate(-0.8px, 0.4px) rotate(-0.4deg); }
+  50%      { transform: translate(0.7px, -0.5px) rotate(0.3deg); }
+  75%      { transform: translate(-0.4px, -0.4px) rotate(-0.2deg); }
 }
-.popmart-pet__badges.double {
-  display: flex; flex-direction: column;
-  align-items: flex-end; justify-content: flex-start;
-  padding: 4px 6px; gap: 2px;
-}
-.popmart-pet__badges.triple {
-  display: flex; align-items: center; justify-content: center; gap: 2px;
-  padding-top: 6px;
-}
-.popmart-pet__badges.scatter {
-  display: flex; flex-wrap: wrap; align-content: space-around; justify-content: space-around;
-  padding: 8px;
-}
-.popmart-pet__badge {
-  display: inline-block;
-  font-size: 12px;
-  background: rgba(255, 255, 255, 0.85);
-  border-radius: 8px;
-  padding: 1px 4px;
-  margin: 1px;
-  font-family: -apple-system, "Segoe UI Emoji", sans-serif;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
-  animation: pm-badge-pop 0.6s ease-out backwards;
-}
-@keyframes pm-badge-pop {
-  0% { opacity: 0; transform: scale(0.4); }
-  100% { opacity: 1; transform: scale(1); }
-}
-
-/* ========== 点击动效（与原组件一致，作用于根） ========== */
-.popmart-pet.pet-anim-bounce { animation: pm-click-bounce 0.4s ease; }
-.popmart-pet.pet-anim-shake  { animation: pm-click-shake 0.4s ease; }
-.popmart-pet.pet-anim-spin   { animation: pm-click-spin 0.6s ease; }
-.popmart-pet.pet-anim-shrink { animation: pm-click-shrink 0.5s ease; }
-.popmart-pet.pet-anim-jump   { animation: pm-click-jump 0.45s cubic-bezier(0.3, 1.5, 0.5, 1); }
-.popmart-pet.pet-anim-squash { animation: pm-click-squash 0.5s ease; }
-.popmart-pet.pet-anim-jolt   { animation: pm-click-jolt 0.32s ease; }
 @keyframes pm-click-bounce {
   0%, 100% { transform: scale(1); }
   40% { transform: scale(1.15) translateY(-4px); }

@@ -8,13 +8,18 @@
   - 已删除：Body/Eyes/Mouth/Brows/Decorations 素材面板、拖拽合成、文件替换、配置导入导出
 
   交互：
-  1. 左侧实时预览：直接复用 PopMartPandaPet（与真实桌宠同一渲染器），按选中状态显示 emoji 浮层
+  1. 左侧实时预览：复用注册表当前活跃皮肤的渲染器（skinRegistry.active().renderer，与真实桌宠同一渲染器，
+     切换皮肤自动重建），按选中状态显示 emoji 浮层；下方「互动预览」可触发各点击反应（含蜘蛛侠射蛛丝）。
   2. 右侧：状态选择 + emoji 输入框 + 常用表情快速点选
   3. 保存 → 写入 localStorage 并广播 pet-custom-updated，实时桌宠（独立 webview）跨窗口同步
 
   修改历史：
     - 2026-07-17 @v0.6.0-beta.1: 初始创建 - 2D 部件合成编辑器
     - 2026-07-24 @v0.6.2-beta.6: 重构 - 删除 2D 部件编辑，改为 3D 桌宠按状态配置 emoji 表情
+    - 2026-08-07 @v0.6.2-beta.31: 优化 - 预览改为皮肤感知（修掉写死熊猫导致蜘蛛侠皮肤预览错误）；
+      新增「互动预览」区（触发 jump/squash/jolt/web 反应）；清理 i18n（补全缺失 key、修正标题）
+    - 2026-08-08 @v0.6.2-36: 优化 - 蜘蛛侠皮肤新增「待机小动作」预览（荡丝 / 摆 pose / 蹲防 / 射蛛丝），
+      通过 previewAction prop 驱动姿势图切换；与「点击反应」分区，动作覆盖更全面。
 -->
 <template>
   <Transition name="editor-fade">
@@ -44,15 +49,49 @@
 
         <!-- 主区域：左预览 + 右表情配置 -->
         <div class="editor-body">
-          <!-- 左侧：实时预览（与真实桌宠同渲染器） -->
+          <!-- 左侧：实时预览（与真实桌宠同渲染器，皮肤感知） -->
           <div class="preview-area">
             <div class="preview-label">{{ t('pet.editor.preview', 'Preview') }}</div>
             <div class="preview-stage">
-              <PopMartPandaPet :state="selectedState" :override-badges="previewBadges" />
+              <component
+                v-if="previewRenderer"
+                :is="previewRenderer"
+                :key="previewSkinTick"
+                :state="selectedState"
+                :override-badges="previewBadges"
+                :class="previewAnim"
+                v-bind="isSpiderman ? { 'preview-action': previewIdleAction } : {}"
+              />
             </div>
             <div class="preview-state-name">{{ t(`pet.state.${selectedState}`, selectedState) }}</div>
+
+            <!-- 互动预览：触发各点击反应，直观看到表情动画（蜘蛛侠含射蛛丝） -->
+            <div class="reaction-test">
+              <div class="reaction-test__title">{{ t('pet.editor.reactionTest', '点击反应') }}</div>
+              <div class="reaction-test__row">
+                <button class="react-btn" @click="triggerReaction('pet-anim-jump')">{{ t('pet.editor.reactionJump', '跳跃') }}</button>
+                <button class="react-btn" @click="triggerReaction('pet-anim-squash')">{{ t('pet.editor.reactionSquash', '弹压') }}</button>
+                <button class="react-btn" @click="triggerReaction('pet-anim-jolt')">{{ t('pet.editor.reactionJolt', '抖动') }}</button>
+                <button v-if="isSpiderman" class="react-btn web" @click="triggerReaction('pet-anim-web')">{{ t('pet.editor.reactionWeb', '射蛛丝') }}</button>
+              </div>
+              <p v-if="isSpiderman" class="reaction-note">
+                {{ t('pet.editor.skinWebNote', '蜘蛛侠皮肤：单击桌宠会轮流触发 跳跃 / 弹压 / 抖动 / 射蛛丝') }}
+              </p>
+            </div>
+
+            <!-- 蜘蛛侠待机小动作预览：让编辑者能直接看到 swing / pose / crouch / web 四个姿势（v0.6.2-36） -->
+            <div v-if="isSpiderman" class="reaction-test idle-actions">
+              <div class="reaction-test__title">{{ t('pet.editor.idleTest', '待机小动作') }}</div>
+              <div class="reaction-test__row">
+                <button class="react-btn" @click="triggerIdleAction('spidey-action-swing')">{{ t('pet.editor.idleSwing', '荡丝') }}</button>
+                <button class="react-btn" @click="triggerIdleAction('spidey-action-pose')">{{ t('pet.editor.idlePose', '摆 pose') }}</button>
+                <button class="react-btn" @click="triggerIdleAction('spidey-action-crouch')">{{ t('pet.editor.idleCrouch', '蹲防') }}</button>
+                <button class="react-btn web" @click="triggerIdleAction('spidey-action-web')">{{ t('pet.editor.idleWeb', '射蛛丝') }}</button>
+              </div>
+            </div>
+
             <p class="preview-tip">
-              <AppIcon name="paw" /> {{ t('pet.editor.previewTip', 'Live preview of the 3D pet') }}
+              <AppIcon name="paw" /> {{ t('pet.editor.previewTip', '实时预览当前皮肤的桌宠') }}
             </p>
           </div>
 
@@ -93,10 +132,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, watchEffect, type Component } from 'vue';
 import { useI18n } from 'vue-i18n';
-import PopMartPandaPet from '../skins/popmart3d/PopMartPandaPet.vue';
 import { ALL_STATES } from '../engine/stateMachine';
+import { skinRegistry } from '../skins/registry';
 import type { PetState } from '../types';
 import { usePetBadges } from '../composables/usePetBadges';
 import { emit as emitGlobal } from '@tauri-apps/api/event';
@@ -111,6 +150,56 @@ const emit = defineEmits<{ (e: 'close'): void }>();
 const selectedState = ref<PetState>('idle');
 const editingEmoji = ref('');
 const savedTip = ref(false);
+
+// ---- 皮肤感知预览（复用注册表当前活跃皮肤渲染器，切换皮肤自动重建） ----
+const previewRenderer = ref<Component | null>(null);
+const previewSkinTick = ref(0);
+const isSpiderman = ref(false);
+watchEffect(() => {
+  const m = skinRegistry.active();
+  isSpiderman.value = m.id === 'spiderman';
+  if (m.renderer !== previewRenderer.value) {
+    previewRenderer.value = m.renderer;
+    previewSkinTick.value++;
+  }
+});
+
+// ---- 互动预览：触发点击反应动画（在预览中播放，便于直观看到表情） ----
+const previewAnim = ref('');
+let reactionTimer: number | null = null;
+function triggerReaction(anim: string): void {
+  if (reactionTimer !== null) clearTimeout(reactionTimer);
+  // 点击反应与待机小动作互斥，避免 pose 图与 click 动画叠加
+  previewIdleAction.value = '';
+  if (idleTimer !== null) { clearTimeout(idleTimer); idleTimer = null; }
+  // 先清空再于下一帧赋值，确保同一反应可重复触发
+  previewAnim.value = '';
+  requestAnimationFrame(() => {
+    previewAnim.value = anim;
+    reactionTimer = window.setTimeout(() => { previewAnim.value = ''; }, 900);
+  });
+}
+
+// ---- 待机小动作预览（蜘蛛侠专属）：直接驱动 SpiderManPet 的姿势图切换 ----
+const previewIdleAction = ref('');
+let idleTimer: number | null = null;
+const IDLE_ACTION_DURATIONS: Record<string, number> = {
+  'spidey-action-swing': 1700,
+  'spidey-action-pose': 1000,
+  'spidey-action-crouch': 1000,
+  'spidey-action-web': 700,
+};
+function triggerIdleAction(action: string): void {
+  if (idleTimer !== null) clearTimeout(idleTimer);
+  // 与点击反应互斥
+  previewAnim.value = '';
+  if (reactionTimer !== null) { clearTimeout(reactionTimer); reactionTimer = null; }
+  previewIdleAction.value = '';
+  requestAnimationFrame(() => {
+    previewIdleAction.value = action;
+    idleTimer = window.setTimeout(() => { previewIdleAction.value = ''; }, IDLE_ACTION_DURATIONS[action] ?? 1000);
+  });
+}
 
 // 预览：把当前输入按字形切分喂给渲染器（空串 → 不覆盖，渲染器回退默认）
 const previewBadges = computed<string[] | null>(() => {
@@ -315,7 +404,7 @@ function onClose(): void {
     rgba(255, 255, 255, 0.03);
   border: 1px dashed rgba(255, 255, 255, 0.12);
   border-radius: 16px;
-  overflow: hidden;
+  overflow: visible; /* 让蜘蛛侠射出的蛛丝网不被裁切 */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -331,6 +420,47 @@ function onClose(): void {
   margin: 8px 0 0;
   line-height: 1.4;
   display: flex; align-items: center; gap: 4px; justify-content: center;
+}
+
+/* 互动预览 */
+.reaction-test {
+  width: 100%;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  text-align: center;
+}
+.reaction-test__title {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.45);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-bottom: 6px;
+}
+.reaction-test__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+}
+.react-btn {
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.react-btn:hover { background: rgba(255, 126, 39, 0.16); border-color: rgba(255, 126, 39, 0.4); color: #FF7E27; }
+.react-btn.web { color: #5ec8ff; border-color: rgba(94, 200, 255, 0.3); }
+.react-btn.web:hover { background: rgba(94, 200, 255, 0.16); border-color: rgba(94, 200, 255, 0.5); color: #5ec8ff; }
+.reaction-note {
+  font-size: 10px;
+  color: rgba(94, 200, 255, 0.85);
+  margin: 8px 0 0;
+  line-height: 1.4;
 }
 
 /* 配置区 */

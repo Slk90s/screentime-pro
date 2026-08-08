@@ -60,6 +60,7 @@
       :visible="showPicker"
       :value="selectedDate"
       @select="onPickDate"
+      @goto-today="onGotoToday"
       @close="showPicker = false"
     />
   </div>
@@ -150,6 +151,12 @@ function onPickDate(d: string) {
   selectedDate.value = d;
   showPicker.value = false;
   loadDetails({ days: 0, date: d });
+}
+// v0.7.0：日历点「今天」——同步跳到今天所在月并刷新当天数据，但保持选择器打开
+// （让「日历视图跳转到今天」的视觉效果可见；与 Dashboard 顶部「回到今天」按钮互补）
+function onGotoToday() {
+  selectedDate.value = todayStr();
+  loadDetails({ days: 0, date: selectedDate.value });
 }
 // 回到今天（每次调用实时取系统当前日期，解决跨天后仍显示旧日期的 bug）
 function backToToday() {

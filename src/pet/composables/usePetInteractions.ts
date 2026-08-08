@@ -8,13 +8,17 @@
  * - 单击 *头* 取 happy 基底（仍走 happy）但动画随机；单击 *身体* 取 angry 基底。
  * - 单击、双击、长按动作分离：单击轮流 / 双击固定 spin-burst / 长按固定心疼 shrink。
  * - 状态临时覆盖 1.4s 后回到 idle（不打断自动监听）。
+ * - v0.6.2-beta.31：皮肤感知——蜘蛛侠皮肤下单击轮转额外加入 pet-anim-web（跳起射蛛丝网）。
  *
  * 修改历史：
  *   - 2026-07-17 @v0.6.0-beta.1: 初始创建 - 4 类点击反应
  *   - 2026-07-25 @v0.6.2-beta.15: 改造 - 单击轮流 jump/squash/jolt，长按为心疼
+ *   - 2026-08-07 @v0.6.2-beta.31: 蜘蛛侠皮肤下单击轮转加入 web（跳起射蛛丝网），由注册表活跃皮肤判定
+ *   - 2026-08-07 @v0.6.2-33: 修复 detach() 用内联箭头函数导致 removeEventListener 永远匹配不到 (BUG-4)
  */
 import { ref, onBeforeUnmount } from 'vue';
 import { petStore } from '../stores/petStore';
+import { skinRegistry } from '../skins/registry';
 import type { PetState } from '../types';
 
 interface UsePetInteractionsReturn {
@@ -38,6 +42,18 @@ const CLICK_VARIANTS: { anim: string; state: PetState }[] = [
   { anim: 'pet-anim-squash', state: 'surprised' }, // 压扁：被压成饼再弹起
   { anim: 'pet-anim-jolt', state: 'angry' },     // 抖动：原地高频颤
 ];
+
+/**
+ * 单击轮转的变体列表（皮肤感知）。
+ * 蜘蛛侠皮肤额外加入「跳起射蛛丝网」（pet-anim-web），其余皮肤保持原 3 种。
+ */
+function clickVariants(): { anim: string; state: PetState }[] {
+  const variants = [...CLICK_VARIANTS];
+  if (skinRegistry.active().id === 'spiderman') {
+    variants.push({ anim: 'pet-anim-web', state: 'happy' });
+  }
+  return variants;
+}
 
 export function usePetInteractions(): UsePetInteractionsReturn {
   const animClass = ref('');
@@ -76,8 +92,9 @@ export function usePetInteractions(): UsePetInteractionsReturn {
     }
 
     if (isHead) {
-      // 单击头：用 jump/squash/jolt 中偏轻的 happy/surprised 系，挑下一个变体
-      const variant = CLICK_VARIANTS[clickIndex % CLICK_VARIANTS.length];
+      // 单击头：用 jump/squash/jolt/web 中偏轻的 happy/surprised 系，挑下一个变体
+      const variants = clickVariants();
+      const variant = variants[clickIndex % variants.length];
       clickIndex += 1;
       setTemporaryState(variant.state, variant.anim);
     } else {
@@ -95,15 +112,22 @@ export function usePetInteractions(): UsePetInteractionsReturn {
     }, LONG_PRESS_MS);
   }
 
+  // v0.6.2-33 (BUG-4 fix): 保存绑定引用，否则 detach 永远匹配不到
+  let boundPointerUp: ((e: PointerEvent) => void) | null = null;
+  let boundEl: HTMLElement | null = null;
+
   function attach(el: HTMLElement | null): void {
     if (!el) return;
-    el.addEventListener('pointerup', (e) => onPointerUp(e, el));
+    boundEl = el;
+    boundPointerUp = (e: PointerEvent) => onPointerUp(e, el);
+    el.addEventListener('pointerup', boundPointerUp);
     el.addEventListener('pointerdown', onPointerDownForLongPress);
   }
   function detach(el: HTMLElement | null): void {
     if (!el) return;
-    el.removeEventListener('pointerup', (e) => onPointerUp(e, el));
+    if (boundPointerUp) el.removeEventListener('pointerup', boundPointerUp);
     el.removeEventListener('pointerdown', onPointerDownForLongPress);
+    if (el === boundEl) { boundPointerUp = null; boundEl = null; }
   }
 
   onBeforeUnmount(() => {

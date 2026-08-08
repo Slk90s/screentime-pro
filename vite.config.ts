@@ -15,10 +15,13 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
-    host: false,
+    // 强制 IPv4：本机 hosts 已注释 localhost 映射（走 DNS），WebView2 解析
+    // localhost 可能先命中 ::1(IPv6)，而 dev server 仅监听 127.0.0.1(IPv4)，
+    // 导致窗口白屏/黑屏且前端永不加载。显式绑定 127.0.0.1 消除歧义。
+    host: "127.0.0.1",
     hmr: {
       protocol: "ws",
-      host: "localhost",
+      host: "127.0.0.1",
       port: 1421,
     },
     watch: {

@@ -12,6 +12,7 @@
     - 2026-07-08 @v0.2.0: 初始创建 - 主窗口骨架 + 桌宠窗口分支
     - 2026-07-24 @v0.6.1-beta.1: 修复 - 顶部实时栏 IPC 字段名 bug（camelCase → snake_case，与 Rust 返回值对齐）
     - 2026-07-25 @v0.6.2-beta.17: 新增 - 桌宠右键菜单独立 webview 分支
+    - 2026-08-05 @v0.6.2-beta.26: 修复 - 浏览器预览时 getCurrentWebviewWindow() 抛错导致白屏
 -->
 <template>
   <!-- v0.6.0-beta 桌宠窗口分支：独立 webview 渲染 PetWindow（透明/置顶/无主 UI） -->
@@ -77,11 +78,14 @@
 import { ref, onMounted, onBeforeUnmount, computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { isTauri } from "./api/tracker";
 
 // v0.6.0-beta 桌宠窗口检测：当前 webview label 是 'pet' 时只渲染 PetWindow（透明/置顶）
-const isPetWindow = getCurrentWebviewWindow().label === "pet";
+// 浏览器预览（非 Tauri）下没有 webview，直接返回 false，避免 getCurrentWebviewWindow() 抛错导致白屏
+const currentLabel = isTauri ? getCurrentWebviewWindow().label : "";
+const isPetWindow = currentLabel === "pet";
 // v0.6.2-beta.17 桌宠菜单窗口检测：label 是 'pet-menu' 时只渲染 PetMenuWindow
-const isPetMenuWindow = getCurrentWebviewWindow().label === "pet-menu";
+const isPetMenuWindow = currentLabel === "pet-menu";
 
 // 仅在桌宠窗口引入 PetWindow 组件，避免主窗口打包
 import PetWindow from "./pet/PetWindow.vue";

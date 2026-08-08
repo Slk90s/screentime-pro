@@ -147,6 +147,29 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
         .sort((x, y) => y.total_seconds - x.total_seconds);
       return arr;
     }
+    case "get_month_summary": {
+      const year = (args?.year as number) || new Date().getFullYear();
+      const month = (args?.month as number) || new Date().getMonth() + 1;
+      const leap = (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0));
+      const md = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+      const daysInMonth = md[(month - 1) as number] || 30;
+      const activeDays = Math.floor(daysInMonth * 0.7);
+      const total = activeDays * (4 + Math.random() * 4) * 3600;
+      return {
+        year,
+        month,
+        total_seconds: Math.floor(total),
+        active_days: activeDays,
+        days_in_month: daysInMonth,
+        avg_daily_seconds: Math.floor(total / activeDays),
+        top_app: "VS Code",
+        top_app_seconds: Math.floor(total * 0.3),
+        busiest_date: `${year}-${String(month).padStart(2, "0")}-${String(
+          Math.floor(daysInMonth / 2),
+        ).padStart(2, "0")}`,
+        busiest_seconds: Math.floor(9 * 3600),
+      } as import("../types").MonthSummaryOut;
+    }
     case "is_tracking":
       return false;
     case "get_current_foreground":

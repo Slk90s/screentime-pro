@@ -1,9 +1,10 @@
-// 前端与 Rust 后端的通信封装
-//
-// 设计要点：双模运行
-// - 在 Tauri 运行时内：通过 `invoke` 调用真实 Rust 命令
-// - 在普通浏览器内（仅看 UI / 调试）：自动走 `mock` 假数据
-// 这样前端可以脱离 Rust 编译单独预览，互不阻塞。
+/**
+ * tracker.ts
+ * 设计思路：前端与 Rust 后端的通信封装。双模运行——Tauri 内通过 `invoke` 调用真实 Rust 命令，
+ * 普通浏览器内（仅看 UI / 调试）自动走 `mock` 假数据，使前端可脱离 Rust 编译单独预览。
+ * 修改历史：
+ *   - 2026-08-05 @v0.6.2-beta.26: 修复 - 导出 `isTauri`，供 App.vue 判断是否在 Tauri 运行时，避免浏览器预览白屏
+ */
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
@@ -16,6 +17,7 @@ import type {
   DeviceStats,
   ExportResult,
   HourlyBucketOut,
+  MonthSummaryOut,
   OverviewOut,
   PermissionStatus,
   RuleOut,
@@ -33,7 +35,7 @@ declare global {
     __TAURI_INTERNALS__?: unknown;
   }
 }
-const isTauri =
+export const isTauri =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 // 统一调用入口：不在 Tauri 内就返回 mock 数据
@@ -66,6 +68,13 @@ export const tracker = {
   ranking: (days: number, date: string, device?: string) =>
     call<AppRankingOut[]>("get_app_ranking", { days, date, device: device ?? null }),
   categories: () => call<CategoryOut[]>("get_categories"),
+  // ===== 日历月视图统计概括 =====
+  monthSummary: (year: number, month: number, device?: string) =>
+    call<MonthSummaryOut>("get_month_summary", {
+      year,
+      month,
+      device: device ?? null,
+    }),
   sessions: (date: string) => call<SessionOut[]>("get_sessions", { date }),
   // 空闲阈值配置
   setIdle: (secs: number) => call<boolean>("set_idle_threshold", { secs }),

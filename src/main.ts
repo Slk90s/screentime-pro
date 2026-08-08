@@ -3,7 +3,7 @@ import { createApp } from "vue";
 import App from "./App.vue";
 import AppIcon from "@/components/AppIcon.vue";
 import { installGlobalErrorHandlers, log } from "@/lib/logger";
-import { i18n } from "./i18n";
+import { i18n, initLocaleSync } from "./i18n";
 import "./style.css";
 
 // v0.4.2 日志：捕获全局未处理错误，写入与 Rust 同一日志文件
@@ -18,3 +18,7 @@ const app = createApp(App);
 // 全局注册矢量图标组件（替代 emoji 表情）
 app.component("AppIcon", AppIcon);
 app.use(i18n).mount("#app");
+
+// 跨 webview 语言同步：桌宠菜单等独立窗口有各自独立的 i18n 实例，
+// 监听 locale-changed 事件跟随主窗口的语言切换（详见 i18n/index.ts）。
+initLocaleSync();

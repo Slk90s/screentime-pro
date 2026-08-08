@@ -20,6 +20,8 @@
     - 2026-07-17 @v0.6.0-beta.1: UI重写 - Teleport适配+分组美化+橙色主题+屏幕坐标
     - 2026-07-24 @v0.6.2: 解耦 - 加皮肤切换段（持久化由 skinRegistry 负责）
     - 2026-07-24 @v0.6.2-beta.5: 废弃 - 移除 panda-2d，皮肤列表由 skinRegistry.list() 动态渲染（现仅 popmart-3d）
+    - 2026-08-08 @v0.6.2-34: 修复 - 菜单窗口也监听 pet-skin-changed 并调用 skinRegistry.reloadActive()，
+      解决设置页切皮肤后右键菜单高亮不同步的问题。
 -->
 <template>
   <Transition name="menu-fade">
@@ -125,13 +127,20 @@
             :key="f.id"
             class="feed-btn"
             :disabled="!store.canFeedToday"
-            @click="onFeed(f.value)"
+            @click="onFeed(f.value, f.id)"
           >
             <AppIcon :name="f.icon" class="feed-emoji" />
             <span>{{ t(`pet.feed.${f.id}`, f.id) }}</span>
             <span class="feed-value">+{{ f.value }}</span>
           </button>
         </div>
+        <!-- v0.7.0：喂食即时反馈——菜单不自动关闭，飘出 +N 提示，饱食度条同步增长 -->
+        <transition name="feed-toast">
+          <div v-if="feedToast > 0" class="feed-toast">
+            <AppIcon name="utensils" :size="13" />
+            {{ t('pet.feed.success', { n: feedToast }) }}
+          </div>
+        </transition>
         <p v-if="!store.canFeedToday" class="menu-hint">
           {{ t('pet.feed.todayLimit', 'Daily limit reached') }}
         </p>
@@ -141,7 +150,7 @@
 
       <!-- v0.6.2：皮肤切换段（解耦皮肤机制；持久化由 skinRegistry 负责） -->
       <div class="menu-section">
-        <div class="section-label">{{ t('pet.skin.title', 'Skin') }}</div>
+        <div class="section-label">{{ t('pet.settings.skinTitle', 'Skin') }}</div>
         <div class="skin-row">
           <button
             v-for="s in skins"
@@ -175,7 +184,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { invoke } from '@tauri-apps/api/core';
-import { emit as emitEvent } from '@tauri-apps/api/event';
+import { emit as emitEvent, listen } from '@tauri-apps/api/event';
 import { petStore as store } from '../stores/petStore';
 import { STATE_ICON } from '../engine/stateIcons';
 import { skinRegistry } from '../skins/registry';
@@ -205,6 +214,8 @@ const emit = defineEmits<{
 
 const visible = ref(true);
 const menuEl = ref<HTMLElement | null>(null);
+// v0.7.0：喂食即时反馈提示（+N 饱食度），1.3s 后自动消失
+const feedToast = ref(0);
 
 // ---- 状态分组 ----
 const coreStates: PetState[] = ['idle', 'working', 'developing', 'designing', 'gaming'];
@@ -240,43 +251,85 @@ const foods: FoodItem[] = [
 
 // ---- 皮肤切换（v0.6.2） ----
 const skins = computed<PetSkinManifest[]>(() => skinRegistry.list());
-const activeSkinId = ref(skinRegistry.active().id);
-// 监听外部切皮肤（例如设置页）
-const unsubSkin = skinRegistry.subscribe((id) => {
-  activeSkinId.value = id;
-});
+// v0.6.2-35: 用 computed 直接跟踪 skinRegistry.active()，避免 ref 初始化后错过跨窗口同步。
+// 右键菜单运行在独立 pet-menu webview，Tauri 多窗口间模块级 reactive 不共享；
+// 设置页切皮后会广播 pet-skin-changed，本窗口监听后 reloadActive() 更新 registry，
+// computed 会自动反映最新 active id，无需手动维护 ref + subscribe。
+const activeSkinId = computed<string>(() => skinRegistry.active().id);
 function isActiveSkin(id: string): boolean {
   return activeSkinId.value === id;
 }
 function onPickSkin(id: string): void {
   if (skinRegistry.setActive(id)) {
-    activeSkinId.value = id;
     // 关菜单，让用户看到完整皮肤切换效果
     emit('close');
   }
 }
+// 组件挂载时监听 Tauri 全局广播（设置页/其他窗口切皮肤）
+let unlistenSkin: (() => void) | null = null;
+onMounted(async () => {
+  try {
+    unlistenSkin = await listen('pet-skin-changed', () => {
+      // 设置页切皮肤后广播，菜单窗口的 skinRegistry 需从 localStorage 重读对齐
+      skinRegistry.reloadActive();
+    });
+  } catch (e) {
+    console.warn('[PetContextMenu] 监听 pet-skin-changed 失败', e);
+  }
+});
 // 组件卸载时取消订阅
-onBeforeUnmount(() => unsubSkin());
+onBeforeUnmount(() => {
+  if (unlistenSkin) unlistenSkin();
+});
 
 // ---- 操作 ----
+/**
+ * v0.6.2-beta.32：菜单跑在独立 pet-menu 窗口，store 与桌宠窗口不共享。
+ * 任何改 store 的操作后广播 pet-store-updated，让桌宠窗口 reload() 同步
+ * （override/喂食/位置），否则在菜单里切状态/喂食，桌宠表情与饱食度不会变。
+ */
+function notifyStoreSync(): void {
+  try {
+    void emitEvent('pet-store-updated');
+  } catch {
+    /* ignore */
+  }
+}
 function onPickState(s: PetState): void {
   store.setOverride(s);
+  notifyStoreSync();
   emit('close');
 }
 function onClearOverride(): void {
   store.setOverride(null);
+  notifyStoreSync();
   emit('close');
 }
-function onFeed(value: number): void {
+function onFeed(value: number, foodId: string): void {
   const r = store.feed(value);
   emit('feed', r);
-  if (r.ok) emit('close');
+  if (r.ok) {
+    // v0.7.0：菜单不自动关闭，飘出 +N 提示，让用户直接看到饱食度条增长（修复「喂食无反馈/饿度不变」）
+    feedToast.value = value;
+    window.setTimeout(() => {
+      feedToast.value = 0;
+    }, 1300);
+    // 同步到桌宠窗口（饱食度 + 触发进食/开心反应）
+    notifyStoreSync();
+    try {
+      void emitEvent('pet-fed', { value, foodId });
+    } catch {
+      /* ignore */
+    }
+    // 注意：不再 emit('close')，避免菜单瞬间关闭导致反馈不可见
+  }
 }
 function onResetPos(): void {
   const sw = window.screen.width;
   const sh = window.screen.height;
   store.setPosition(sw - 200, sh - 240);
   invoke('move_pet_window', { x: store.position.x, y: store.position.y }).catch(() => {});
+  notifyStoreSync();
   emit('close');
 }
 function onClose(): void {
@@ -717,6 +770,31 @@ onBeforeUnmount(() => {
   color: rgba(255, 165, 67, 0.85);
   padding: 2px 14px 6px;
   margin: 0;
+}
+
+/* ---- 喂食即时反馈（v0.7.0） ---- */
+.feed-toast {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 4px 14px 2px;
+  padding: 5px 10px;
+  background: rgba(255, 126, 39, 0.16);
+  border: 1px solid rgba(255, 126, 39, 0.32);
+  border-radius: 8px;
+  color: #ffb347;
+  font-size: 12px;
+  font-weight: 600;
+}
+.feed-toast :deep(svg) { color: #ffb347; }
+.feed-toast-enter-active,
+.feed-toast-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.feed-toast-enter-from,
+.feed-toast-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
 }
 
 /* ---- 底部操作 ---- */

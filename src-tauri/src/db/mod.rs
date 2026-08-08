@@ -375,6 +375,92 @@ impl AppDb {
         })
     }
 
+    /// 某月统计概括（日历月视图）
+    ///
+    /// 按 `date LIKE 'YYYY-MM-%'` 过滤该月全部 session，返回月总时长、活跃天数、
+    /// 月天数、日均（按活跃天数均摊）、月内最常用 App、月内最忙的一天。
+    pub fn get_month_summary(
+        &self,
+        year: i32,
+        month: i32,
+        device: &Option<String>,
+    ) -> rusqlite::Result<MonthSummaryOut> {
+        let conn = self.0.lock().unwrap();
+        let prefix = format!("{:04}-{:02}-", year, month);
+        let (dev_clause, dev_param): (&str, Option<&dyn ToSql>) = match device {
+            Some(d) if !d.is_empty() => (" AND s.device = ?2", Some(d as &dyn ToSql)),
+            _ => ("", None),
+        };
+        let mut p: Vec<&dyn ToSql> = vec![&prefix as &dyn ToSql];
+        if let Some(dp) = dev_param {
+            p.push(dp);
+        }
+
+        let (total, active_days): (i64, i64) = conn
+            .query_row(
+                &format!(
+                    "SELECT COALESCE(SUM(s.duration_seconds),0), COUNT(DISTINCT s.date)
+                     FROM sessions s WHERE s.date LIKE ?1 || '%'{dev_clause}"
+                ),
+                p.as_slice(),
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap_or((0, 0));
+
+        let top: Option<(String, i64)> = conn
+            .query_row(
+                &format!(
+                    "SELECT a.name, SUM(s.duration_seconds)
+                     FROM sessions s JOIN apps a ON s.app_id=a.id
+                     WHERE s.date LIKE ?1 || '%'{dev_clause}
+                     GROUP BY a.id ORDER BY SUM(s.duration_seconds) DESC LIMIT 1"
+                ),
+                p.as_slice(),
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+
+        let busiest: Option<(String, i64)> = conn
+            .query_row(
+                &format!(
+                    "SELECT s.date, SUM(s.duration_seconds)
+                     FROM sessions s WHERE s.date LIKE ?1 || '%'{dev_clause}
+                     GROUP BY s.date ORDER BY SUM(s.duration_seconds) DESC LIMIT 1"
+                ),
+                p.as_slice(),
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+
+        // 该月天数（闰年安全）
+        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let month_days = [
+            31,
+            if leap { 29 } else { 28 },
+            31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+        ];
+        let days_in_month = month_days[(month - 1) as usize] as i64;
+
+        let avg_daily_seconds = if active_days > 0 {
+            total / active_days
+        } else {
+            0
+        };
+
+        Ok(MonthSummaryOut {
+            year,
+            month,
+            total_seconds: total,
+            active_days,
+            days_in_month,
+            avg_daily_seconds,
+            top_app: top.as_ref().map(|(n, _)| n.clone()),
+            top_app_seconds: top.map(|(_, s)| s).unwrap_or(0),
+            busiest_date: busiest.as_ref().map(|(d, _)| d.clone()),
+            busiest_seconds: busiest.map(|(_, s)| s).unwrap_or(0),
+        })
+    }
+
     pub fn get_categories(&self) -> rusqlite::Result<Vec<CategoryOut>> {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare("SELECT id, name, color FROM categories ORDER BY id")?;

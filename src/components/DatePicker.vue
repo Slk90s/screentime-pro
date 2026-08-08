@@ -32,9 +32,45 @@
         >{{ d.label }}</button>
       </div>
 
-      <!-- 快捷操作：今天 -->
+      <!-- 本月统计概括（v0.7.0：月视图切换时显示该月汇总） -->
+      <section class="dp-summary" v-if="visible">
+        <div class="dp-summary-title">
+          <AppIcon name="clipboard" :size="13" />
+          {{ t("dashboard.calendar.monthSummary") }}
+        </div>
+        <div v-if="summaryLoading" class="dp-summary-hint">{{ t("common.loading") }}</div>
+        <div v-else-if="!monthSummary || monthSummary.total_seconds === 0" class="dp-summary-hint">
+          {{ t("dashboard.calendar.noData") }}
+        </div>
+        <template v-else>
+          <div class="dp-summary-grid">
+            <div class="dp-stat">
+              <span class="dp-stat-label">{{ t("dashboard.calendar.total") }}</span>
+              <span class="dp-stat-value">{{ fmtDur(monthSummary.total_seconds) }}</span>
+            </div>
+            <div class="dp-stat">
+              <span class="dp-stat-label">{{ t("dashboard.calendar.activeDays") }}</span>
+              <span class="dp-stat-value">{{ monthSummary.active_days }}/{{ monthSummary.days_in_month }}</span>
+            </div>
+            <div class="dp-stat">
+              <span class="dp-stat-label">{{ t("dashboard.calendar.avg") }}</span>
+              <span class="dp-stat-value">{{ fmtDur(monthSummary.avg_daily_seconds) }}</span>
+            </div>
+          </div>
+          <div class="dp-summary-foot">
+            <span v-if="monthSummary.top_app">
+              {{ t("dashboard.calendar.topApp") }}：<b>{{ monthSummary.top_app }}</b>
+            </span>
+            <span v-if="monthSummary.busiest_date">
+              {{ t("dashboard.calendar.busiest") }}：<b>{{ monthSummary.busiest_date }}</b>
+            </span>
+          </div>
+        </template>
+      </section>
+
+      <!-- 快捷操作：今天（v0.7.0：点击后日历视图同步跳转到今天所在月份） -->
       <footer class="dp-footer">
-        <button @click="$emit('select', todayStr())">{{ t("datePicker.today") }}</button>
+        <button @click="goToday">{{ t("datePicker.today") }}</button>
       </footer>
     </div>
   </div>
@@ -49,11 +85,17 @@
  * - 输出格式：YYYY-MM-DD（与后端 DB date 字段对齐）
  * - 禁用未来日期（不能查看未来的使用记录）
  * - 高亮「今天」和「已选」日期
+ * - v0.7.0：① 切换月份时显示该月统计概括（月总时长/活跃天数/日均/最常用 App/最忙一天）；
+ *           ② 打开日历或外部切到某日期时，视图自动跳到对应月份；点「今天」视图同步跳到今天所在月。
  */
 
-import { ref, computed } from "vue";
+import { ref, computed, watch, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { i18n } from "../i18n";
+import { tracker } from "../api/tracker";
+import { formatDuration } from "../utils/format";
+import type { MonthSummaryOut } from "../types";
+import AppIcon from "./AppIcon.vue";
 
 const { t } = useI18n();
 
@@ -62,9 +104,11 @@ const props = defineProps<{
   value?: string; // 当前选中值 YYYY-MM-DD
 }>();
 
-defineEmits<{
+const emit = defineEmits<{
   select: [dateStr: string];
   close: [];
+  /** v0.7.0：点「今天」——同步跳转视图到今天所在月，但不关闭选择器 */
+  "goto-today": [];
 }>();
 
 // 星期标题（按当前语言本地化；2023-01-01 为周日）
@@ -94,6 +138,14 @@ function todayStr(): string {
 
 function fmt(y: number, m: number, day: number): string {
   return `${y}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+// 解析 YYYY-MM-DD → {y, m(0-indexed)}
+function parseYM(dateStr?: string): { y: number; m: number } | null {
+  if (!dateStr) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
+  if (!m) return null;
+  return { y: Number(m[1]), m: Number(m[2]) - 1 };
 }
 
 // 判断是否是未来日期（不可选）
@@ -193,6 +245,66 @@ function nextMonth() {
     viewMonth.value++;
   }
 }
+
+// v0.7.0：点「今天」——视图跳到今天所在月，并把今天作为选中项，但不关闭选择器
+function goToday(): void {
+  const now = new Date();
+  viewYear.value = now.getFullYear();
+  viewMonth.value = now.getMonth();
+  emit("goto-today");
+}
+
+// ---- 本月统计概括（v0.7.0） ----
+const monthSummary = ref<MonthSummaryOut | null>(null);
+const summaryLoading = ref(false);
+
+async function loadMonthSummary(): Promise<void> {
+  summaryLoading.value = true;
+  try {
+    monthSummary.value = await tracker.monthSummary(
+      viewYear.value,
+      viewMonth.value + 1,
+    );
+  } catch {
+    monthSummary.value = null;
+  } finally {
+    summaryLoading.value = false;
+  }
+}
+
+function fmtDur(sec: number): string {
+  return formatDuration(sec);
+}
+
+// 视图月份变化时刷新统计概括
+watch([viewYear, viewMonth], () => {
+  void loadMonthSummary();
+});
+
+// v0.7.0：打开日历 / 外部选中日期变化时，视图同步跳到对应月份
+// （覆盖「回到今天」「点柱状图选历史日期」等场景，让所选日期始终在可视月内）
+function syncViewToValue(): void {
+  const ym = parseYM(props.value);
+  if (ym) {
+    viewYear.value = ym.y;
+    viewMonth.value = ym.m;
+  }
+}
+watch(
+  () => props.value,
+  () => syncViewToValue(),
+);
+watch(
+  () => props.visible,
+  (v) => {
+    if (v) syncViewToValue();
+  },
+);
+
+onMounted(() => {
+  syncViewToValue();
+  void loadMonthSummary();
+});
 </script>
 
 <style scoped>
@@ -285,6 +397,66 @@ function nextMonth() {
   color: #ccc;
   cursor: default;
 }
+
+/* v0.7.0：本月统计概括 */
+.dp-summary {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed rgba(0, 0, 0, 0.08);
+}
+.dp-summary-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text, #333);
+  margin-bottom: 8px;
+}
+.dp-summary-title :deep(svg) {
+  color: var(--brand, #ff7e27);
+}
+.dp-summary-hint {
+  font-size: 12px;
+  color: var(--text-dim, #999);
+  padding: 4px 0;
+}
+.dp-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.dp-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--bg, #f7f7f9);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+.dp-stat-label {
+  font-size: 10.5px;
+  color: var(--text-dim, #999);
+}
+.dp-stat-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text, #333);
+  font-variant-numeric: tabular-nums;
+}
+.dp-summary-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--text-dim, #888);
+}
+.dp-summary-foot b {
+  color: var(--brand, #ff7e27);
+  font-weight: 600;
+}
+
 .dp-footer {
   margin-top: 10px;
   text-align: right;

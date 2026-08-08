@@ -80,6 +80,25 @@ pub struct OverviewOut {
     pub avg_daily_seconds: i64,
 }
 
+/// 某月统计概括（日历月视图用）
+///
+/// - 按 `date LIKE 'YYYY-MM-%'` 过滤该月所有 session
+/// - 返回月总时长、有数据的活跃天数、月天数、日均（按活跃天数均摊）、
+///   月内最常用 App、月内最忙的一天（总时长最高）
+#[derive(Debug, Clone, Serialize)]
+pub struct MonthSummaryOut {
+    pub year: i32,
+    pub month: i32, // 1-12
+    pub total_seconds: i64,
+    pub active_days: i64,
+    pub days_in_month: i64,
+    pub avg_daily_seconds: i64,
+    pub top_app: Option<String>,
+    pub top_app_seconds: i64,
+    pub busiest_date: Option<String>,
+    pub busiest_seconds: i64,
+}
+
 /// 实时前台应用
 #[derive(Debug, Clone, Serialize)]
 pub struct CurrentForegroundOut {

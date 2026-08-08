@@ -63,6 +63,20 @@ export interface OverviewOut {
   avg_daily_seconds?: number;
 }
 
+/** 某月统计概括（日历月视图），对应 Rust 端 MonthSummaryOut（snake_case 返回） */
+export interface MonthSummaryOut {
+  year: number;
+  month: number; // 1-12
+  total_seconds: number;
+  active_days: number;
+  days_in_month: number;
+  avg_daily_seconds: number;
+  top_app?: string | null;
+  top_app_seconds: number;
+  busiest_date?: string | null;
+  busiest_seconds: number;
+}
+
 // 实时前台应用：对应 Rust 端 CurrentForegroundOut（db/models.rs，serde 默认无 rename_all）。
 // ⚠️ 关键约定：Tauri v2 仅对【命令参数】做 camelCase→snake_case 转换，【命令返回值】按
 // serde 原样序列化（即 snake_case）。因此此处必须用 snake_case，与 App.vue 读取字段一致；

@@ -9,6 +9,10 @@
  *
  * 修改历史：
  *   - 2026-07-17 @v0.6.0-beta.1: 初始创建 - reactive + localStorage 持久化
+ *   - 2026-08-07 @v0.6.2-33: 修复 - reload() 扩展同步 override + 喂食字段
+ *     （菜单独立窗口 setOverride/feed 后需经 pet-store-updated 事件触发本函数，才能同步到桌宠窗口）
+ *   - 2026-08-07 @v0.6.2-33: 修复 - reload() 补 scale 同步 (BUG-1)，
+ *     重构 canFeedToday 消除 computed 内副作用 (BUG-2)
  */
 import { reactive, computed, watch } from 'vue';
 import type { PetState } from '../types';
@@ -100,15 +104,37 @@ watch(
   { deep: true },
 );
 
-// ---- 计算属性 ----
+// v0.6.2-33 (BUG-2): 跨天重置从 computed 副作用移到 watch，保证 pure computed
+const todayFeedDateRef = reactive({ value: _state.todayFeedDate });
+const todayFeedCountRef = reactive({ value: _state.todayFeedCount });
+
+// 跨天自动重置每日计数器（非 computed 副作用，由 watch 驱动）
+watch(
+  () => _state.todayFeedDate,
+  (date) => { todayFeedDateRef.value = date; },
+  { immediate: true },
+);
+
 const canFeedToday = computed(() => {
+  const today = todayStr();
+  if (todayFeedDateRef.value !== today) {
+    // 跨天重置（在 watch 里改原始 _state 会造成循环，这里只返回 false）
+    return false;
+  }
+  // 同步实际计数（日常使用场景 computed 自动响应）
+  return todayFeedCountRef.value < 5;
+});
+
+// 供 feed() 调用：跨天时重置
+function ensureDailyReset(): void {
   const today = todayStr();
   if (_state.todayFeedDate !== today) {
     _state.todayFeedDate = today;
     _state.todayFeedCount = 0;
+    todayFeedDateRef.value = today;
+    todayFeedCountRef.value = 0;
   }
-  return _state.todayFeedCount < 5;
-});
+}
 
 const isHungry = computed(() => _state.fullness < 30);
 
@@ -123,10 +149,13 @@ function setEnabled(v: boolean): void {
   _state.enabled = v;
 }
 /**
- * 跨窗口同步：从 localStorage 重新读取 enabled 等持久化字段覆盖当前 reactive。
- * Tauri 多窗口各持独立 JS 上下文，module-level reactive 不共享；桌宠窗口经右键菜单
- * 「关闭」写入 enabled=false 后，通过 `pet-enabled-changed` 事件通知 Settings 重读，
- * 这里只重读 + 同步内存，不写盘、不重发事件。
+ * 跨窗口同步：从 localStorage 重新读取持久化字段覆盖当前 reactive。
+ * Tauri 多窗口各持独立 JS 上下文，module-level reactive 不共享；桌宠窗口（渲染宠物）
+ * 与 pet-menu 窗口（右键菜单）是不同 webview，菜单里 setOverride/feed/setPosition 只改
+ * 菜单自己的 store 并写盘，桌宠窗口必须靠本函数 + `pet-store-updated` 事件重读才能同步。
+ *
+ * 注意：不覆盖 `state` —— state 由桌宠窗口的 useForegroundWatcher 自动驱动，重读会闪。
+ * 只同步手动覆盖（override）与喂食相关字段（fullness/feedCount/level/todayFeed*）。
  */
 function reload(): void {
   try {
@@ -135,7 +164,16 @@ function reload(): void {
       const p = JSON.parse(raw) as Partial<RawState>;
       if (typeof p.enabled === 'boolean') _state.enabled = p.enabled;
       if (p.position) _state.position = p.position;
-      // state / override / 喂食等运行态以本地为准，不强制覆盖
+      // v0.6.2-33：菜单手动切状态 → 同步 override 到桌宠窗口
+      if (p.override === null || typeof p.override === 'string') _state.override = p.override;
+      // v0.6.2-33：菜单喂食 → 同步饱食度/等级/每日计数，保证每日上限一致
+      if (typeof p.fullness === 'number') _state.fullness = p.fullness;
+      if (typeof p.feedCount === 'number') _state.feedCount = p.feedCount;
+      if (typeof p.level === 'number') _state.level = p.level;
+      if (typeof p.todayFeedCount === 'number') _state.todayFeedCount = p.todayFeedCount;
+      if (typeof p.todayFeedDate === 'string') _state.todayFeedDate = p.todayFeedDate;
+      // v0.6.2-33 (BUG-1): 补 scale 同步，避免跨窗口改缩放后桌宠不同步
+      if (typeof p.scale === 'number') _state.scale = Math.min(2, Math.max(0.5, p.scale));
     }
   } catch (e) {
     console.error('[pet] reload 失败', e);
@@ -183,10 +221,14 @@ function setOverride(s: PetState | null): void {
   _state.override = s;
 }
 function feed(foodValue: number): { ok: boolean; reason?: string } {
+  ensureDailyReset(); // v0.6.2-33: 每次喂食前先重置跨天计数
   if (!canFeedToday.value) return { ok: false, reason: 'today-limit' };
   _state.fullness = Math.min(100, _state.fullness + foodValue);
   _state.feedCount += 1;
   _state.todayFeedCount += 1;
+  // v0.7.0 (BUG 修复)：同步 todayFeedCountRef，否则 canFeedToday 计算属性读到的是
+  // 残旧的初始计数，导致「每日 5 次上限」判定失灵（可无限喂 / 或首喂被误拦）。
+  todayFeedCountRef.value = _state.todayFeedCount;
   _state.level = Math.floor(_state.feedCount / 10) + 1;
   if (_state.state === 'sleeping' && _state.fullness > 30) {
     _state.state = 'idle';

@@ -25,6 +25,8 @@
   - 2026-07-24 @v0.6.2: 修复 - 监听 pet-shown / pet-custom-updated 调 reloadConfig，跨窗口同步编辑器自定义素材/组合到实时桌宠
   - 2026-07-24 @v0.6.2-beta.3: 修复 - 监听 pet-skin-changed 调 skinRegistry.reloadActive，把 Settings 切皮广播到桌宠（Tauri 多窗口 JS 上下文隔离，module-level reactive 不共享；与编辑→桌宠同步同根因）
   - 2026-07-24 @v0.6.2-beta.6: 修复 - 拖拽加 setPointerCapture + 拖拽期间暂停持久化（解决拖动卡顿）；右键菜单改为「临时放大窗口容纳菜单」修正坐标错位/被裁切导致菜单不显示；pet-custom-updated 新增 reloadBadges 同步 3D 表情
+  - 2026-08-08 @v0.6.2-34: 气泡按皮肤配置 - pickBubble 传入当前 skinId，
+    监听 pet-custom-updated 同步自定义短语。
 -->
 <template>
   <div
@@ -41,7 +43,7 @@
     <div v-if="petStore.isHeating" class="pet-overheat-badge" aria-hidden="true">🔥</div>
     <!-- v0.6.2：渲染协议改用 PetSkinRenderer 路由，按 skinRegistry.active() 动态挂载皮肤；
          桌宠现仅 Pop Mart 3D 皮肤（v0.6.2-beta.5 移除 panda-2d）；渲染器按 skinRegistry.active() 动态挂载 -->
-    <PetSkinRenderer :state="effectiveState" :is-dragging="isDragging" :class="[animClass, { 'is-walking': isDragging, 'is-heating': petStore.isHeating }]" />
+    <PetSkinRenderer :state="effectiveState" :is-dragging="isDragging" :class="[animClass, { 'is-walking': isDragging, 'is-heating': petStore.isHeating, 'is-fed': justFed }]" />
   </div>
 
   <!-- v0.6.2-beta.17：菜单不再在本 webview 渲染，改在独立 pet-menu Tauri 窗口
@@ -50,6 +52,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -63,12 +66,14 @@ import PetBubble from './components/PetBubble.vue';
 import { usePetSprites } from './composables/usePetSprites';
 import { usePetBadges } from './composables/usePetBadges';
 import { useSystemOverloadWatcher } from './composables/useSystemOverloadWatcher';
-import { pickBubble, nextGapMs } from './composables/usePetBubble';
+import { pickBubble, nextGapMs, reloadBubbleConfig } from './composables/usePetBubble';
 // v0.6.2：副作用导入，触发两个内置皮肤注册到 skinRegistry
 import './skins';
 // v0.6.2：皮肤自描述窗口尺寸（2D 140×140；Pop Mart 等竖图皮肤更高窗）
 import { skinRegistry } from './skins/registry';
 import { LogicalSize } from '@tauri-apps/api/dpi';
+
+const { t } = useI18n();
 
 const rootEl = ref<HTMLElement | null>(null);
 const effectiveState = computed(() => petStore.effectiveState.value);
@@ -78,12 +83,29 @@ const bubbleMessage = ref('');
 const bubbleVisible = ref(false);
 let bubbleTimer: number | null = null;
 
+// v0.7.0：喂食反应（菜单发 pet-fed 事件 → 桌宠进食+开心 + 飘「好吃」气泡）
+const justFed = ref(false);
+let feedTimer: number | null = null;
+
+function showFeedReaction(): void {
+  justFed.value = true;
+  bubbleMessage.value = t('pet.feed.reaction');
+  bubbleVisible.value = true;
+  if (feedTimer !== null) clearTimeout(feedTimer);
+  feedTimer = window.setTimeout(() => {
+    justFed.value = false;
+    bubbleVisible.value = false;
+    // 进食气泡结束后恢复常规随机气泡节奏
+    scheduleNextBubble();
+  }, 1800);
+}
+
 function scheduleNextBubble(): void {
   if (bubbleTimer !== null) clearTimeout(bubbleTimer);
   // 首次出现延迟 3s 让用户先看到桌宠，再开始说话；之后 8~22s 一次
   const gap = bubbleMessage.value === '' ? 3000 : nextGapMs();
   bubbleTimer = window.setTimeout(() => {
-    bubbleMessage.value = pickBubble(effectiveState.value);
+    bubbleMessage.value = pickBubble(effectiveState.value, skinRegistry.active().id);
     bubbleVisible.value = true;
     // 2.5s 后自动隐藏，2.5s 后再次调度下一次
     window.setTimeout(() => {
@@ -186,6 +208,11 @@ const { reloadConfig: reloadBadges } = usePetBadges();
 let unlistenShown: (() => void) | null = null;
 let unlistenCustom: (() => void) | null = null;
 let unlistenSkin: (() => void) | null = null;
+let unlistenStore: (() => void) | null = null;
+let unlistenFed: (() => void) | null = null;
+// v0.7.0：饱食度随时间自然衰减（之前 tickFullness 从未被调用，导致「饿度值不变」）
+const FULLNESS_DECAY_MS = 120_000; // 每 2 分钟 -1
+let decayTimer: number | null = null;
 onMounted(async () => {
   try {
     unlistenShown = await listen('pet-shown', () => {
@@ -196,29 +223,49 @@ onMounted(async () => {
     unlistenCustom = await listen('pet-custom-updated', () => {
       reloadConfig(); // 2D 自定义素材（遗留，无害）
       reloadBadges(); // 3D 表情 emoji
+      reloadBubbleConfig(); // 自定义气泡短语
     });
     // v0.6.2-beta.3：Settings 切皮后通过 Tauri 全局广播通知所有窗口，桌宠收到后
     // 把本地 skinRegistry 副本对齐到持久化值（多窗口 JS 上下文隔离，模块级 reactive 不共享）
     unlistenSkin = await listen('pet-skin-changed', () => {
       skinRegistry.reloadActive();
     });
+    // v0.6.2-beta.32：右键菜单在独立窗口改了 override/喂食/位置后广播，桌宠窗口重读
+    // 同步（否则菜单里选状态/喂食，桌宠表情与饱食度不跟着变）
+    unlistenStore = await listen('pet-store-updated', () => {
+      petStore.reload();
+    });
+    // v0.7.0：右键菜单喂食后广播 pet-fed → 桌宠进食+开心反应（不再「喂食无反馈」）
+    unlistenFed = await listen<{ value: number; foodId: string }>('pet-fed', () => {
+      showFeedReaction();
+    });
     reloadConfig(); // 初次创建窗口时也读一次（保险）
   } catch (e) {
     console.error('[pet] 监听 pet 事件失败', e);
   }
+  // v0.7.0：启动饱食度衰减循环（仅桌宠窗口存活时运行）
+  decayTimer = window.setInterval(() => {
+    petStore.tickFullness();
+  }, FULLNESS_DECAY_MS);
   scheduleNextBubble(); // 启动气泡周期（v0.6.2-beta.15）
 });
 
 // v0.6.2：初始按当前皮肤尺寸调整窗口 + 订阅皮肤切换动态 resize
+let unsubSkinSize: (() => void) | null = null;
 onMounted(() => {
   applySkinSize();
-  skinRegistry.subscribe(() => applySkinSize());
+  unsubSkinSize = skinRegistry.subscribe(() => applySkinSize());
 });
 onBeforeUnmount(() => {
   if (unlistenShown) unlistenShown();
   if (unlistenCustom) unlistenCustom();
   if (unlistenSkin) unlistenSkin();
+  if (unlistenStore) unlistenStore();
+  if (unlistenFed) unlistenFed();
+  if (unsubSkinSize) unsubSkinSize(); // v0.6.2-33 (BUG-8): 取消皮肤尺寸订阅
   if (bubbleTimer !== null) clearTimeout(bubbleTimer);
+  if (feedTimer !== null) clearTimeout(feedTimer);
+  if (decayTimer !== null) clearInterval(decayTimer);
 });
 
 // v0.6.2-beta.17：菜单「外部点击关闭」由 PetMenuWindow 独立窗口负责。

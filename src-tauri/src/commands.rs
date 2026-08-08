@@ -22,8 +22,8 @@ use crate::AppState;
 use crate::classifier::classify_app;
 use crate::db::{
     AppRankingOut, CategoryOut, CurrentForegroundOut, DailySummaryOut, DayCategoryOut, DeviceInfo,
-    ExportBundle, ExportResult, HourlyBucketOut, OverviewOut, PermissionStatus, PeriodStat,
-    RuleOut, SessionOut, SettingsOut, TrendsOut,
+    ExportBundle, ExportResult, HourlyBucketOut, MonthSummaryOut, OverviewOut, PermissionStatus,
+    PeriodStat, RuleOut, SessionOut, SettingsOut, TrendsOut,
 };
 use crate::error::AppError;
 use crate::tracker::{platform_name, RawApp};
@@ -231,6 +231,20 @@ pub fn get_daily_categories(
     state
         .db
         .get_daily_categories(days, &device)
+        .map_err(|e| e.to_string())
+}
+
+/// 某月统计概括（日历月视图）：月总时长 / 活跃天数 / 日均 / 最常用 App / 最忙的一天
+#[tauri::command]
+pub fn get_month_summary(
+    state: tauri::State<'_, Arc<AppState>>,
+    year: i32,
+    month: i32,
+    device: Option<String>,
+) -> Result<MonthSummaryOut, String> {
+    state
+        .db
+        .get_month_summary(year, month, &device)
         .map_err(|e| e.to_string())
 }
 

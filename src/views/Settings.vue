@@ -252,10 +252,6 @@
           </div>
         </div>
 
-        <p v-if="petStore.isHungry && petStore.enabled" class="pet-hungry">
-          <AppIcon name="leaf" :size="14" /> {{ t("pet.feed.full") }} → {{ t("pet.feed.title") }}
-        </p>
-
         <div class="card-actions" v-if="petStore.enabled">
           <button class="ghost-btn" @click="showEditor = true">
             <AppIcon name="penTool" :size="14" />

@@ -5,7 +5,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](https://github.com/)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-0.6.2--beta.25-blue)](./release)
+[![Version](https://img.shields.io/badge/version-0.7.0-blue)](./release)
 
 ---
 
@@ -39,8 +39,18 @@
 
 | 版本 | 发布时间 | 状态 | 关键说明 |
 |------|----------|------|----------|
-| **v0.6.2-beta.25** | 2026-07-28 | 🧪 **Beta（已发布）** | 桌宠熊猫「重切图 + 眼神/嘴动态化」：将烤死表情的单张 PNG 拆为 body/eyes/nose/mouth 四层对齐透明图（眼神漂移+眨眼、嘴 5 态张合、鼻缩放）；修 `PetWindow` 140×140 硬编码导致熊猫被压进小盒、四周留大白边；气泡改贴窗顶内侧更贴近熊猫。⚠️ 桌宠为测试版功能，可能不稳定，可在「设置」页关闭 |
-| **v0.6.2-beta.1** | 2026-07-24 | ⭐ **Latest · Beta** | 解耦皮肤系统 + 新增 Pop Mart 3D 潮玩桌宠：右键菜单"皮肤"切换 2D 部件合成（Panda-2D）和 Pop Mart 3D 卡（戴黄帽弹吉他熊猫，1282×2850 portrait），状态用 emoji 浮层表达；不变动任何原 v0.6.1-beta.1 组件，新皮肤按 `skins/<id>/` 即插即用，便于后续 Live2D / 待办小组件 / 番茄钟等扩展 |
+| **v0.7.0** | 2026-08-08 | 🚀 **正式版（大版本）** | **整合 0.6.2 全部 Beta 修复 + 新功能**：① 日历新增「月视图切换 + 本月统计概况」（月总时长 / 活跃天数 / 日均 / 最常使用 App / 最忙的一天），点击「今天 / 回到今天」日历同步跳到当月；② 主界面桌宠设置移除「已经吃饱啦 → 喂食」冗余提示，避免误导；③ 修复桌宠喂食系统——喂食后无反馈 → 右键菜单保留「+N」吐司 + 桌宠进食点头动画 + 飘「好吃！」气泡；饿度值不变 → `feed()` 同步 `todayFeedCountRef` 并新增饱食度随时间自然衰减（每 2 分钟 −1）；④ 优化桌面抖动：Rust 端系统过载判定阈值上调（≥90% 持续 20s 才升温、<55% 持续 15s 冷却），避免频繁翻转触发 0.18s 剧烈抖动；⑤ 算法梳理：饿度默认 100（0–100，<30 为饥饿），心情由前台应用推断（`inferStateFromApp`），加热态强制 angry；⑥ 蜘蛛侠待机小动作（swing/pose/crouch/web）、姿势图去底、气泡 MCU 台词等 0.6.2-33~36 全部修复并入本版 |
+| **v0.6.2-36** | 2026-08-08 | 旧版 | 蜘蛛侠体验细化：① 表情编辑器新增「待机小动作」预览区，可单独预览荡丝 / 摆 pose / 蹲防 / 射蛛丝四个姿势，动作覆盖更全面；② 吊蛛丝（swing）时隐藏叠加的静态 SVG 绳索，避免“白色蛛丝一直没动”的穿帮，改由姿势图自带的绳索随摆动；③ 清理射蛛丝姿势图里的静态蛛网碎片；④ 蜘蛛侠气泡台词大量替换为漫威电影宇宙经典台词（能力越大责任越大、友好的邻居蜘蛛侠、斯塔克先生我感觉不太好、我不想走、皇后区小子、爱你 3000 遍等） |
+| **v0.6.2-35** | 2026-08-08 | 旧版 | 桌宠渲染与同步修复：① 修复设置页切皮肤后右键菜单高亮仍不同步的问题——PetContextMenu 的 activeSkinId 改为 computed 直接跟踪 skinRegistry，并在 PetMenuWindow 显式触发皮肤注册；② 修复 Spider-Man 动作触发时底层 idle 呼吸帧未隐藏导致的重影/叠加；③ 优化射蛛丝效果：点击动效/表情编辑器预览现在真正切换到 poseWeb 姿势图并隐藏 idle 帧，蛛丝起点重新按手掌位置校准，不再只是叠加图层 |
+| v0.6.2-34 | 2026-08-08 | 旧版 | 桌宠体验修复与配置扩展：① Spider-Man 姿势图去底——将 AI 生成的 RGB 姿势图处理为 RGBA 真透明，移除运行时在透明桌宠窗上露出的棋盘格白底；② 修复设置页切皮肤后右键菜单高亮不同步（pet-menu 窗口也监听 pet-skin-changed 并重读 localStorage 对齐）；③ 优化射蛛丝动作：丝线起点对准手掌、动画时长缩短到 0.65s、投掷预备/甩出更有力、蛛网团弹出幅度加大；④ 新增按皮肤独立的气泡短语配置 `src/pet/config/bubble-phrases.json`，popmart-3d / spiderman 各有专属文案，并支持 localStorage 运行时自定义覆盖 |
+| v0.6.2-33 | 2026-08-07 | 旧版 | 桌宠动画与同步修复：① Spider-Man 升级"多动作"桌宠——待机随机小动作调度器（荡丝 swing / 摆 pose / 射蛛丝 web / 蹲防 crouch），仅 idle 且非拖拽时触发；② 射蛛丝由静态网格弹出改为丝线绘制射出（dashoffset）+ 末端蛛网团 + 角色投掷预备/甩出，不再死板；③ 修复状态同步 bug：右键菜单在独立 pet-menu 窗口 setOverride/feed 后桌宠窗口不接收，导致菜单选状态/喂食桌宠表情不变（新增 pet-store-updated 事件 + reload 同步 override/喂食字段） |
+| v0.6.2-beta.30 | 2026-08-06 | 旧版 | 新增 Spider-Man 风格桌宠皮肤：右键菜单「皮肤」切换（spiderman / popmart-3d）；红蓝战衣蛛网纹 Q 版英雄，绿底生成 + PIL 绿键抠透明 + 6 帧呼吸序列，动画/emoji/状态/交互体系与 popmart3d 完全复用；沿用皮肤注册表即插即用 |
+| v0.6.2-beta.29 | 2026-08-06 | 旧版 | 桌宠动起来：单张透明 PNG 升级为 6 帧序列（PIL 合成呼吸缩放 + 眯眼），CSS 逐帧播放；idle 仅保留 translate/rotate 浮动，避免与帧序列双重缩放；表情 emoji 浮层继续聚在熊猫头顶上方；拖拽仍用 Tauri 原生 startDragging |
+| v0.6.2-beta.28 | 2026-08-06 | 旧版 | 桌宠交互优化：表情 emoji 浮层由压在脸上改为聚到熊猫头顶上方；idle 加入呼吸缩放更"活"；拖拽改用 Tauri 原生 startDragging（OS 搬窗），根治透明置顶窗每帧 IPC 导致的"不跟手" |
+| v0.6.2-beta.27 | 2026-08-06 | 旧版 | 桌宠 Pop Mart 3D 熊猫素材重构：单张透明 PNG 替代 body/eyes/nose/mouth 四层切图，从根上消除五官割裂/重影；保留 idle 浮动、状态动画、点击/拖拽/过载等交互 |
+| v0.6.2-beta.27 | 2026-08-05 | 旧版 | 优化桌宠 Pop Mart 3D 投影：将五官独立 drop-shadow 改为整体统一投影，减弱割裂感 |
+| v0.6.2-beta.25 | 2026-07-28 | 旧版 | 桌宠熊猫「重切图 + 眼神/嘴动态化」：将烤死表情的单张 PNG 拆为 body/eyes/nose/mouth 四层对齐透明图（眼神漂移+眨眼、嘴 5 态张合、鼻缩放）；修 `PetWindow` 140×140 硬编码导致熊猫被压进小盒、四周留大白边；气泡改贴窗顶内侧更贴近熊猫。⚠️ 桌宠为测试版功能，可能不稳定，可在「设置」页关闭 |
+| **v0.6.2-beta.1** | 2026-07-24 | 旧版 | 解耦皮肤系统 + 新增 Pop Mart 3D 潮玩桌宠：右键菜单"皮肤"切换 2D 部件合成（Panda-2D）和 Pop Mart 3D 卡（戴黄帽弹吉他熊猫，1282×2850 portrait），状态用 emoji 浮层表达；不变动任何原 v0.6.1-beta.1 组件，新皮肤按 `skins/<id>/` 即插即用，便于后续 Live2D / 待办小组件 / 番茄钟等扩展 |
 | v0.5.0 | 2026-07-14 | 旧版 | 多语言国际化（i18n）：新增 zh-CN / en-US 双语切换，设置页下拉即时切换无需重载；前端自生成周期标签 / 分类名 / 时长格式化；图表随语言重渲染（零后端改动） |
 | v0.4.5 | 2026-07-14 | 旧版 | 统计概述时间范围联动：切换「今天/近7/14/30天」时「设备使用时间」与「App 使用时长排行」同步按范围聚合刷新（后端 overview/ranking 新增 days 参数，前端 loadDetails 传 range） |
 | v0.4.4 | 2026-07-11 | 旧版 | 修「跨天今天按钮」+ Linux CI 三端通过：Dashboard 今天按钮实时取系统日期 + linux.rs 完整适配 x11rb 0.13 GetPropertyReply 新 API |
@@ -61,22 +71,22 @@
 | Windows (x64) | `ScreenTime-Pro_{ver}_x64-setup.exe` | 双击运行（NSIS 安装包），需系统已装 **WebView2 运行时**（Win10/11 通常自带） |
 | Linux (x64) | `ScreenTime-Pro_{ver}_amd64.AppImage` / `.deb` | 由 CI 在 Linux 环境构建（详见下方「从源码构建」） |
 
-> 各平台最新安装包（macOS / Windows / Linux 三端）统一发布在 **[GitHub Releases](https://github.com/Slk90s/screentime-pro/releases)**（⭐ v0.6.2-beta.25 Latest）。
-> 本地 `release/v0.6.2-beta.25/` 仅作带版本号归档（不入库）；Linux 因本机构建环境限制需在 CI 中产出（见 `.github/workflows/build.yml`）。
+> 各平台最新安装包（macOS / Windows / Linux 三端）统一发布在 **[GitHub Releases](https://github.com/Slk90s/screentime-pro/releases)**（⭐ v0.7.0 Latest）。
+> 本地 `release/v0.7.0/` 仅作带版本号归档（不入库）；Linux 因本机构建环境限制需在 CI 中产出（见 `.github/workflows/build.yml`）。
 
 ---
 
 ## 🚀 快速开始
 
-> 💡 **下载入口**：所有平台的最新版本请从 **[GitHub Releases](https://github.com/Slk90s/screentime-pro/releases)** 下载（⭐ Latest 自动指向 v0.6.2-beta.25）。
+> 💡 **下载入口**：所有平台的最新版本请从 **[GitHub Releases](https://github.com/Slk90s/screentime-pro/releases)** 下载（⭐ Latest 自动指向 v0.7.0）。
 
 ### macOS
-1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `ScreenTime-Pro_0.6.2-beta.25_aarch64.dmg`，打开并拖入「应用程序」。
+1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `ScreenTime-Pro_0.7.0_aarch64.dmg`，打开并拖入「应用程序」。
 2. 首次运行：系统设置 › 隐私与安全性 › **辅助功能** 中授予本应用权限（空闲检测必需）。
 3. 程序默认开机自启、启动即开始追踪，菜单栏/托盘常驻。
 
 ### Windows
-1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `ScreenTime-Pro_0.6.2-beta.25_x64-setup.exe`（NSIS 安装包）。
+1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `ScreenTime-Pro_0.7.0_x64-setup.exe`（NSIS 安装包）。
 2. **首次安装**：若系统未装 WebView2 运行时，安装器会**自动下载并安装**（需联网，几秒到几分钟）。Win10 1809+ / Win11 通常已内置，无需此步。
 3. 托盘右键「退出」可彻底关闭；「设置」页可开关开机自启。
 
@@ -225,7 +235,7 @@ screentime-pro/
 ├── .github/workflows/
 │   └── build.yml            # 三端自动构建（macOS / Windows / Linux）
 ├── sql/                  # schema.sql / seed_categories.sql / seed_rules.sql
-├── release/v0.6.2-beta.25/ # 已构建的带版本号安装包（不入库，走 GitHub Releases）
+├── release/v0.7.0/ # 已构建的带版本号安装包（不入库，走 GitHub Releases）
 ├── README.md / LICENSE / .gitignore
 └── package.json / vite.config.ts / tsconfig*.json
 ```
@@ -261,7 +271,9 @@ screentime-pro/
 
 | 当前版本 | 历史摘要 |
 |----------|----------|
-| ⭐ **v0.6.2-beta.25**（已发布） | 桌宠熊猫「重切图 + 眼神/嘴动态化」：拆 body/eyes/nose/mouth 四层对齐 PNG，眼神漂移+眨眼、嘴 5 态张合；修 PetWindow 140×140 硬编码留白边；气泡贴窗顶更贴近熊猫。⚠️ 桌宠为测试版功能 |
+| ⭐ **v0.7.0**（正式版） | 整合 0.6.2 全部 Beta 修复 + 新功能：日历月视图切换与本月统计概况 + 今天同步跳转；桌宠设置移除「已经吃饱啦→喂食」冗余提示；修复喂食无反馈与饿度值不变（菜单吐司 + 桌宠进食点头 + 好吃气泡 + 饱食度自然衰减）；优化桌面抖动（过载阈值上调）；梳理饿度/心情算法 |
+| v0.6.2-beta.27（已发布） | 桌宠 Pop Mart 3D 熊猫素材重构：单张透明 PNG 替代四层切图，从根上消除五官割裂/重影；保留 idle 浮动、状态动画、点击/拖拽/过载等交互 |
+| v0.6.2-beta.25（已发布） | 桌宠熊猫「重切图 + 眼神/嘴动态化」：拆 body/eyes/nose/mouth 四层对齐 PNG，眼神漂移+眨眼、嘴 5 态张合；修 PetWindow 140×140 硬编码留白边；气泡贴窗顶更贴近熊猫。⚠️ 桌宠为测试版功能 |
 | **v0.6.2-beta.1** | 解耦皮肤系统 + 新增 Pop Mart 3D 潮玩桌宠：右键菜单"皮肤"切换 2D 部件合成（Panda-2D）和 Pop Mart 3D 卡（戴黄帽弹吉他熊猫 portrait），状态用 emoji 浮层表达；新皮肤按 `skins/<id>/` 即插即用，便于后续 Live2D / 待办小组件 / 番茄钟等扩展 |
 | v0.6.1-beta.1 | 桌面宠物（QQ 企鹅风格）：透明置顶可拖拽熊猫，22 张 sprite + 部件合成渲染，14 状态自动联动（监听前台应用）+ 右键菜单/喂食/点击交互，零后端改动 |
 | v0.5.0 | 多语言国际化（i18n）：新增 zh-CN / en-US 双语切换，设置页下拉即时切换无需重载；前端自生成周期标签 / 分类名 / 时长格式化；图表随语言重渲染（零后端改动） |

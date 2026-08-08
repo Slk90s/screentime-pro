@@ -2,22 +2,30 @@
  * pet/composables/usePetDrag.ts
  * 桌宠窗口拖拽逻辑（PointerEvents，跨桌面/移动端统一）。
  *
- * 设计思路：
- * - 用 Pointer Events 统一鼠标/触摸，避坑：mousedown 在 Safari 上 touch 失效
- * - **setPointerCapture**：按下即捕获指针，鼠标拖出桌宠小窗（150×330）后仍持续收到
- *   pointermove，否则一旦光标离开窗口拖拽即中断 → 这是「拖动不丝滑」的根因（v0.6.2-beta.6 修复）
- * - **requestAnimationFrame 驱动位置同步**（替代 setTimeout 节流），与显示器刷新率对齐，拖拽更丝滑
- * - 响应式 store 位置立即更新（onMove），Tauri IPC 异步写回原生窗口（rAF 合并）
- * - 拖拽时 passthrough:false 保持不变（默认已关闭穿透）
- * - onStart/onEnd 钩子：拖拽期间暂停 petStore 持久化（deep watch 每帧写 localStorage 会卡顿）
+ * v0.6.2-beta.28 重构：
+ * - 旧方案：每帧 requestAnimationFrame → invoke('move_pet_window') 异步 IPC 写回原生窗口。
+ *   透明置顶窗每帧 set_position 触发 DWM 重合成 + IPC 往返延迟，导致拖拽「不跟手」。
+ * - 新方案：指针移动超过阈值（4px）后用 Tauri 原生 startDragging() 把拖拽交给 OS 处理
+ *   （OS 直接搬运窗口位图，零 IPC、零延迟 → 真正跟手）。
+ *   - 仅在越过阈值才触发原生拖拽，单击/双击仍走点击交互（不吞事件）。
+ *   - 拖拽结束（startDragging Promise resolve）后读取 outerPosition / scaleFactor
+ *     换算逻辑坐标写回 store 持久化。
+ *   - startDragging 不可用（极少数环境/浏览器预览）时回退 rAF + move_pet_window 手动拖拽，
+ *     行为不退化。
  *
  * 修改历史：
  *   - 2026-07-17 @v0.6.0-beta.1: 初始创建 - PointerEvents + 物理像素坐标
  *   - 2026-07-17 @v0.6.0-beta.1: UI优化 - 改用 rAF 驱动，丝滑度提升
  *   - 2026-07-24 @v0.6.2-beta.6: 修复 - 增加 setPointerCapture + onStart/onEnd 暂停持久化，解决拖动卡顿
+ *   - 2026-08-06 @v0.6.2-beta.28: 重构 - 阈值触发原生 startDragging 替代每帧 IPC，根治拖拽不跟手
+ *   - 2026-08-07 @v0.6.2-33: 修复 - 原生拖拽回退分支补 onEnd() (BUG-6)、移除 onMoveHandler 中重复 onStart (BUG-7)
  */
 import { onBeforeUnmount, ref } from 'vue';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
+
+/** 超过该位移（px）才判定为拖拽，否则视为点击（保留点击交互） */
+const DRAG_THRESHOLD = 4;
 
 export interface UsePetDragReturn {
   isDragging: ReturnType<typeof ref<boolean>>;
@@ -31,104 +39,132 @@ export function usePetDrag(
   onEnd?: () => void,
 ): UsePetDragReturn {
   const isDragging = ref(false);
+  const appWindow = getCurrentWindow();
 
+  let pointerId: number | null = null;
   let startX = 0;
   let startY = 0;
   let originX = 0;
   let originY = 0;
-  let pointerId: number | null = null;
-  let pendingX = 0;
-  let pendingY = 0;
+  let moved = false; // 是否已越过拖拽阈值
+  let nativeActive = false; // 原生拖拽进行中（OS 接管指针）
+  // 回退手动路径状态
+  let fallbackX = 0;
+  let fallbackY = 0;
   let rafId: number | null = null;
   let dirty = false;
 
-  // rAF 回调：每帧最多调用一次 Tauri IPC（与显示器刷新率对齐，通常 60/120fps）
-  function flushPosition(): void {
-    if (!dirty || !isDragging.value) return;
+  function clearListeners(): void {
+    window.removeEventListener('pointermove', onMoveHandler);
+    window.removeEventListener('pointerup', onUpHandler);
+    window.removeEventListener('pointercancel', onUpHandler);
+  }
+
+  function flushFallback(): void {
+    if (!dirty) return;
     dirty = false;
-    invoke('move_pet_window', { x: pendingX, y: pendingY }).catch((err) => {
-      console.error('[pet] 同步窗口位置失败', err);
-    });
+    invoke('move_pet_window', { x: fallbackX, y: fallbackY }).catch(() => {});
+  }
+
+  /** 原生拖拽：交给 OS 处理，零延迟跟手 */
+  async function beginNativeDrag(): Promise<void> {
+    nativeActive = true;
+    isDragging.value = true;
+    onStart?.();
+    // OS 接管指针，移除自有监听（pointerup 不再经我们）
+    clearListeners();
+    try {
+      await appWindow.startDragging();
+    } catch (err) {
+      // 原生拖拽不可用 → 回退手动 rAF 拖拽（重新挂监听走 fallback 分支）
+      console.warn('[pet] 原生拖拽不可用，回退手动拖拽', err);
+      isDragging.value = false;
+      nativeActive = false;
+      onEnd?.(); // v0.6.2-33 (BUG-6): 拖拽失败也要恢复 persistSuspended
+      window.addEventListener('pointermove', onMoveHandler);
+      window.addEventListener('pointerup', onUpHandler);
+      window.addEventListener('pointercancel', onUpHandler);
+      return;
+    }
+    // 拖拽结束：读取最终位置（物理像素）→ 换算逻辑像素写回 store
+    isDragging.value = false;
+    try {
+      const phys = await appWindow.outerPosition();
+      const sf = await appWindow.scaleFactor();
+      onMove(Math.round(phys.x / sf), Math.round(phys.y / sf));
+    } catch {
+      const p = getPosition();
+      onMove(p.x, p.y);
+    }
+    nativeActive = false;
+    onEnd?.();
   }
 
   function onMoveHandler(e: PointerEvent): void {
-    if (!isDragging.value || e.pointerId !== pointerId) return;
+    if (e.pointerId !== pointerId || nativeActive) return;
     const dx = e.clientX - startX;
     const dy = e.clientY - startY;
-    const newX = originX + dx;
-    const newY = originY + dy;
-
-    // 立即更新响应式 store（UI 无延迟）
-    onMove(newX, newY);
-
-    // 标记脏数据，等下一帧 flush 到原生窗口
-    pendingX = newX;
-    pendingY = newY;
+    if (!moved) {
+      if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+      // 越过阈值：交给 OS 原生拖拽（跟手），不再手动逐帧 IPC
+      moved = true;
+      void beginNativeDrag(); // onStart 已在 beginNativeDrag 内调用，不重复 (BUG-7)
+      return;
+    }
+    // 回退手动路径（原生拖拽未激活时）：更新 store + 合并 IPC
+    const nx = originX + dx;
+    const ny = originY + dy;
+    onMove(nx, ny);
+    fallbackX = nx;
+    fallbackY = ny;
     dirty = true;
     if (rafId === null) {
       rafId = requestAnimationFrame(() => {
         rafId = null;
-        flushPosition();
+        flushFallback();
       });
     }
   }
 
   function onUpHandler(e: PointerEvent): void {
     if (e.pointerId !== pointerId) return;
-    isDragging.value = false;
-    pointerId = null;
-    window.removeEventListener('pointermove', onMoveHandler);
-    window.removeEventListener('pointerup', onUpHandler);
-    window.removeEventListener('pointercancel', onUpHandler);
-
-    // 取消未发出的 rAF
+    clearListeners();
     if (rafId !== null) {
       cancelAnimationFrame(rafId);
       rafId = null;
     }
-    // 最后一帧强制 flush（确保最终位置精确落库）
-    if (dirty) {
+    // 仅回退手动路径在此收尾（原生路径已在 beginNativeDrag.finally 处理）
+    if (moved && !nativeActive) {
+      const fx = dirty ? fallbackX : getPosition().x;
+      const fy = dirty ? fallbackY : getPosition().y;
       dirty = false;
-      invoke('move_pet_window', { x: pendingX, y: pendingY }).catch(() => {});
-    } else {
-      // 即使没有脏数据也用 store 当前值兜底写回一次
-      const pos = getPosition();
-      invoke('move_pet_window', { x: pos.x, y: pos.y }).catch(() => {});
+      invoke('move_pet_window', { x: fx, y: fy }).catch(() => {});
+      invoke('set_pet_cursor_passthrough', { passthrough: false }).catch(() => {});
+      onEnd?.();
     }
-
-    // 保持可交互（passthrough:false）
-    invoke('set_pet_cursor_passthrough', { passthrough: false }).catch(() => {});
-
-    // 通知外层拖拽结束（恢复持久化等）
-    onEnd?.();
+    pointerId = null;
   }
 
   function onPointerDown(e: PointerEvent): void {
     // 仅响应鼠标左键/单指触摸
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.preventDefault();
-    // 捕获指针：光标移出桌宠小窗后仍持续收到 move 事件（修复拖拽中断导致的卡顿）
-    (e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId);
-    isDragging.value = true;
     pointerId = e.pointerId;
     startX = e.clientX;
     startY = e.clientY;
     const pos = getPosition();
     originX = pos.x;
     originY = pos.y;
-    pendingX = pos.x;
-    pendingY = pos.y;
+    moved = false;
+    nativeActive = false;
     dirty = false;
-    onStart?.();
     window.addEventListener('pointermove', onMoveHandler);
     window.addEventListener('pointerup', onUpHandler);
     window.addEventListener('pointercancel', onUpHandler);
   }
 
   onBeforeUnmount(() => {
-    window.removeEventListener('pointermove', onMoveHandler);
-    window.removeEventListener('pointerup', onUpHandler);
-    window.removeEventListener('pointercancel', onUpHandler);
+    clearListeners();
     if (rafId !== null) cancelAnimationFrame(rafId);
   });
 

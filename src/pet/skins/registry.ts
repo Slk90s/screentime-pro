@@ -15,6 +15,7 @@
  *   - 2026-07-24 @v0.6.2: 初始创建 - 注册表 + 持久化 + 订阅
  *   - 2026-07-24 @v0.6.2-beta.3: 加 Tauri 全局事件广播 + reloadActive()，修跨窗口同步
  *   - 2026-07-24 @v0.6.2-beta.5: 废弃 - 移除 panda-2d，FALLBACK_ID 改 popmart-3d；reloadActive 加失效 id 回落
+ *   - 2026-08-07 @v0.6.2-33: 修复 - register() 不再因皮肤注册顺序错误地自动切换 FALLBACK_ID (BUG-11)
  */
 import { reactive } from 'vue';
 import { emit as tauriEmit } from '@tauri-apps/api/event';
@@ -51,13 +52,8 @@ function notify(): void {
 export const skinRegistry: PetSkinRegistry = {
   register(manifest) {
     state.byId.set(manifest.id, manifest);
-    // 若注册时还没选过活跃 id，自动选第一个注册的
-    if (state.activeId === FALLBACK_ID && !state.byId.has(FALLBACK_ID)) {
-      state.activeId = manifest.id;
-      persist(state.activeId);
-      notify();
-    } else if (!state.byId.has(state.activeId)) {
-      // 当前活跃 id 不在已注册清单里，兜底到 FALLBACK_ID（或第一个已注册的）
+    // v0.6.2-33 (BUG-11): 仅当 activeId 不在注册表中时才回落，不因 FALLBACK_ID 未注册就误切
+    if (!state.byId.has(state.activeId)) {
       const fallback = state.byId.get(FALLBACK_ID) ?? manifest;
       state.activeId = fallback.id;
       persist(state.activeId);

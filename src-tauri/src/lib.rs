@@ -203,19 +203,21 @@ pub fn run() {
             // ===== 启动即自动追踪（无需手动触发）=====
             commands::begin_tracking(&app_state);
 
-            // ===== v0.6.2-beta.15：系统 CPU 负载监测线程 =====
-            // 5s 间隔采样一次；连续 3 次（=15s）> 80% 时向 pet 窗口发 overheating 事件；
-            // 连续 2 次降至 < 60% 时发 cooled 事件恢复。
+            // ===== v0.6.2-beta.15：系统 CPU 负载监测线程（v0.7.0 调参）=====
+            // 5s 间隔采样一次；连续 4 次（=20s）> 90% 时才判过热（向 pet 窗口发 overloading 事件）；
+            // 连续 3 次（=15s）降至 < 55% 才恢复冷却。
+            // 调高阈值 + 加长持续判定：避免日常编译/转码等瞬时高负载把桌宠频繁打入「升温抖动」，
+            // 这是 v0.6 桌宠在桌面「抖动很频繁不丝滑」的主因（0.18s 高频抖动动画被反复触发）。
             let monitor = Arc::new(system_load::CpuMonitor::new());
             let app_handle = app.handle().clone();
             std::thread::Builder::new()
                 .name("system-load-monitor".into())
                 .spawn(move || {
                     use std::time::Duration;
-                    const OVERHEAT_PCT: f32 = 0.80;
-                    const COOL_PCT: f32 = 0.60;
-                    const SUSTAIN_OVERHEAT: u32 = 3;
-                    const SUSTAIN_COOL: u32 = 2;
+                    const OVERHEAT_PCT: f32 = 0.90;
+                    const COOL_PCT: f32 = 0.55;
+                    const SUSTAIN_OVERHEAT: u32 = 4;
+                    const SUSTAIN_COOL: u32 = 3;
                     let mut hot_streak = 0u32;
                     let mut cool_streak = 0u32;
                     let mut is_overheating = false;
@@ -341,6 +343,7 @@ pub fn run() {
             commands::get_overview,
             commands::get_daily_summaries,
             commands::get_daily_categories,
+            commands::get_month_summary,
             commands::get_hourly_buckets,
             commands::get_app_ranking,
             commands::get_categories,

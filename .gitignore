@@ -15,6 +15,10 @@ src-tauri/Cargo.lock
 # Release binaries (发布安装包通过 GitHub Releases 分发，不入库)
 release/
 
+# 本地构建产物 / AI 生图临时目录（不入库，CI 重新产出）
+output/
+generated-images/
+
 # OS / editor
 .DS_Store
 *.swp

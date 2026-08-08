@@ -33,7 +33,11 @@
 import { ref, onMounted, onBeforeUnmount } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { syncLocaleFromStorage } from '../i18n';
 import PetContextMenu from './components/PetContextMenu.vue';
+// v0.6.2-35: 显式触发皮肤副作用注册，确保 pet-menu 独立 webview 中 skinRegistry.list() 不为空，
+// 菜单皮肤按钮与高亮状态与主窗口/设置页保持一致。
+import './skins';
 
 const visible = ref(false);
 let unlistenShown: (() => void) | null = null;
@@ -54,12 +58,17 @@ onMounted(async () => {
   }
   try {
     unlistenShown = await listen('pet-menu-shown', () => {
+      // 菜单打开时重读语言：避免独立窗口错过 locale-changed 事件而停留在旧语言
+      syncLocaleFromStorage();
       visible.value = true;
     });
     // 竞态兜底：若 show 事件在监听注册前已发出（窗口首次动态创建、加载慢于右键），
     // 检查本窗口当前是否可见，可见则直接显示菜单（pet-menu 由 conf 预创建时通常不会触发）。
     const { getCurrentWindow } = await import('@tauri-apps/api/window');
-    if (await getCurrentWindow().isVisible()) visible.value = true;
+    if (await getCurrentWindow().isVisible()) {
+      syncLocaleFromStorage();
+      visible.value = true;
+    }
   } catch {
     /* 非 Tauri 环境 */
   }

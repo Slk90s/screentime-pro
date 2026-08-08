@@ -6,6 +6,9 @@ on:
       - "v*"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   # ---------- Windows ----------
   windows:
@@ -26,7 +29,19 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           args: --ci --target x86_64-pc-windows-msvc --bundles nsis
-          release: false
+          tagName: "v__VERSION__"
+          releaseName: "v__VERSION__"
+          releaseBody: |
+            ### 屏幕时间管家 ScreenTime Pro — 本次更新（整合 0.6.2 全部 Beta 修复）
+            - 📅 日历支持月视图切换，并展示本月统计概括（月总时长 / 活跃天数 / 日均 / 最常使用 App / 最忙的一天）；点「今天」日历同步跳回当月
+            - 🐼 主界面桌宠设置移除冗余的「已经吃饱啦 → 喂食」提示
+            - 🍖 喂食系统修复：饿度值随喂食 +食物值、每 2 分钟自然 −1；喂食后右键菜单「+N」反馈 + 桌宠进食点头动画 + 「好吃！」气泡
+            - 🛠 桌面频繁抖动修复：系统过载升温阈值由 CPU≥80% 持续 15s 上调为 ≥90% 持续 20s（<55% 持续 15s 冷却），从源头减少 0.18s 剧烈抖动翻转
+            - 🌐 中英双语（zh-CN / en-US）同步
+            完整版本历史见仓库 README。
+          releaseDraft: false
+          prerelease: false
+          release: true
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -59,7 +74,19 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           args: --ci --target x86_64-unknown-linux-gnu
-          release: false
+          tagName: "v__VERSION__"
+          releaseName: "v__VERSION__"
+          releaseBody: |
+            ### 屏幕时间管家 ScreenTime Pro — 本次更新（整合 0.6.2 全部 Beta 修复）
+            - 📅 日历支持月视图切换，并展示本月统计概括；点「今天」日历同步跳回当月
+            - 🐼 主界面桌宠设置移除冗余的「已经吃饱啦 → 喂食」提示
+            - 🍖 喂食系统修复（饿度值随喂食/衰减变化 + 喂食反馈动画）
+            - 🛠 桌面频繁抖动修复（过载升温阈值上调）
+            - 🌐 中英双语（zh-CN / en-US）同步
+            完整版本历史见仓库 README。
+          releaseDraft: false
+          prerelease: false
+          release: true
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -68,7 +95,7 @@ jobs:
             src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
             src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
 
-  # ---------- macOS (optional, needs macOS runner) ----------
+  # ---------- macOS (Apple Silicon) ----------
   macos:
     runs-on: macos-latest
     steps:
@@ -87,7 +114,19 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           args: --ci --target aarch64-apple-darwin
-          release: false
+          tagName: "v__VERSION__"
+          releaseName: "v__VERSION__"
+          releaseBody: |
+            ### 屏幕时间管家 ScreenTime Pro — 本次更新（整合 0.6.2 全部 Beta 修复）
+            - 📅 日历支持月视图切换，并展示本月统计概括；点「今天」日历同步跳回当月
+            - 🐼 主界面桌宠设置移除冗余的「已经吃饱啦 → 喂食」提示
+            - 🍖 喂食系统修复（饿度值随喂食/衰减变化 + 喂食反馈动画）
+            - 🛠 桌面频繁抖动修复（过载升温阈值上调）
+            - 🌐 中英双语（zh-CN / en-US）同步
+            完整版本历史见仓库 README。
+          releaseDraft: false
+          prerelease: false
+          release: true
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
