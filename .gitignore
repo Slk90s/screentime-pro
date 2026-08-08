@@ -22,6 +22,15 @@ generated-images/
 # 本地专用脚本（仅本地，不入库）
 scripts/
 
+# 本地 AI 生图原始稿 / 未引用素材（不入库，仅本地参考）
+src/pet/skins/spiderman/assets/Cute_chibi_style_superhero_*.png
+src/pet/skins/spiderman/assets/spiderman-single.png
+
+# 本地生成 / 开发脚本（不入库）
+gen_pet_frames.py
+gen_spiderman_frames.py
+sandbox-vite-tauri-workaround.zip
+
 # 计划 / 规格文档（agent 产出的草案，仅本地参考，不入库）
 # 仅保留 ARCHITECTURE.md 与 RELEASE.md 作为仓库文档；其余 plan 类文档不进 GitHub。
 docs/pet-assets-manifest.md
