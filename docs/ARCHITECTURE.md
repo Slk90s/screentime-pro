@@ -2,7 +2,7 @@
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-07-24（v0.6.2 解耦皮肤系统）
+> 最后更新：2026-08-08（v0.7.0 发布 + 文档清理：移除 plan 类文档）
 
 ---
 
@@ -10,7 +10,7 @@
 
 跨平台应用使用时长追踪（macOS / Windows / Linux），对标 iOS「屏幕使用时间」。**数据 100% 本地（SQLite bundled），零上传，隐私优先**。
 
-栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4**。当前版本 **v0.6.2-beta.1**（HEAD；尚未发布）。
+栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v0.7.0**（已发布，详见 RELEASE.md）。
 
 ---
 
@@ -26,7 +26,7 @@
                      │ Tauri IPC (snake_case 入参 → camelCase 参数 / 原样返回值)
 ┌────────────────────┴────────────────────────────────────────────┐
 │  Core (Rust, src-tauri/src)                                     │
-│  - commands.rs: 42 个 #[tauri::command] 路由                    │
+│  - commands.rs: 主 IPC 命令路由（+ pet/ 子模块的桌宠窗口/菜单命令）                    │
 │  - tracker/{macos,windows,linux}.rs: 平台采样器                 │
 │  - categorizer.rs: 自动归类（Wikipedia + 本地字典 + LRU 缓存）   │
 │  - db/: SQLite (rusqlite bundled, prepared statements)          │
@@ -47,7 +47,7 @@
 ### 3.1 Rust 后端（src-tauri/src/）
 | 模块 | 职责 | 改我会影响 |
 |------|------|------------|
-| `commands.rs` (~1482 行) | 42 个 IPC 命令路由 | 前端 `api/*` 必须对齐字段名 |
+| `commands.rs` | 主 IPC 命令路由（Rust 端共约 50+ 个 `#[tauri::command]`，桌宠窗口/菜单命令在 `pet/` 子模块） | 前端 `api/*` 必须对齐字段名 |
 | `tracker/{macos,windows,linux}.rs` | 平台采样器（10s tick） | 跨平台数据一致性 |
 | `tracker/mod.rs` | trait 抽象 + 后台循环 | — |
 | `db/mod.rs` (~1062 行) | SQLite 连接池 + schema 管理 | 数据库迁移 |
@@ -65,7 +65,9 @@
 | `src/lib/` | 通用工具（logger、format 等） |
 | `src/types.ts` | **前后端对接**类型（snake_case 镜像 Rust struct） |
 
-### 3.3 桌宠子系统（src/pet/）— v0.6.2 起分层
+### 3.3 桌宠子系统（src/pet/）
+
+桌宠是独立透明置顶 webview，与 `main` 主窗口经 Tauri 全局事件 + `localStorage` 跨窗口同步（见 §7.4）。当前共 3 个窗口：`main`（设置）、`pet`（桌宠本体）、`pet-menu`（右键菜单，v0.6.2-beta.17 起独立窗口）。
 ```
 src/pet/
 ├── PetWindow.vue          ← webview 根：拖拽 / 交互 / 监听 / 路由
@@ -89,16 +91,19 @@ src/pet/
 │   └── spriteLayout.ts          （部件坐标唯一数据源）
 ├── stores/petStore.ts          （未改动）
 ├── types.ts                    （未改动）
-└── skins/                      ← v0.6.2 NEW: 解耦皮肤层
+└── skins/                      ← 解耦皮肤层（注册表模式，即插即用）
     ├── types.ts                （PetSkin 接口）
     ├── registry.ts             （注册表 + 持久化 + 订阅）
     ├── index.ts                （引导：注册内置皮肤）
-    ├── （panda2d/ 已于 v0.6.2-beta.5 移除：旧 PetCanvas 暴露的 2D 皮肤）
-    └── popmart3d/
-        ├── index.ts
-        ├── PopMartPandaPet.vue
-        └── assets/popmart-panda-reference.jpg
+    ├── popmart3d/              （Pop Mart 3D 熊猫：单张透明 PNG + emoji 浮层 + CSS transform 动画）
+    │   ├── PopMartPandaPet.vue
+    │   └── assets/popmart-panda-single.png
+    └── spiderman/              （蜘蛛侠：单张 + swing/pose/web/crouch 姿势精灵）
+        ├── SpiderManPet.vue
+        └── assets/spiderman-*.png
 ```
+
+> 早期"4 层精灵拼贴"（body/eyes/mouth/nose 分别切图）因切片羽化导致五官割裂，已废弃；现行方案为**单张透明 PNG + 表情/姿势精灵叠加**。旧规格 `docs/pet-assets-manifest.md` 已从仓库移除（仅本地保留）。
 
 ---
 
@@ -155,7 +160,7 @@ PetSkinRenderer.watchEffect → skinTick++
 
 ---
 
-## 5. IPC 契约（42 命令）
+## 5. IPC 契约（约 50+ 命令）
 
 Rust 端在 `commands.rs` 注册；前端通过 `src/api/*` 调用。**改 IPC 必须同时改两端**。
 
@@ -173,17 +178,20 @@ Rust 端在 `commands.rs` 注册；前端通过 `src/api/*` 调用。**改 IPC �
 
 ---
 
-## 6. SQLite 表结构（db/mod.rs / sql/*.sql）
+## 6. SQLite 表结构（sql/schema.sql 为唯一权威）
+
+数据库由 `rusqlite` bundled 在首次启动时按 `sql/schema.sql` 自动建表；`seed_categories.sql` / `seed_rules.sql` 注入初始分类与归类规则。**以 `sql/schema.sql` 为准**，下表为当前结构：
 
 | 表 | 关键列 | 用途 |
 |----|--------|------|
-| `app_usage` | id, process_name, started_at, ended_at, duration_secs, category_id | 主采样表（append-only） |
-| `categories` | id, name, kind ('user'/'auto'/'system') | 归类字典 |
-| `rules` | id, match_type('app'/'title'), pattern, category_id | 用户归类规则 |
-| `daily_aggregates` | date, total_secs, top_process | 缓存 Dashboard 日聚合 |
-| `pet_state` | id (=1), enabled, position_json, fullness, feed_count, level, today_feed_count | 桌宠状态持久化（key 单行） |
+| `apps` | id, name, process_name(UNIQUE+platform), exe_path, icon_blob, category_id, platform | 应用主表（每进程每平台一行） |
+| `sessions` | id, app_id(FK), start_at, end_at, duration_seconds, date, window_title, device | 主采样表（append-only，每次使用一段） |
+| `daily_summaries` | id, date, app_id, total_seconds, session_count(UNIQUE date+app_id) | 日聚合缓存（Dashboard/Trends 用） |
+| `categories` | id(TEXT PK), name, color | 归类字典（social/productivity/...） |
+| `classification_rules` | id, field(process_name/window_title/exe_path/bundle_id/name), match_type(contains/equals/prefix/suffix/regex), pattern, category_id, priority, enabled | 自动归类规则（约 40 条种子） |
+| `settings` | key(TEXT PK), value | 简单键值配置（如 autostart 用户偏好） |
 
-**注意**：单行 pet_state 由前端 `petStore` 通过 `tracker` API 间接读写，不直接挂 SQL 命令。**新功能若需持久化表，先在 `sql/` 加迁移文件，db/mod.rs 注册到迁移队列。**
+**注意**：桌宠状态（开关/位置/喂食/好感度）**不落 SQL**，由前端 `petStore` 经 Pinia persist 写入 `localStorage`，跨窗口通过 `localStorage` 共享。**新功能若需持久化表，先在 `sql/` 加迁移文件，db/mod.rs 注册到迁移队列。**
 
 ---
 
@@ -192,7 +200,7 @@ Rust 端在 `commands.rs` 注册；前端通过 `src/api/*` 调用。**改 IPC �
 ### 7.1 接口契约
 ```ts
 interface PetSkinManifest {
-  id: string;                          // 例 'popmart-3d'（v0.6.2-beta.5 起唯一皮肤）
+  id: string;                          // 例 'popmart-3d' / 'spiderman'（当前内置两套皮肤）
   name: string;                        // UI 展示名
   version: string;
   description?: string;                // tooltip 用
@@ -227,6 +235,23 @@ PetWindow.vue
 
 修改这些**影响所有皮肤**（慎动）：
 - `components/PetSkinRenderer.vue`（协议）
+
+### 7.4 多窗口状态同步（跨 webview 陷阱）
+
+桌宠涉及 3 个 Tauri 窗口 / webview：`main`（设置）、`pet`（桌宠本体）、`pet-menu`（右键菜单）。**每个 webview 各持一份 `petStore` 模块级实例**（仅 `localStorage` 共享），彼此不自动同步。跨窗口同步靠 Tauri 全局事件 + `petStore.reload()` 重读 `localStorage`：
+
+| 事件 | 触发方 | 监听方动作 |
+|------|--------|------------|
+| `pet-skin-changed` | Settings 切皮肤 | PetWindow / pet-menu 调 `skinRegistry.reloadActive()` |
+| `pet-custom-updated` | 编辑器改表情/素材 | PetWindow `reloadBadges` / `reloadConfig` |
+| `pet-store-updated` | 菜单改状态/喂食/位置 | PetWindow `petStore.reload()`（不读 `state`，避免覆盖前台自动状态） |
+
+> 改任何"某窗口写 store、另一窗口需看到"的逻辑，必须广播对应事件并在目标窗口 `reload`，否则出现"菜单操作桌宠不反应"类 bug。
+
+### 7.5 拖拽与渲染性能
+
+- **拖拽跟手**：越过 4px 阈值才调用 Tauri 原生 `getCurrentWindow().startDragging()`，把拖拽交给 OS（零 IPC、零延迟）；未越阈值走点击交互，不吞单击/双击。
+- **透明置顶窗性能**：投影/滤镜**绝不**与 `transform` 动画放在同一元素（filter 会破坏 GPU 合成层，每帧重算投影）；投影放静态 `img` 层一次性光栅化，动画元素只做 `transform`。升温/抖动用 `transform` 抖动而非 `hue-rotate` 滤镜。
 
 ---
 
@@ -314,7 +339,8 @@ src-tauri/
 ├── tauri.conf.json      ← VERSION IS HERE
 └── src/
     ├── main.rs          ← App 入口
-    ├── commands.rs      ← 42 IPC 命令
+    ├── commands.rs      ← 主 IPC 命令路由（+ pet/ 子模块桌宠命令）
+    ├── pet/             ← 桌宠 Rust 端（window / menu_window / platform）
     ├── tracker/         ← 平台采样
     ├── db/              ← SQLite
     ├── categorizer.rs
@@ -326,28 +352,31 @@ src/
 ├── api/                 ← invoke 包装
 ├── views/               ← 主窗口 4 页
 ├── components/          ← 通用组件
-├── pet/                 ← 桌宠子系统
+├── pet/                 ← 桌宠子系统（含 skins/ 两套皮肤）
+├── i18n/                ← vue-i18n 词条（zh-CN / en-US）
 └── lib/                 ← 工具
 
 docs/
-├── ARCHITECTURE.md      ← 本文件
-├── RELEASE.md           ← 版本管理与一键发布
-└── pet-assets-manifest.md ← 桌宠素材清单
+├── ARCHITECTURE.md      ← 本文件（工程面）
+└── RELEASE.md           ← 版本管理与发布流程（唯一权威）
 
-release/v0.x.y/          ← 历史版本归档
-release/v0.x.y/NOTES.md  ← 本版本变更说明
-sql/                     ← SQLite 迁移
+# 以下为本地工作目录（已 gitignore，不入库，仅本机参考）：
+#   release/v0.x.y/      历史版本归档与 Release Notes（本地草稿）
+#   output/              本地构建产物 / 安装包
+# 计划/规格类文档（pet-assets-manifest / I18N_PLAN / v060-pet-plan 等）已移出仓库，仅本地保留。
+
+sql/                     ← SQLite 迁移（已恢复入库，为数据库唯一权威）
 ```
 
 ---
 
-## 12. 自我测试 / 自测入口
+## 12. 本地自测入口（均在本地工作目录，已 gitignore，不入库）
 
 | 路径 | 用途 |
 |------|------|
-| `output/2026-07-21/pet-self-test-checklist.md` | v0.6.0-beta 自测清单（7 段） |
-| `output/2026-07-24/pet-sprite-debug.html` | 23 素材逐张 + 合成预览 |
-| `release/v0.X.Y/` | 本地 dmg / AppImage / deb 自测包 |
+| `output/` | 本地构建产物、安装包、临时调试文件 |
+| `release/v0.X.Y/` | 本地 dmg / AppImage / deb 自测包与 Release Notes 草稿 |
+| 各版本 `NOTES.md` | 发布说明草稿（CI 打 `v*` tag 时由 `.github/workflows/build.yml` 的 `releaseBody` 生成线上 Release Notes） |
 
 ---
 
