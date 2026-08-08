@@ -19,6 +19,10 @@ release/
 output/
 generated-images/
 
+# 本地专用脚本与 SQL（仅本地，不入库）
+scripts/
+sql/
+
 # OS / editor
 .DS_Store
 *.swp
