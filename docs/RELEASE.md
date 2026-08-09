@@ -40,7 +40,8 @@
 
 | 版本 | 发布日期 | 关键变更 | 是否推荐 |
 |------|----------|----------|----------|
-| v0.7.1 | 2026-08-08 | 修复重发：补齐 v0.7.0 缺失入库的桌宠皮肤源码资产（spider-man 皮肤目录、bubble-phrases.json、popmart3d PNG 资源），修复因这些文件未纳入版本管理导致 CI 三端构建在类型检查阶段失败、GitHub Release 未生成、安装包未上传的问题；应用功能与 v0.7.0 完全一致。 | ⭐ Latest |
+| v0.7.2 | 2026-08-09 | 本地自动备份（每日 JSON + 自定义目录，参考微信桌面版，用户自行拷到云盘即云备份）+ macOS 门禁修复脚本（dmg 内 修复门禁.command）+ 设备ID硬件稳定化（基于 IOPlatformUUID / MachineGuid / machine-id，重装/卸载不碎片）。 | ⭐ Latest |
+| v0.7.1 | 2026-08-08 | 修复重发：补齐 v0.7.0 缺失入库的桌宠皮肤源码资产（spider-man 皮肤目录、bubble-phrases.json、popmart3d PNG 资源），修复因这些文件未纳入版本管理导致 CI 三端构建在类型检查阶段失败、GitHub Release 未生成、安装包未上传的问题；应用功能与 v0.7.0 完全一致。 | 旧版 |
 | v0.7.0 | 2026-08 | 大版本整合：日历月视图 + 本月统计概括（月总时长 / 活跃天数 / 日均 / 最常使用 App / 最忙的一天）+ 点「今天」同步跳回当月；桌宠设置移除冗余「已经吃饱啦 → 喂食」；喂食系统修复（饿度随喂食 +食物值、每 2 分钟 −1、每日上限 5 次、喂食反馈动画）；桌面抖动修复（过载升温阈值上调为 ≥90% 持续 20s）；中英双语（zh-CN / en-US）同步。整合 0.6.2 全部 Beta 修复。 | 旧版 |
 | v0.6.2-beta.1 | 2026-07-24 | 解耦皮肤系统（`src/pet/skins/` 注册表模式）+ 新增 Pop Mart 3D 潮玩桌宠（戴黄帽弹吉他熊猫 portrait）。右键菜单新增"皮肤"切换段，无后端改动。**未触动任何 v0.6.1-beta.1 原有组件**（PetCanvas/Body/Layer/编辑器/引擎/composables/types 一律禁碰）。后续 Live2D / 待办 / 番茄钟等"类似桌宠"小组件按相同 `skins/` 或 `widgets/` 模式即插即用。 | 旧版 |
 | v0.6.1-beta.1 | 2026-07-21 | 桌面宠物（QQ 企鹅风格）+ 修复主窗口顶部实时栏 IPC 字段名 bug（window_title/session_seconds/idle_seconds 此前用驼峰导致恒为 undefined，已与 Rust 返回值对齐为蛇形）；其余同 v0.6.0-beta.1。Rust 端新增 5 个 pet 命令 + capabilities/pet.json。 | 旧版 |
@@ -162,5 +163,5 @@ git push origin v{ver}        # 触发 .github/workflows/build.yml
 
 ---
 
-**最后更新**：2026-08-08 @v0.7.1
+**最后更新**：2026-08-09 @v0.7.2
 **维护人**：所有 AI / 开发者

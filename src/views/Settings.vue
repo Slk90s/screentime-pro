@@ -169,6 +169,67 @@
           />
         </div>
 
+        <!-- v0.7.2 本地自动备份（参考微信桌面版：本地落盘 JSON，用户自行拷到云盘即"云备份"） -->
+        <div class="sub-zone">
+          <h4><AppIcon name="clock" :size="14" /> {{ t("settings.autoBackup") }}</h4>
+          <p class="field-hint" v-html="t('settings.autoBackupDesc')" />
+          <div class="form-row row">
+            <label>{{ t("settings.autoBackupOn") }}</label>
+            <label class="toggle-switch" :class="{ on: backupConfig.enabled }">
+              <input
+                type="checkbox"
+                :checked="backupConfig.enabled"
+                @change="onToggleAutoBackup"
+              />
+              <span class="toggle-slider" />
+              <span class="toggle-state">
+                {{ backupConfig.enabled ? t("settings.autostartOn") : t("settings.autostartOff") }}
+              </span>
+            </label>
+          </div>
+
+          <div class="form-row">
+            <label>{{ t("settings.backupPath") }}</label>
+            <div class="path-row">
+              <input
+                v-model="backupConfig.path"
+                type="text"
+                class="text-input"
+                :placeholder="t('settings.backupPathPh')"
+                readonly
+              />
+              <button class="ghost-btn" @click="chooseBackupFolder">
+                <AppIcon name="folder" :size="14" /> {{ t("settings.chooseFolder") }}
+              </button>
+            </div>
+            <p class="field-hint" v-html="t('settings.backupPathHint')" />
+          </div>
+
+          <div class="form-row">
+            <label>{{ t("settings.backupKeep") }}</label>
+            <input
+              v-model.number="backupConfig.keep_days"
+              type="number"
+              min="1"
+              max="3650"
+              class="text-input narrow"
+              @change="persistBackupConfig"
+            />
+            <p class="field-hint" v-html="t('settings.backupKeepHint')" />
+          </div>
+
+          <div class="form-row row between">
+            <span class="last-backup">
+              {{ t("settings.backupLast") }}
+              <b>{{ backupConfig.last_date || t("settings.backupNever") }}</b>
+            </span>
+            <button class="primary-btn" :disabled="backupBusy" @click="onBackupNow">
+              <AppIcon name="download" :size="14" />
+              {{ backupBusy ? t("settings.backingUp") : t("settings.backupNow") }}
+            </button>
+          </div>
+        </div>
+
         <div class="sub-zone">
           <h4><AppIcon name="tool" :size="14" /> {{ t("settings.diag") }}</h4>
           <p class="field-hint" v-html="t('settings.diagHint')" />
@@ -467,11 +528,12 @@ import { useI18n } from "vue-i18n";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 import Modal from "../components/Modal.vue";
 import AppIcon from "../components/AppIcon.vue";
 import { tracker } from "../api/tracker";
 import { i18n, setLocale, type Locale } from "../i18n";
-import type { DeviceStats, SettingsOut, UpdateInfo } from "../types";
+import type { BackupConfig, DeviceStats, SettingsOut, UpdateInfo } from "../types";
 import { formatDuration } from "../utils/format";
 import { petStore } from "../pet/stores/petStore";
 import PetSpriteEditor from "../pet/components/PetSpriteEditor.vue";
@@ -585,6 +647,66 @@ const autostart = ref(false);
 
 const fileInput = ref<HTMLInputElement>();
 
+// ============ v0.7.2 本地自动备份（微信桌面版式）============
+const backupConfig = ref<BackupConfig>({
+  enabled: false,
+  path: "",
+  keep_days: 30,
+  last_date: "",
+});
+const backupBusy = ref(false);
+
+async function loadBackupConfig() {
+  try {
+    backupConfig.value = await tracker.getBackupConfig();
+  } catch {
+    /* 浏览器预览模式忽略 */
+  }
+}
+
+async function onToggleAutoBackup(e: Event) {
+  const next = (e.target as HTMLInputElement).checked;
+  backupConfig.value.enabled = next; // 乐观更新
+  await persistBackupConfig();
+}
+
+async function chooseBackupFolder() {
+  try {
+    const selected = await open({ directory: true, multiple: false });
+    if (typeof selected === "string" && selected) {
+      backupConfig.value.path = selected;
+      await persistBackupConfig();
+    }
+  } catch (err) {
+    showAlert("warn", t("settings.openFailed"), t("settings.openFailedMsg", { err: err instanceof Error ? err.message : String(err) }));
+  }
+}
+
+async function persistBackupConfig() {
+  try {
+    await tracker.saveBackupConfig({
+      enabled: backupConfig.value.enabled,
+      path: backupConfig.value.path,
+      keepDays: backupConfig.value.keep_days,
+    });
+  } catch (err) {
+    showAlert("warn", t("settings.saveFailed"), t("settings.saveFailedMsg", { err: err instanceof Error ? err.message : String(err) }));
+  }
+}
+
+async function onBackupNow() {
+  backupBusy.value = true;
+  try {
+    const res = await tracker.runBackupNow();
+    exportPath.value = res.path;
+    exportDialogOpen.value = true;
+  } catch (err) {
+    showAlert("warn", t("settings.exportFailed"), t("settings.exportFailedMsg", { err: err instanceof Error ? err.message : String(err) }));
+  } finally {
+    backupBusy.value = false;
+  }
+}
+
 // ============ 通用弹窗 ============
 const alertOpen = ref(false);
 const alertType = ref<"info" | "confirm" | "warn">("info");
@@ -697,6 +819,11 @@ onMounted(async () => {
     idleMin.value = Math.max(1, Math.round(s.idle_threshold / 60));
     retention.value = s.data_retention_days;
     autostart.value = s.autostart;
+  } catch {
+    /* 浏览器预览模式忽略 */
+  }
+  try {
+    await loadBackupConfig();
   } catch {
     /* 浏览器预览模式忽略 */
   }
@@ -1125,6 +1252,21 @@ async function onCheckUpdate() {
   margin-top: 4px;
 }
 .btn-row-end { justify-content: flex-end; }
+
+/* 自动备份：路径选择行 + 上次备份行 */
+.path-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.path-row .text-input { flex: 1; max-width: none; }
+.path-row .ghost-btn { flex-shrink: 0; }
+.form-row.row.between { justify-content: space-between; }
+.last-backup {
+  font-size: 12.5px;
+  color: var(--text-dim, #86868b);
+}
+.last-backup b { color: var(--text); font-weight: 600; }
 
 /* 设备 ID 条 */
 .id-bar {

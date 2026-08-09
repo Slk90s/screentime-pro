@@ -28,6 +28,7 @@ use crate::db::{
 use crate::error::AppError;
 use crate::tracker::{platform_name, RawApp};
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, Weekday};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
 use tauri::Manager;
@@ -598,6 +599,152 @@ pub fn import_data(
     let bundle: ExportBundle = serde_json::from_str(&content).map_err(|e| e.to_string())?;
     let state = app.state::<Arc<AppState>>();
     state.db.import_data(&bundle).map_err(|e| e.to_string())
+}
+
+// ===================== 本地自动备份（v0.7.2，参考微信桌面版逻辑）=====================
+// 设计：本地落盘 JSON 备份文件（默认每天一份），用户自行复制到云盘/移动硬盘即实现「云备份」。
+// 配置存 settings：backup_enabled / backup_path / backup_keep_days / backup_last_date。
+
+/// 自动备份配置（get_backup_config 返回给前端）
+#[derive(serde::Serialize, Clone)]
+pub struct BackupConfig {
+    pub enabled: bool,
+    pub path: String,
+    pub keep_days: u32,
+    pub last_date: String,
+}
+
+/// 执行一次备份：导出全量 JSON 并写入目标目录。
+/// - `path_override`：指定目录；为空时用 settings.backup_path；再为空用默认 exports 目录。
+/// - 文件名 `screentime_backup_YYYY-MM-DD.json`（同日覆盖 → 每天一份）。
+/// - 完成后写 backup_last_date=今天，并按 keep_days 清理该目录旧备份。
+fn perform_backup(app: &tauri::AppHandle, path_override: Option<&str>) -> Result<String, String> {
+    let state = app.state::<Arc<AppState>>();
+    let bundle = state.db.export_all_filtered(None).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(&bundle).map_err(|e| e.to_string())?;
+
+    // 决定目标目录（优先级：覆盖路径 > 配置路径 > 默认 exports 目录）
+    let dir = match path_override {
+        Some(p) if !p.trim().is_empty() => PathBuf::from(p),
+        _ => match state.db.get_setting("backup_path").filter(|s| !s.is_empty()) {
+            Some(p) => PathBuf::from(p),
+            None => {
+                let d = app.path().app_data_dir().map_err(|e| e.to_string())?;
+                d.join("exports")
+            }
+        },
+    };
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+    let file = format!("screentime_backup_{}.json", today_str());
+    let path = dir.join(file);
+    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+
+    // 更新「今天已备份」标记，避免同日重复备份
+    let _ = state.db.set_setting("backup_last_date", &today_str());
+
+    // 按保留天数清理该目录下的旧备份（仅清理本程序生成的文件）
+    if let Some(kd) = state.db.get_setting("backup_keep_days") {
+        if let Ok(kd) = kd.parse::<u32>() {
+            prune_backup_files(&dir, kd);
+        }
+    }
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// 清理目录下超过 keep_days 天的本程序备份文件（按文件名日期 YYYY-MM-DD 字典序比较）
+fn prune_backup_files(dir: &Path, keep_days: u32) {
+    let cutoff = (Local::now() - Duration::days(keep_days as i64))
+        .format("%Y-%m-%d")
+        .to_string();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("screentime_backup_") && name.ends_with(".json") {
+                let date_part = name
+                    .trim_start_matches("screentime_backup_")
+                    .trim_end_matches(".json");
+                if date_part < cutoff.as_str() {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
+}
+
+/// 定时线程调用：若「自动备份」开启且今天尚未备份则执行一次。
+pub fn auto_backup_tick(app: &tauri::AppHandle) {
+    let state = match app.try_state::<Arc<AppState>>() {
+        Some(s) => s,
+        None => return,
+    };
+    let enabled = state
+        .db
+        .get_setting("backup_enabled")
+        .map(|v| v == "true")
+        .unwrap_or(false);
+    if !enabled {
+        return;
+    }
+    let today = today_str();
+    let last = state.db.get_setting("backup_last_date").unwrap_or_default();
+    if last == today {
+        return; // 今天已备份，跳过
+    }
+    if let Err(e) = perform_backup(app, None) {
+        eprintln!("[auto-backup] 自动备份失败: {}", e);
+    }
+}
+
+#[tauri::command]
+pub fn get_backup_config(state: tauri::State<'_, Arc<AppState>>) -> BackupConfig {
+    let enabled = state
+        .db
+        .get_setting("backup_enabled")
+        .map(|v| v == "true")
+        .unwrap_or(false);
+    let path = state.db.get_setting("backup_path").unwrap_or_default();
+    let keep_days = state
+        .db
+        .get_setting("backup_keep_days")
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(30);
+    let last_date = state.db.get_setting("backup_last_date").unwrap_or_default();
+    BackupConfig {
+        enabled,
+        path,
+        keep_days,
+        last_date,
+    }
+}
+
+#[tauri::command]
+pub fn save_backup_config(
+    state: tauri::State<'_, Arc<AppState>>,
+    enabled: bool,
+    path: String,
+    keep_days: u32,
+) -> Result<(), String> {
+    let _ = state
+        .db
+        .set_setting("backup_enabled", if enabled { "true" } else { "false" });
+    // path 为空 → 清空配置，回退默认 exports 目录；非空 → 校验可写后保存
+    if path.trim().is_empty() {
+        let _ = state.db.set_setting("backup_path", "");
+    } else {
+        std::fs::create_dir_all(&path).map_err(|e| format!("无法创建备份目录：{}", e))?;
+        let _ = state.db.set_setting("backup_path", &path);
+    }
+    let _ = state
+        .db
+        .set_setting("backup_keep_days", &keep_days.to_string());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn run_backup_now(app: tauri::AppHandle) -> Result<ExportResult, String> {
+    let path = perform_backup(&app, None)?;
+    Ok(ExportResult { path })
 }
 
 /// 清理超过保留天数的旧数据

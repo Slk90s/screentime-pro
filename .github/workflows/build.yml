@@ -127,6 +127,34 @@ jobs:
           releaseDraft: false
           prerelease: false
           release: true
+      - name: Inject Gatekeeper fix script into DMG
+        # 当前构建无 Apple 签名/公证，用户打开会触发「已损坏」门禁提示。
+        # 在 dmg 内注入一个 修复门禁.command：用户把 .app 拖入「应用程序」后，
+        # 右键 → 打开 该脚本即可移除隔离属性（xattr -dr com.apple.quarantine），无需付费证书。
+        # 脚本内联生成，不污染仓库。
+        run: |
+          set -e
+          DMG=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name '*.dmg' | head -n1)
+          echo "Found DMG: $DMG"
+          hdiutil attach "$DMG" -mountpoint /tmp/stp_dmg -nobrowse -quiet
+          rm -rf /tmp/stp_stage && mkdir -p /tmp/stp_stage
+          cp -R /tmp/stp_dmg/. /tmp/stp_stage/
+          cat > /tmp/stp_stage/修复门禁.command <<'SCRIPT'
+          #!/bin/bash
+          # 先移除脚本自身的隔离属性（若本脚本本身也被 Gatekeeper 拦截）
+          xattr -d com.apple.quarantine "$0" 2>/dev/null || true
+          APP="/Applications/ScreenTime Pro.app"
+          if [ -d "$APP" ]; then
+            xattr -dr com.apple.quarantine "$APP"
+            osascript -e 'display dialog "已移除 ScreenTime Pro 的隔离属性，现在可以直接打开。" buttons {"好"} default button "好"' >/dev/null 2>&1
+          else
+            osascript -e 'display dialog "未找到 ScreenTime Pro.app。请先把应用拖入「应用程序」文件夹，再运行本脚本。" buttons {"好"} default button "好"' >/dev/null 2>&1
+          fi
+          SCRIPT
+          chmod +x /tmp/stp_stage/修复门禁.command
+          hdiutil detach /tmp/stp_dmg -quiet
+          hdiutil create -volname "ScreenTime Pro" -srcfolder /tmp/stp_stage -ov -format UDZO "$DMG"
+          echo "Injected 修复门禁.command into DMG"
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:

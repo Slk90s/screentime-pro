@@ -148,6 +148,21 @@ export default {
       "Export all local data as a JSON backup, or merge in files exported from other devices (deduped by time+app+device).",
     export: "Export backup",
     import: "Import & merge",
+    // v0.7.2 local auto-backup (WeChat desktop style)
+    autoBackup: "Auto backup (local)",
+    autoBackupDesc:
+      "Daily, a full JSON backup is written to the folder below. Copy those files to your own cloud drive / external disk — that is your \"cloud backup\". After reinstall or on a new computer, copy the file back and use \"Import & merge\" above to restore.",
+    autoBackupOn: "Enable daily auto-backup",
+    backupPath: "Backup folder",
+    backupPathPh: "Not set (defaults to exports/ under app data dir)",
+    backupPathHint: "Click the button to pick any folder; leave empty to use the default.",
+    chooseFolder: "Choose folder",
+    backupKeep: "Keep for (days)",
+    backupKeepHint: "Only our own backup files are pruned; older backups beyond this are auto-deleted, latest always kept.",
+    backupLast: "Last auto-backup: ",
+    backupNever: "never",
+    backupNow: "Backup now",
+    backingUp: "Backing up…",
     diag: "Logs & diagnostics",
     diagHint:
       "Having issues? Export app logs to Desktop and send them to the developer. Logs include only error summaries and app-switch stats; <strong>no window titles / chat content / passwords</strong>.",

@@ -20,6 +20,7 @@ mod pet;
 // v0.6.2-beta.15：系统 CPU 负载监测（跨平台；驱动桌宠"暴躁升温"状态）
 mod system_load;
 
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use classifier::Rule;
@@ -78,6 +79,85 @@ fn gen_device_id() -> String {
     format!("{:012x}", h)
 }
 
+/// 生成基于硬件的稳定设备标识，跨重装/卸载保持不变。
+///
+/// 优先读取机器级硬件标识（与重装无关），全部失败才回退到随机 ID（旧行为）：
+/// - macOS：`ioreg` 读 `IOPlatformUUID`
+/// - Windows：注册表 `HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid`
+/// - Linux：`/etc/machine-id`
+/// 返回统一加 `hw-` 前缀，便于与旧随机 ID 区分。
+fn hardware_device_id() -> String {
+    #[cfg(target_os = "macos")]
+    if let Some(id) = mac_hardware_uuid() {
+        return id;
+    }
+    #[cfg(target_os = "windows")]
+    if let Some(id) = windows_machine_guid() {
+        return id;
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(id) = linux_machine_id() {
+        return id;
+    }
+    // 所有平台特定方法都失败（理论上不会），回退到随机 ID，保证可用
+    gen_device_id()
+}
+
+#[cfg(target_os = "macos")]
+fn mac_hardware_uuid() -> Option<String> {
+    let out = Command::new("ioreg")
+        .args(["-rd1", "-c", "IOPlatformExpertDevice"])
+        .output()
+        .ok()?;
+    let s = String::from_utf8_lossy(&out.stdout);
+    for line in s.lines() {
+        if line.contains("IOPlatformUUID") {
+            // 形如：    "IOPlatformUUID" = "XXXX-XXXX-..."
+            if let Some(start) = line.find('"') {
+                let rest = &line[start + 1..];
+                if let Some(end) = rest.find('"') {
+                    let uuid = rest[..end].trim();
+                    if !uuid.is_empty() {
+                        return Some(format!("hw-{}", uuid.to_lowercase()));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn windows_machine_guid() -> Option<String> {
+    let out = Command::new("reg")
+        .args(["query", "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid"])
+        .output()
+        .ok()?;
+    let s = String::from_utf8_lossy(&out.stdout);
+    for line in s.lines() {
+        if line.contains("MachineGuid") {
+            // 形如：    MachineGuid    REG_SZ    xxxxxxxx-xxxx-...
+            if let Some(start) = line.rfind("REG_SZ") {
+                let guid = line[start + "REG_SZ".len()..].trim();
+                if !guid.is_empty() {
+                    return Some(format!("hw-{}", guid.to_lowercase()));
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn linux_machine_id() -> Option<String> {
+    let content = std::fs::read_to_string("/etc/machine-id").ok()?;
+    let id = content.trim();
+    if !id.is_empty() {
+        return Some(format!("hw-{}", id));
+    }
+    None
+}
+
 /// 程序入口（桌面端 `main.rs` 调用，也为后续移动端预留）
 pub fn run() {
     // 必须在 setup 之前创建采集器（构造本身依赖平台 API，无副作用）
@@ -91,6 +171,8 @@ pub fn run() {
         ))
         // ===== 日志插件（前端 Vue 通过 @tauri-apps/plugin-log 写入同一文件）=====
         .plugin(tauri_plugin_log::Builder::default().build())
+        // ===== 对话框插件（备份路径选择文件夹对话框）=====
+        .plugin(tauri_plugin_dialog::init())
         // ===== 初始化：建库、注入状态 =====
         .setup(move |app| {
             // ---- 1. 初始化日志系统（最优先，其他模块才可埋点）----
@@ -118,11 +200,13 @@ pub fn run() {
             let dir = app.path().app_data_dir()?;
             let db = AppDb::open(&dir)?;
             // 稳定的设备唯一标识：首次运行生成并写入 settings，之后复用（多设备合并依赖它）
+            // v0.7.2 起：新安装改用「基于硬件」的稳定 ID（跨重装/卸载保持不变），
+            // 避免卸载重装后生成全新 device_id 导致数据碎片化。已存有旧随机 ID 的存量用户保持不变。
             let device_id = db
                 .get_setting("device_id")
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| {
-                    let id = gen_device_id();
+                    let id = hardware_device_id();
                     let _ = db.set_setting("device_id", &id);
                     id
                 });
@@ -202,6 +286,22 @@ pub fn run() {
 
             // ===== 启动即自动追踪（无需手动触发）=====
             commands::begin_tracking(&app_state);
+
+            // ===== v0.7.2：自动备份定时线程（参考微信桌面版逻辑）=====
+            // 每 30 分钟检查一次：若「自动备份」开启且今天尚未备份，则生成一份 JSON 到用户指定目录。
+            // 启动后延迟 60 秒做首次检查（避免与初始化抢占 IO）。
+            let backup_handle = app.handle().clone();
+            std::thread::Builder::new()
+                .name("auto-backup".into())
+                .spawn(move || {
+                    use std::time::Duration;
+                    std::thread::sleep(Duration::from_secs(60));
+                    loop {
+                        commands::auto_backup_tick(&backup_handle);
+                        std::thread::sleep(Duration::from_secs(30 * 60));
+                    }
+                })
+                .ok();
 
             // ===== v0.6.2-beta.15：系统 CPU 负载监测线程（v0.7.0 调参）=====
             // 5s 间隔采样一次；连续 4 次（=20s）> 90% 时才判过热（向 pet 窗口发 overloading 事件）；
@@ -370,6 +470,10 @@ pub fn run() {
             commands::import_data,
             commands::prune_data,
             commands::backup_and_prune_device,
+            // v0.7.2：本地自动备份（微信桌面版式：本地落盘 JSON，用户自行拷到云盘）
+            commands::get_backup_config,
+            commands::save_backup_config,
+            commands::run_backup_now,
             // 多设备合并
             commands::get_devices,
             commands::list_devices_with_stats,

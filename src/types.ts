@@ -95,6 +95,14 @@ export interface ExportResult {
   path: string;
 }
 
+// 自动备份配置（对应后端 BackupConfig；Tauri 返回值字段为 snake_case，与本项目约定一致）
+export interface BackupConfig {
+  enabled: boolean;
+  path: string;
+  keep_days: number;
+  last_date: string;
+}
+
 // 系统权限状态（对应后端 PermissionStatus）
 // accessibility=辅助功能权限（空闲检测必须），screen_capture=屏幕录制权限
 export interface PermissionStatus {

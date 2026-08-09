@@ -33,6 +33,7 @@ sandbox-vite-tauri-workaround.zip
 
 # 计划 / 规格文档（agent 产出的草案，仅本地参考，不入库）
 # 仅保留 ARCHITECTURE.md 与 RELEASE.md 作为仓库文档；其余 plan 类文档不进 GitHub。
+docs/*-plan.md
 docs/pet-assets-manifest.md
 docs/I18N_PLAN.md
 docs/v060-pet-plan.md

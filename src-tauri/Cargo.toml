@@ -42,6 +42,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "regist
 tracing-appender = "0.2"
 # Tauri 官方日志插件：把 Rust + 前端日志统一到同一文件，提供前端 invoke 调用
 tauri-plugin-log = "2"
+# 对话框插件（备份路径选择文件夹对话框）
+tauri-plugin-dialog = "2"
 
 # ---- macOS 专属依赖（对齐 Tauri 2.x 引入的 objc2 0.6，避免重复编译）----
 [target.'cfg(target_os = "macos")'.dependencies]

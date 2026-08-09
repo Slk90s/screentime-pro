@@ -234,6 +234,20 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
       return 128; // 模拟导入合并了 128 条记录
     case "prune_data":
       return 0;
+    // ===== v0.7.2 本地自动备份 =====
+    case "get_backup_config":
+      return {
+        enabled: false,
+        path: "",
+        keep_days: 30,
+        last_date: "",
+      } as import("../types").BackupConfig;
+    case "save_backup_config":
+      return null;
+    case "run_backup_now":
+      return {
+        path: `~/Library/Application Support/com.screentime.pro/exports/screentime_backup_mock.json`,
+      } as ExportResult;
     // ===== 多设备合并 =====
     case "get_devices": {
       const arr: DeviceInfo[] = [

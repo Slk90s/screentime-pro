@@ -146,6 +146,21 @@ export default {
       "把本机全量数据导出为 JSON 备份；或从其他设备导出的文件合并进来（按时间+应用+设备去重）。",
     export: "导出备份",
     import: "导入合并",
+    // v0.7.2 本地自动备份（微信桌面版式）
+    autoBackup: "自动备份（本地）",
+    autoBackupDesc:
+      "每天自动把全量数据生成一份 JSON 备份到下方目录。把该目录里的文件复制到你自己的云盘 / 移动硬盘，即相当于「云备份」。卸载或换电脑后，再从云盘取回文件用上方「导入合并」恢复。",
+    autoBackupOn: "启用每日自动备份",
+    backupPath: "备份目录",
+    backupPathPh: "未设置（默认存到应用数据目录下的 exports/）",
+    backupPathHint: "点击右侧按钮选择任意文件夹；留空则使用默认目录。",
+    chooseFolder: "选择文件夹",
+    backupKeep: "保留天数",
+    backupKeepHint: "仅清理本程序生成的备份文件，超过该天数的旧备份自动删除；最新一份始终保留。",
+    backupLast: "上次自动备份：",
+    backupNever: "从未",
+    backupNow: "立即备份",
+    backingUp: "备份中…",
     diag: "日志与诊断",
     diagHint:
       "遇到问题需要反馈给开发者？导出应用日志到桌面，发给他即可。日志只包含错误摘要与应用切换统计，<strong>不包含窗口标题 / 聊天内容 / 密码等敏感信息</strong>。",

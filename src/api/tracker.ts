@@ -26,6 +26,7 @@ import type {
   TrendsOut,
   UpdateInfo,
   Webview2Status,
+  BackupConfig,
 } from "../types";
 import { mock } from "./mock";
 
@@ -101,6 +102,11 @@ export const tracker = {
       deviceId,
     }),
   importData: (content: string) => call<number>("import_data", { content }),
+  // ===== v0.7.2 本地自动备份（微信桌面版式）=====
+  getBackupConfig: () => call<BackupConfig>("get_backup_config"),
+  saveBackupConfig: (s: { enabled: boolean; path: string; keepDays: number }) =>
+    call<void>("save_backup_config", s),
+  runBackupNow: () => call<ExportResult>("run_backup_now"),
   pruneData: (days: number, deviceIds?: string[]) =>
     call<number>("prune_data", {
       days,
