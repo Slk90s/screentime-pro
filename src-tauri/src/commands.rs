@@ -617,7 +617,8 @@ pub struct BackupConfig {
 /// 执行一次备份：导出全量 JSON 并写入目标目录。
 /// - `path_override`：指定目录；为空时用 settings.backup_path；再为空用默认 exports 目录。
 /// - 文件名 `screentime_backup_YYYY-MM-DD.json`（同日覆盖 → 每天一份）。
-/// - 完成后写 backup_last_date=今天，并按 keep_days 清理该目录旧备份。
+/// - 完成后：把「上一份」备份（日期 < 今天的最新一份）移入系统回收站（可恢复），
+///   今日最新备份留在导出目录供手动拷云；再按 keep_days 清理该目录更旧的备份。
 fn perform_backup(app: &tauri::AppHandle, path_override: Option<&str>) -> Result<String, String> {
     let state = app.state::<Arc<AppState>>();
     let bundle = state.db.export_all_filtered(None).map_err(|e| e.to_string())?;
@@ -636,12 +637,18 @@ fn perform_backup(app: &tauri::AppHandle, path_override: Option<&str>) -> Result
     };
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
-    let file = format!("screentime_backup_{}.json", today_str());
-    let path = dir.join(file);
+    let today = today_str();
+    let file = format!("screentime_backup_{}.json", today);
+    let path = dir.join(&file);
     std::fs::write(&path, json).map_err(|e| e.to_string())?;
 
     // 更新「今天已备份」标记，避免同日重复备份
-    let _ = state.db.set_setting("backup_last_date", &today_str());
+    let _ = state.db.set_setting("backup_last_date", &today);
+
+    // 把「上一份」备份（文件名日期严格小于今天、且最新的一份）移入系统回收站：
+    // 今日最新备份留导出目录供手动拷云，前一日备份可回收，避免误删后无法找回。
+    // 移入回收站失败（权限/回收站不可用）不致命，仅记录日志，文件仍留在原目录。
+    recycle_previous_backup(&dir, &today);
 
     // 按保留天数清理该目录下的旧备份（仅清理本程序生成的文件）
     if let Some(kd) = state.db.get_setting("backup_keep_days") {
@@ -650,6 +657,45 @@ fn perform_backup(app: &tauri::AppHandle, path_override: Option<&str>) -> Result
         }
     }
     Ok(path.to_string_lossy().to_string())
+}
+
+/// 把「上一份」备份（文件名日期严格小于 `today`、且为其中最新的一份）移入系统回收站。
+/// 与 `prune_backup_files` 的区别：prune 是永久删除过期文件；本函数只回收「昨天」那一份，
+/// 使其在回收站中可恢复，而目录里始终保留今天最新一份供手动拷贝到云盘。
+fn recycle_previous_backup(dir: &Path, today: &str) {
+    let mut prev_path: Option<PathBuf> = None;
+    let mut prev_date: Option<String> = None;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("screentime_backup_") && name.ends_with(".json") {
+                let date_part = name
+                    .trim_start_matches("screentime_backup_")
+                    .trim_end_matches(".json")
+                    .to_string();
+                if date_part.as_str() < today {
+                    let newer = match &prev_date {
+                        Some(pd) => date_part > *pd,
+                        None => true,
+                    };
+                    if newer {
+                        prev_date = Some(date_part);
+                        prev_path = Some(entry.path());
+                    }
+                }
+            }
+        }
+    }
+    if let Some(p) = prev_path {
+        match trash::delete(&p) {
+            Ok(()) => eprintln!("[backup] 已将上一份备份移入回收站: {}", p.display()),
+            Err(e) => eprintln!(
+                "[backup] 移入回收站失败（保留于原目录）: {} ({})",
+                p.display(),
+                e
+            ),
+        }
+    }
 }
 
 /// 清理目录下超过 keep_days 天的本程序备份文件（按文件名日期 YYYY-MM-DD 字典序比较）

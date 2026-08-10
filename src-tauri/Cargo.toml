@@ -44,6 +44,8 @@ tracing-appender = "0.2"
 tauri-plugin-log = "2"
 # 对话框插件（备份路径选择文件夹对话框）
 tauri-plugin-dialog = "2"
+# 跨平台回收站：把「上一份」备份移入系统回收站（Windows 回收站 / macOS 废纸篓 / Linux 桌面 trash）
+trash = "5"
 
 # ---- macOS 专属依赖（对齐 Tauri 2.x 引入的 objc2 0.6，避免重复编译）----
 [target.'cfg(target_os = "macos")'.dependencies]
