@@ -126,7 +126,7 @@ jobs:
             完整版本历史见仓库 README。
           releaseDraft: false
           prerelease: false
-          release: true
+          release: false
       - name: Inject Gatekeeper fix script into DMG
         # 当前构建无 Apple 签名/公证，用户打开会触发「已损坏」门禁提示。
         # 在 dmg 内注入一个 修复门禁.command：用户把 .app 拖入「应用程序」后，
@@ -152,9 +152,50 @@ jobs:
           fi
           SCRIPT
           chmod +x /tmp/stp_stage/修复门禁.command
+          # 同时注入一份中文说明，讲清为什么被拦截、如何使用脚本或手动命令
+          cat > /tmp/stp_stage/首次打开必读.txt <<'README'
+          ============================================================
+          ScreenTime Pro — 首次打开「已损坏 / 无法验证开发者」怎么办？
+          ============================================================
+
+          【为什么会有这个提示？】
+          本应用目前没有购买 Apple 开发者证书做「公证(Notarization)」，
+          因此 macOS 的 Gatekeeper 会把从网络下载的应用标记为隔离(quarantine)，
+          首次打开时会提示「已损坏，无法打开」或「无法验证开发者」。
+          这不是 App 本身有问题，只是系统的安全策略。
+
+          【解决办法一（最省事，推荐）】
+          1. 先把「ScreenTime Pro.app」拖进「应用程序」文件夹。
+          2. 在 DMG 里【右键】「修复门禁.command」→ 选「打开」。
+             ⚠️ 必须右键→打开才会看到「打开」按钮；直接双击会被系统拦截。
+          3. 脚本会自动执行 xattr -dr com.apple.quarantine，弹窗提示成功后即可正常打开 App。
+
+          【解决办法二（手动命令）】
+          打开「终端」，粘贴并执行：
+            xattr -d com.apple.quarantine "/Applications/ScreenTime Pro.app"
+          若提示「No such xattr」，说明已无隔离属性，直接打开即可。
+
+          处理一次之后，今后打开 App 都不再被拦截。
+          README
           hdiutil detach /tmp/stp_dmg -quiet
           hdiutil create -volname "ScreenTime Pro" -srcfolder /tmp/stp_stage -ov -format UDZO "$DMG"
-          echo "Injected 修复门禁.command into DMG"
+          echo "Injected 修复门禁.command + 首次打开必读.txt into DMG"
+      - name: Upload injected DMG to Release (overwrite stale one)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${{ github.ref_name }}"
+          DMG=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name '*.dmg' | head -n1)
+          echo "Injected DMG: $DMG"
+          # Release 由 Windows/Linux job 创建；若尚未就绪，最多等待 ~5 分钟
+          for i in $(seq 1 30); do
+            if gh release view "$TAG" >/dev/null 2>&1; then break; fi
+            echo "Release $TAG 尚未就绪，等待 10s ($i/30)..."
+            sleep 10
+          done
+          gh release upload "$TAG" "$DMG" --clobber
+          echo "Re-uploaded injected DMG to Release $TAG"
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
