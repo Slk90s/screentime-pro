@@ -43,7 +43,9 @@
     <div v-if="petStore.isHeating" class="pet-overheat-badge" aria-hidden="true">🔥</div>
     <!-- v0.6.2：渲染协议改用 PetSkinRenderer 路由，按 skinRegistry.active() 动态挂载皮肤；
          桌宠现仅 Pop Mart 3D 皮肤（v0.6.2-beta.5 移除 panda-2d）；渲染器按 skinRegistry.active() 动态挂载 -->
-    <PetSkinRenderer :state="effectiveState" :is-dragging="isDragging" :class="[animClass, { 'is-walking': isDragging, 'is-heating': petStore.isHeating, 'is-fed': justFed }]" />
+    <!-- v0.7.2：拖拽期间不再挂 is-walking walk-cycle。透明置顶窗下每帧 transform 动画会强迫 DWM 整窗重合成，
+         与 OS 原生拖拽叠加后呈现「抖动/卡顿」观感；原生拖拽本身已平滑移动整窗，无需额外行走动画。 -->
+    <PetSkinRenderer :state="effectiveState" :is-dragging="isDragging" :class="[animClass, { 'is-heating': petStore.isHeating, 'is-fed': justFed }]" />
   </div>
 
   <!-- v0.6.2-beta.17：菜单不再在本 webview 渲染，改在独立 pet-menu Tauri 窗口
@@ -147,29 +149,30 @@ function onWheel(e: WheelEvent): void {
   applySkinSize();
 }
 
-// 拖拽
-const { isDragging, onPointerDown } = usePetDrag(
-  () => petStore.position,
-  (x, y) => petStore.setPosition(x, y),
-  // 拖拽期间暂停 localStorage 持久化（deep watch 每帧写盘会卡顿），结束时恢复一次
-  () => petStore.setPersistSuspended(true),
-  () => petStore.setPersistSuspended(false),
-);
+  // 点击交互（须定义在拖拽之前，供拖拽回调抑制「拖完又抖一下」）
+  const { animClass, attach: attachInteractions, suppressNextClick, clearAnim } = usePetInteractions();
+  onMounted(() => {
+    if (rootEl.value) attachInteractions(rootEl.value);
+  });
 
-// 鼠标穿透（默认 false，桌宠可交互）
-usePetCursorPassthrough();
+  // 拖拽
+  const { isDragging, onPointerDown } = usePetDrag(
+    () => petStore.position,
+    (x, y) => petStore.setPosition(x, y),
+    // 拖拽开始：暂停持久化 + 清除可能残留的点击动画 class（避免动画与窗口移动叠加的卡顿观感）
+    () => { petStore.setPersistSuspended(true); clearAnim(); },
+    // 拖拽结束：恢复持久化；若确实发生了拖拽，抑制尾随 pointerup 的点击反应（避免抖动）
+    (didDrag: boolean) => { petStore.setPersistSuspended(false); if (didDrag) suppressNextClick(); },
+  );
 
-// 自动联动：每 2s 检查前台应用，更新状态
-useForegroundWatcher();
+  // 鼠标穿透（默认 false，桌宠可交互）
+  usePetCursorPassthrough();
 
-// v0.6.2-beta.15：监听 Rust 端 pet-system-overload 事件 → 桌宠"暴躁升温"
-useSystemOverloadWatcher();
+  // 自动联动：每 2s 检查前台应用，更新状态
+  useForegroundWatcher();
 
-// 点击交互
-const { animClass, attach: attachInteractions } = usePetInteractions();
-onMounted(() => {
-  if (rootEl.value) attachInteractions(rootEl.value);
-});
+  // v0.6.2-beta.15：监听 Rust 端 pet-system-overload 事件 → 桌宠"暴躁升温"
+  useSystemOverloadWatcher();
 
 // v0.6.2-beta.17：右键菜单改在独立 pet-menu Tauri 窗口展示。
 //   - 不再临时放大本桌宠窗口（旧实现两边都别扭）

@@ -15,6 +15,8 @@
  *   - 2026-07-25 @v0.6.2-beta.15: 改造 - 单击轮流 jump/squash/jolt，长按为心疼
  *   - 2026-08-07 @v0.6.2-beta.31: 蜘蛛侠皮肤下单击轮转加入 web（跳起射蛛丝网），由注册表活跃皮肤判定
  *   - 2026-08-07 @v0.6.2-33: 修复 detach() 用内联箭头函数导致 removeEventListener 永远匹配不到 (BUG-4)
+  - 2026-08-10 @v0.7.2: 修复 - 拖拽结束后 pointerup 误触发点击反应（抖动）；右键不再触发点击反应；
+    拖拽开始时清除残留动画 class，避免 CSS transform 与 OS 窗口移动叠加造成「卡顿」观感
  */
 import { ref, onBeforeUnmount } from 'vue';
 import { petStore } from '../stores/petStore';
@@ -27,6 +29,10 @@ interface UsePetInteractionsReturn {
   /** 绑定到指定元素（null 安全） */
   attach: (el: HTMLElement | null) => void;
   detach: (el: HTMLElement | null) => void;
+  /** 抑制接下来一小段时间内的点击反应（拖拽结束时调用，避免拖完又抖一下） */
+  suppressNextClick: () => void;
+  /** 立即清除当前点击动画 class（拖拽开始时调用，避免动画与窗口移动叠加产生卡顿观感） */
+  clearAnim: () => void;
 }
 
 const DOUBLE_CLICK_MS = 300;
@@ -61,6 +67,8 @@ export function usePetInteractions(): UsePetInteractionsReturn {
   let clickIndex = 0;
   let longPressTimer: number | null = null;
   let resetTimer: number | null = null;
+  // v0.7.2：拖拽结束后的 pointerup 会误触发点击反应（抖动），用此标志位抑制接下来一小段时间内的点击反应
+  let clickSuppressed = false;
 
   function setTemporaryState(s: PetState, anim: string, ms = RESET_MS): void {
     petStore.setOverride(s);
@@ -73,6 +81,10 @@ export function usePetInteractions(): UsePetInteractionsReturn {
   }
 
   function onPointerUp(e: PointerEvent, el: HTMLElement | null): void {
+    // v0.7.2：拖拽结束的 pointerup 已被拖拽逻辑 suppress，这里直接忽略，避免「拖完又抖一下」
+    if (clickSuppressed) return;
+    // v0.7.2：仅左键/单指触发点击反应；右键交给菜单（onContextMenu），不应让桌宠抖动
+    if (e.button !== 0) return;
     if (longPressTimer !== null) {
       clearTimeout(longPressTimer);
       longPressTimer = null;
@@ -103,7 +115,9 @@ export function usePetInteractions(): UsePetInteractionsReturn {
     }
   }
 
-  function onPointerDownForLongPress(): void {
+  function onPointerDownForLongPress(e: PointerEvent): void {
+    // v0.7.2：仅左键/单指才有长按（心疼）反应；右键长按不触发，避免与菜单冲突
+    if (e.button !== 0) return;
     if (longPressTimer !== null) clearTimeout(longPressTimer);
     longPressTimer = window.setTimeout(() => {
       // 长按：撒娇/心疼
@@ -130,6 +144,21 @@ export function usePetInteractions(): UsePetInteractionsReturn {
     if (el === boundEl) { boundPointerUp = null; boundEl = null; }
   }
 
+  // v0.7.2：拖拽结束的尾随 pointerup 不应再触发点击反应（抖动）
+  function suppressNextClick(): void {
+    clickSuppressed = true;
+    window.setTimeout(() => {
+      clickSuppressed = false;
+    }, 80);
+  }
+
+  // v0.7.2：拖拽开始时清掉正在运行的点击动画 class，避免 CSS transform 与 OS 窗口移动叠加出现卡顿观感
+  // （只清动画，不清用户手动设置的 state override）
+  function clearAnim(): void {
+    if (resetTimer !== null) clearTimeout(resetTimer);
+    animClass.value = '';
+  }
+
   onBeforeUnmount(() => {
     if (resetTimer !== null) clearTimeout(resetTimer);
     if (longPressTimer !== null) clearTimeout(longPressTimer);
@@ -139,5 +168,7 @@ export function usePetInteractions(): UsePetInteractionsReturn {
     animClass,
     attach,
     detach,
+    suppressNextClick,
+    clearAnim,
   };
 }

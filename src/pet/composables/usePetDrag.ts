@@ -36,7 +36,7 @@ export function usePetDrag(
   getPosition: () => { x: number; y: number },
   onMove: (x: number, y: number) => void,
   onStart?: () => void,
-  onEnd?: () => void,
+  onEnd?: (didDrag: boolean) => void,
 ): UsePetDragReturn {
   const isDragging = ref(false);
   const appWindow = getCurrentWindow();
@@ -80,7 +80,7 @@ export function usePetDrag(
       console.warn('[pet] 原生拖拽不可用，回退手动拖拽', err);
       isDragging.value = false;
       nativeActive = false;
-      onEnd?.(); // v0.6.2-33 (BUG-6): 拖拽失败也要恢复 persistSuspended
+      onEnd?.(true); // v0.6.2-33 (BUG-6): 拖拽失败也要恢复 persistSuspended
       window.addEventListener('pointermove', onMoveHandler);
       window.addEventListener('pointerup', onUpHandler);
       window.addEventListener('pointercancel', onUpHandler);
@@ -97,7 +97,7 @@ export function usePetDrag(
       onMove(p.x, p.y);
     }
     nativeActive = false;
-    onEnd?.();
+    onEnd?.(true);
   }
 
   function onMoveHandler(e: PointerEvent): void {
@@ -140,7 +140,7 @@ export function usePetDrag(
       dirty = false;
       invoke('move_pet_window', { x: fx, y: fy }).catch(() => {});
       invoke('set_pet_cursor_passthrough', { passthrough: false }).catch(() => {});
-      onEnd?.();
+      onEnd?.(true);
     }
     pointerId = null;
   }
