@@ -41,6 +41,12 @@ use tracing_subscriber::EnvFilter;
 /// - 文件数量：保留 3 个（今天 + 昨天 + 前天），更早自动删除
 /// - 总上限：约 15MB / 3天
 pub fn init(app_log_dir: &Path, is_debug: bool) -> std::io::Result<Option<WorkerGuard>> {
+    // ===== 确保日志目录存在（关键：否则滚动 appender 在 macOS 全新机上 build 失败 → 整个日志系统失效 =====
+    // tracing_appender 的 build(dir) 只 create(true) 创建「文件」，不创建「父目录」；
+    // macOS 上 ~/Library/Logs/com.screentime.pro 默认不存在 → init 直接返回 Err → 没有任何日志文件（"mac 无运行日志"根因）。
+    // 这里主动 create_dir_all，跨平台都安全（Windows/Linux 同样受益）。
+    let _ = std::fs::create_dir_all(app_log_dir);
+
     // ===== 文件输出层（生产环境核心）=====
     // tracing_appender 的 rolling + 配合 NonBlocking 异步写入避免阻塞采样循环
     // 注意：tracing_appender 的 daily rotation 不支持 size-based rotation；
@@ -160,7 +166,8 @@ fn cleanup_old_logs(dir: &Path, keep: usize) {
 /// 文件（比如手动拖入的 `notes.log`）也算成我们的日志占用：
 ///   - 滚动日志：`app.<YYYY-MM-DD>.log`（日期恰好 10 字符 + 前后两个点）
 ///   - 插件日志：`ScreenTime Pro.log`（productName 拼 `.log`）
-fn is_our_log_file(name: &str) -> bool {
+/// 识别「本程序写入的日志文件」（导出日志命令 export_logs 复用本函数，保证与 dir_size 一致）
+pub fn is_our_log_file(name: &str) -> bool {
     // 1) 滚动日志 app.<YYYY-MM-DD>.log
     if let Some(rest) = name.strip_prefix("app.") {
         // 期望形如 "2026-07-25.log"（10 + 4 = 14 字符）

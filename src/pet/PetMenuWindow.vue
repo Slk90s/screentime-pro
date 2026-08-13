@@ -34,6 +34,7 @@ import { ref, onMounted, onBeforeUnmount } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { syncLocaleFromStorage } from '../i18n';
+import { petStore } from './stores/petStore';
 import PetContextMenu from './components/PetContextMenu.vue';
 // v0.6.2-35: 显式触发皮肤副作用注册，确保 pet-menu 独立 webview 中 skinRegistry.list() 不为空，
 // 菜单皮肤按钮与高亮状态与主窗口/设置页保持一致。
@@ -60,6 +61,9 @@ onMounted(async () => {
     unlistenShown = await listen('pet-menu-shown', () => {
       // 菜单打开时重读语言：避免独立窗口错过 locale-changed 事件而停留在旧语言
       syncLocaleFromStorage();
+      // v0.7.2：菜单窗口的 petStore 与桌宠窗/主界面不共享，右键打开前先 reload，
+      // 否则菜单里显示的桌宠状态/饱食度/开关是上一次打开时的陈旧值（"开关状态不同步"根因之一）。
+      petStore.reload();
       visible.value = true;
     });
     // 竞态兜底：若 show 事件在监听注册前已发出（窗口首次动态创建、加载慢于右键），
@@ -67,6 +71,7 @@ onMounted(async () => {
     const { getCurrentWindow } = await import('@tauri-apps/api/window');
     if (await getCurrentWindow().isVisible()) {
       syncLocaleFromStorage();
+      petStore.reload();
       visible.value = true;
     }
   } catch {

@@ -27,6 +27,12 @@ import { invoke } from '@tauri-apps/api/core';
 /** 超过该位移（px）才判定为拖拽，否则视为点击（保留点击交互） */
 const DRAG_THRESHOLD = 4;
 
+/** 是否 macOS：无边框透明窗的 startDragging 在 macOS 上不可靠（窗口不真正跟随光标），
+ *  故 macOS 一律走与右键菜单一致的手动拖拽（手动 move 窗口在 macOS 实测更跟手）。 */
+const IS_MAC =
+  typeof navigator !== 'undefined' &&
+  /Mac|iPhone|iPod|iPad/i.test(navigator.platform || navigator.userAgent || '');
+
 export interface UsePetDragReturn {
   isDragging: ReturnType<typeof ref<boolean>>;
   onPointerDown: (e: PointerEvent) => void;
@@ -68,6 +74,15 @@ export function usePetDrag(
 
   /** 原生拖拽：交给 OS 处理，零延迟跟手 */
   async function beginNativeDrag(): Promise<void> {
+    // macOS：跳过原生 startDragging（不可靠），直接进入手动拖拽模式。
+    // 保留 onPointerDown 挂的监听，由 onMoveHandler 的回退分支逐帧 move_pet_window 接管，
+    // 与桌宠菜单拖拽机制一致 → macOS 下跟手。
+    if (IS_MAC) {
+      isDragging.value = true;
+      onStart?.();
+      nativeActive = false; // 保持手动模式
+      return;
+    }
     nativeActive = true;
     isDragging.value = true;
     onStart?.();
@@ -80,7 +95,8 @@ export function usePetDrag(
       console.warn('[pet] 原生拖拽不可用，回退手动拖拽', err);
       isDragging.value = false;
       nativeActive = false;
-      onEnd?.(true); // v0.6.2-33 (BUG-6): 拖拽失败也要恢复 persistSuspended
+      // 注意：此处不调用 onEnd —— pointerup 时 onUpHandler 的回退分支会统一收尾，
+      // 避免与 onUpHandler 重复触发导致 persistSuspended 状态错乱。
       window.addEventListener('pointermove', onMoveHandler);
       window.addEventListener('pointerup', onUpHandler);
       window.addEventListener('pointercancel', onUpHandler);
@@ -141,6 +157,7 @@ export function usePetDrag(
       invoke('move_pet_window', { x: fx, y: fy }).catch(() => {});
       invoke('set_pet_cursor_passthrough', { passthrough: false }).catch(() => {});
       onEnd?.(true);
+      isDragging.value = false; // 手动拖拽结束复位（macOS 走此路径）
     }
     pointerId = null;
   }

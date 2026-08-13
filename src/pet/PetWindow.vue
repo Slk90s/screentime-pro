@@ -213,6 +213,7 @@ let unlistenCustom: (() => void) | null = null;
 let unlistenSkin: (() => void) | null = null;
 let unlistenStore: (() => void) | null = null;
 let unlistenFed: (() => void) | null = null;
+let unlistenEnabled: (() => void) | null = null;
 // v0.7.0：饱食度随时间自然衰减（之前 tickFullness 从未被调用，导致「饿度值不变」）
 const FULLNESS_DECAY_MS = 120_000; // 每 2 分钟 -1
 let decayTimer: number | null = null;
@@ -242,6 +243,10 @@ onMounted(async () => {
     unlistenFed = await listen<{ value: number; foodId: string }>('pet-fed', () => {
       showFeedReaction();
     });
+    // v0.7.2：设置页/菜单切换桌宠启用状态后广播，桌宠窗重读 enabled，避免三处开关不同步
+    unlistenEnabled = await listen('pet-enabled-changed', () => {
+      petStore.reload();
+    });
     reloadConfig(); // 初次创建窗口时也读一次（保险）
   } catch (e) {
     console.error('[pet] 监听 pet 事件失败', e);
@@ -265,6 +270,7 @@ onBeforeUnmount(() => {
   if (unlistenSkin) unlistenSkin();
   if (unlistenStore) unlistenStore();
   if (unlistenFed) unlistenFed();
+  if (unlistenEnabled) unlistenEnabled();
   if (unsubSkinSize) unsubSkinSize(); // v0.6.2-33 (BUG-8): 取消皮肤尺寸订阅
   if (bubbleTimer !== null) clearTimeout(bubbleTimer);
   if (feedTimer !== null) clearTimeout(feedTimer);

@@ -267,19 +267,32 @@ function onPickSkin(id: string): void {
 }
 // 组件挂载时监听 Tauri 全局广播（设置页/其他窗口切皮肤）
 let unlistenSkin: (() => void) | null = null;
+// v0.7.2：菜单打开期间，若桌宠自动状态变化 / 其他窗口切换启用状态，菜单需同步刷新显示
+let unlistenStoreSync: (() => void) | null = null;
+let unlistenEnabled: (() => void) | null = null;
 onMounted(async () => {
   try {
     unlistenSkin = await listen('pet-skin-changed', () => {
       // 设置页切皮肤后广播，菜单窗口的 skinRegistry 需从 localStorage 重读对齐
       skinRegistry.reloadActive();
     });
+    unlistenStoreSync = await listen('pet-store-updated', () => {
+      // 桌宠窗/其他来源改了 override/饱食度/位置 → 菜单同步最新显示
+      store.reload();
+    });
+    unlistenEnabled = await listen('pet-enabled-changed', () => {
+      // 设置页/菜单切换桌宠启用状态 → 菜单同步
+      store.reload();
+    });
   } catch (e) {
-    console.warn('[PetContextMenu] 监听 pet-skin-changed 失败', e);
+    console.warn('[PetContextMenu] 监听失败', e);
   }
 });
 // 组件卸载时取消订阅
 onBeforeUnmount(() => {
   if (unlistenSkin) unlistenSkin();
+  if (unlistenStoreSync) unlistenStoreSync();
+  if (unlistenEnabled) unlistenEnabled();
 });
 
 // ---- 操作 ----

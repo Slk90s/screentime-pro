@@ -15,7 +15,13 @@
  *     重构 canFeedToday 消除 computed 内副作用 (BUG-2)
  */
 import { reactive, computed, watch } from 'vue';
+import { emit } from '@tauri-apps/api/event';
 import type { PetState } from '../types';
+
+/** 是否运行在 Tauri 环境（浏览器 mock 模式不触发跨窗口事件，避免报错） */
+const isTauriEnv =
+  typeof window !== 'undefined' &&
+  (window as any).__TAURI_INTERNALS__ !== undefined;
 
 const STORAGE_KEY = 'screentime-pet';
 
@@ -147,6 +153,11 @@ const effectiveState = computed<PetState>(() => {
 // ---- 操作方法 ----
 function setEnabled(v: boolean): void {
   _state.enabled = v;
+  // 跨窗口同步：通知所有窗口（主界面/桌宠窗/菜单窗）重读 enabled，
+  // 避免三处开关状态不同步。事件由本窗口发出、也会回灌自身（reload 幂等无害）。
+  if (isTauriEnv) {
+    emit('pet-enabled-changed').catch(() => {});
+  }
 }
 /**
  * 跨窗口同步：从 localStorage 重新读取持久化字段覆盖当前 reactive。

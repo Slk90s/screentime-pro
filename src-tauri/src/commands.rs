@@ -331,14 +331,15 @@ pub fn export_logs(app: tauri::AppHandle) -> Result<ExportResult, String> {
     )
     .ok();
 
-    // 列出所有 app.log.* 文件，按日期倒序（最新的在前）
+    // 列出所有本程序写入的日志文件（app.YYYY-MM-DD.log + ScreenTime Pro.log），
+    // 复用 logging::is_our_log_file 与 get_log_size 保持一致（注意真实文件名是 app.<日期>.log，
+    // 不是 app.log.*；旧过滤 starts_with("app.log") 会把所有滚动日志漏掉 → 导出正文全空）。
     let mut entries: Vec<_> = std::fs::read_dir(&log_dir)
         .map_err(|e| format!("读取日志目录失败: {}", e))?
         .filter_map(|e| e.ok())
         .filter(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .starts_with("app.log")
+            let name = e.file_name().to_string_lossy().to_string();
+            crate::logging::is_our_log_file(&name)
         })
         .collect();
     entries.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
