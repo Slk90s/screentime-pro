@@ -22,6 +22,7 @@
     - 2026-07-24 @v0.6.2-beta.5: 废弃 - 移除 panda-2d，皮肤列表由 skinRegistry.list() 动态渲染（现仅 popmart-3d）
     - 2026-08-08 @v0.6.2-34: 修复 - 菜单窗口也监听 pet-skin-changed 并调用 skinRegistry.reloadActive()，
       解决设置页切皮肤后右键菜单高亮不同步的问题。
+    - 2026-08-13 @v0.7.3: 修复 - 监听 pet-enabled-changed/pet-store-updated 并 reload，菜单实时反映开关与饱食度
 -->
 <template>
   <Transition name="menu-fade">

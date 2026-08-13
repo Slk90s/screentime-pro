@@ -27,6 +27,7 @@
   - 2026-07-24 @v0.6.2-beta.6: 修复 - 拖拽加 setPointerCapture + 拖拽期间暂停持久化（解决拖动卡顿）；右键菜单改为「临时放大窗口容纳菜单」修正坐标错位/被裁切导致菜单不显示；pet-custom-updated 新增 reloadBadges 同步 3D 表情
   - 2026-08-08 @v0.6.2-34: 气泡按皮肤配置 - pickBubble 传入当前 skinId，
     监听 pet-custom-updated 同步自定义短语。
+  - 2026-08-13 @v0.7.3: 修复 - 监听 pet-enabled-changed 同步桌宠开关状态（跨窗口）
 -->
 <template>
   <div

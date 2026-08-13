@@ -19,6 +19,7 @@
  *   - 2026-07-24 @v0.6.2-beta.6: 修复 - 增加 setPointerCapture + onStart/onEnd 暂停持久化，解决拖动卡顿
  *   - 2026-08-06 @v0.6.2-beta.28: 重构 - 阈值触发原生 startDragging 替代每帧 IPC，根治拖拽不跟手
  *   - 2026-08-07 @v0.6.2-33: 修复 - 原生拖拽回退分支补 onEnd() (BUG-6)、移除 onMoveHandler 中重复 onStart (BUG-7)
+ *   - 2026-08-13 @v0.7.3: 修复 - macOS 跳过不可靠原生 startDragging，改走与菜单一致的手动 move_pet_window 拖拽；修正回退/onUpHandler 重复 onEnd 并复位 isDragging
  */
 import { onBeforeUnmount, ref } from 'vue';
 import { getCurrentWindow } from '@tauri-apps/api/window';

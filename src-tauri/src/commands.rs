@@ -17,6 +17,9 @@
 //! - 多设备合并：get_devices / get_settings / save_settings
 //!
 //! 底层逻辑在 `sampling_loop`（后台采样循环）与 `db` 层；分类由 `classifier` 规则引擎完成。
+//!
+//! ## 修改历史
+//! - 2026-08-13 @v0.7.3: 修复 - export_logs 文件过滤由 starts_with("app.log") 改为复用 logging::is_our_log_file，修复导出日志正文全空（真实滚动名 app.YYYY-MM-DD.log）
 
 use crate::AppState;
 use crate::classifier::classify_app;

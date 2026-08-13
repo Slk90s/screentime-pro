@@ -5,7 +5,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](https://github.com/)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-0.7.2-blue)](./release)
+[![Version](https://img.shields.io/badge/version-0.7.3-blue)](./release)
 
 ---
 
@@ -39,7 +39,8 @@
 
 | 版本 | 发布时间 | 状态 | 关键说明 |
 |------|----------|------|----------|
-| **v0.7.2** | 2026-08-09 | 🚀 **正式版** | **本地自动备份 + macOS 门禁修复 + 设备ID稳定化**：① 设置页新增「自动备份」——每天自动把全量数据生成一份 JSON 到用户自定义目录（参考微信桌面版，用户自行拷到云盘即实现「云备份」），支持立即备份 / 保留天数清理；② macOS 安装包内置「修复门禁.command」，右键打开即可移除 Gatekeeper 隔离属性，免付费证书；③ 设备ID改为基于硬件（IOPlatformUUID / MachineGuid / machine-id）生成，重装/卸载后保持稳定，避免数据碎片化 |
+| **v0.7.3** | 2026-08-13 | 🚀 **正式版** | **macOS 日志/导出修复 + 桌宠开关同步 + macOS 拖拽跟手 + DMG 门禁脚本正式生效**：① 修复 macOS 无运行日志——`logging::init` 先 `create_dir_all` 确保日志目录存在，否则全新机无目录导致日志系统整体失效、一个文件都不生成；② 修复导出日志 txt 正文全空——`export_logs` 文件过滤由 `starts_with("app.log")` 改为复用 `is_our_log_file`（真实滚动名为 `app.YYYY-MM-DD.log`，旧过滤全漏）；③ 修复桌宠状态/桌宠菜单/主界面开关三处不同步——`petStore.setEnabled` 广播 `pet-enabled-changed`，各窗口监听并 `reload()`，菜单打开即显示最新状态；④ 修复 macOS 桌宠拖动不跟手——macOS 跳过不可靠的原生 `startDragging`，改为与右键菜单一致的手动 `move_pet_window` 拖拽（Windows/Linux 仍走原生）；⑤ DMG 门禁脚本（`修复门禁.command` + `首次打开必读.txt`）随 v0.7.3 构建正式注入并覆盖上传到 Release |
+| **v0.7.2** | 2026-08-09 | 旧版 | **本地自动备份 + macOS 门禁修复 + 设备ID稳定化**：① 设置页新增「自动备份」——每天自动把全量数据生成一份 JSON 到用户自定义目录（参考微信桌面版，用户自行拷到云盘即实现「云备份」），支持立即备份 / 保留天数清理；② macOS 安装包内置「修复门禁.command」，右键打开即可移除 Gatekeeper 隔离属性，免付费证书；③ 设备ID改为基于硬件（IOPlatformUUID / MachineGuid / machine-id）生成，重装/卸载后保持稳定，避免数据碎片化 |
 | **v0.7.1** | 2026-08-08 | 旧版 | **v0.7.0 的修复重发**：补齐此前缺失入库的桌宠皮肤源码资产（spider-man 皮肤目录、bubble-phrases.json、popmart3d PNG 资源），修复因这些文件未纳入版本管理导致 CI 三端构建在类型检查阶段失败、GitHub Release 未生成、安装包未上传的问题；应用功能与 v0.7.0 完全一致 |
 | **v0.7.0** | 2026-08-08 | 旧版 | **整合 0.6.2 全部 Beta 修复 + 新功能**：① 日历新增「月视图切换 + 本月统计概况」（月总时长 / 活跃天数 / 日均 / 最常使用 App / 最忙的一天），点击「今天 / 回到今天」日历同步跳到当月；② 主界面桌宠设置移除「已经吃饱啦 → 喂食」冗余提示，避免误导；③ 修复桌宠喂食系统——喂食后无反馈 → 右键菜单保留「+N」吐司 + 桌宠进食点头动画 + 飘「好吃！」气泡；饿度值不变 → `feed()` 同步 `todayFeedCountRef` 并新增饱食度随时间自然衰减（每 2 分钟 −1）；④ 优化桌面抖动：Rust 端系统过载判定阈值上调（≥90% 持续 20s 才升温、<55% 持续 15s 冷却），避免频繁翻转触发 0.18s 剧烈抖动；⑤ 算法梳理：饿度默认 100（0–100，<30 为饥饿），心情由前台应用推断（`inferStateFromApp`），加热态强制 angry；⑥ 蜘蛛侠待机小动作（swing/pose/crouch/web）、姿势图去底、气泡 MCU 台词等 0.6.2-33~36 全部修复并入本版 |
 | **v0.6.2-36** | 2026-08-08 | 旧版 | 蜘蛛侠体验细化：① 表情编辑器新增「待机小动作」预览区，可单独预览荡丝 / 摆 pose / 蹲防 / 射蛛丝四个姿势，动作覆盖更全面；② 吊蛛丝（swing）时隐藏叠加的静态 SVG 绳索，避免“白色蛛丝一直没动”的穿帮，改由姿势图自带的绳索随摆动；③ 清理射蛛丝姿势图里的静态蛛网碎片；④ 蜘蛛侠气泡台词大量替换为漫威电影宇宙经典台词（能力越大责任越大、友好的邻居蜘蛛侠、斯塔克先生我感觉不太好、我不想走、皇后区小子、爱你 3000 遍等） |
@@ -73,23 +74,23 @@
 | Windows (x64) | `ScreenTime-Pro_{ver}_x64-setup.exe` | 双击运行（NSIS 安装包），需系统已装 **WebView2 运行时**（Win10/11 通常自带） |
 | Linux (x64) | `ScreenTime-Pro_{ver}_amd64.AppImage` / `.deb` | 由 CI 在 Linux 环境构建（详见下方「从源码构建」） |
 
-> 各平台最新安装包（macOS / Windows / Linux 三端）统一发布在 **[GitHub Releases](https://github.com/Slk90s/screentime-pro/releases)**（⭐ v0.7.2 Latest）。
-> 本地 `release/v0.7.2/` 仅作带版本号归档（不入库）；Linux 因本机构建环境限制需在 CI 中产出（见 `.github/workflows/build.yml`）。
+> 各平台最新安装包（macOS / Windows / Linux 三端）统一发布在 **[GitHub Releases](https://github.com/Slk90s/screentime-pro/releases)**（⭐ v0.7.3 Latest）。
+> 本地 `release/v0.7.3/` 仅作带版本号归档（不入库）；Linux 因本机构建环境限制需在 CI 中产出（见 `.github/workflows/build.yml`）。
 
 ---
 
 ## 🚀 快速开始
 
-> 💡 **下载入口**：所有平台的最新版本请从 **[GitHub Releases](https://github.com/Slk90s/screentime-pro/releases)** 下载（⭐ Latest 自动指向 v0.7.2）。
+> 💡 **下载入口**：所有平台的最新版本请从 **[GitHub Releases](https://github.com/Slk90s/screentime-pro/releases)** 下载（⭐ Latest 自动指向 v0.7.3）。
 
 ### macOS
-1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `ScreenTime-Pro_0.7.2_aarch64.dmg`，打开并拖入「应用程序」。
+1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `ScreenTime-Pro_0.7.3_aarch64.dmg`，打开并拖入「应用程序」。
 2. 首次打开若提示「已损坏 / 无法验证」：dmg 内已附带 **`修复门禁.command`**——把 app 拖入「应用程序」后，**右键该脚本 → 打开**即可自动移除隔离属性；或在终端执行 `xattr -d com.apple.quarantine "/Applications/ScreenTime Pro.app"`。
 3. 首次运行：系统设置 › 隐私与安全性 › **辅助功能** 中授予本应用权限（空闲检测必需）。
 4. 程序默认开机自启、启动即开始追踪，菜单栏/托盘常驻。
 
 ### Windows
-1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `ScreenTime-Pro_0.7.2_x64-setup.exe`（NSIS 安装包）。
+1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `ScreenTime-Pro_0.7.3_x64-setup.exe`（NSIS 安装包）。
 2. **首次安装**：若系统未装 WebView2 运行时，安装器会**自动下载并安装**（需联网，几秒到几分钟）。Win10 1809+ / Win11 通常已内置，无需此步。
 3. 托盘右键「退出」可彻底关闭；「设置」页可开关开机自启。
 
@@ -238,7 +239,7 @@ screentime-pro/
 ├── .github/workflows/
 │   └── build.yml            # 三端自动构建（macOS / Windows / Linux）
 ├── sql/                  # schema.sql / seed_categories.sql / seed_rules.sql
-├── release/v0.7.2/ # 已构建的带版本号安装包（不入库，走 GitHub Releases）
+├── release/v0.7.3/ # 已构建的带版本号安装包（不入库，走 GitHub Releases）
 ├── README.md / LICENSE / .gitignore
 └── package.json / vite.config.ts / tsconfig*.json
 ```
@@ -274,7 +275,7 @@ screentime-pro/
 
 | 当前版本 | 历史摘要 |
 |----------|----------|
-| ⭐ **v0.7.2**（正式版） | 本地自动备份（每日 JSON + 自定义目录，参考微信桌面版，用户自行拷到云盘即云备份）+ macOS 门禁修复脚本 + 设备ID硬件稳定化（重装不碎片） |
+| ⭐ **v0.7.3**（正式版） | macOS 运行日志与导出日志修复（目录确保创建 + 滚动日志名精确匹配）+ 桌宠开关三处状态同步 + macOS 桌宠拖动改用与菜单一致的跟手方案 + DMG 门禁脚本（`修复门禁.command` + `首次打开必读.txt`）正式生效 |
 | **v0.7.1**（正式版） | 修复发布：补齐此前 v0.7.0 缺失入库的桌宠皮肤源码资产（spider-man 皮肤、bubble-phrases.json、popmart3d PNG 资源），修复因源码未入库导致 CI 三端构建失败、Release 未生成的问题；功能与 v0.7.0 完全一致 |
 | **v0.7.0**（正式版） | 整合 0.6.2 全部 Beta 修复 + 新功能：日历月视图切换与本月统计概况 + 今天同步跳转；桌宠设置移除「已经吃饱啦→喂食」冗余提示；修复喂食无反馈与饿度值不变（菜单吐司 + 桌宠进食点头 + 好吃气泡 + 饱食度自然衰减）；优化桌面抖动（过载阈值上调）；梳理饿度/心情算法 |
 | v0.6.2-beta.27（已发布） | 桌宠 Pop Mart 3D 熊猫素材重构：单张透明 PNG 替代四层切图，从根上消除五官割裂/重影；保留 idle 浮动、状态动画、点击/拖拽/过载等交互 |

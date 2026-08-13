@@ -13,6 +13,7 @@
  *     （菜单独立窗口 setOverride/feed 后需经 pet-store-updated 事件触发本函数，才能同步到桌宠窗口）
  *   - 2026-08-07 @v0.6.2-33: 修复 - reload() 补 scale 同步 (BUG-1)，
  *     重构 canFeedToday 消除 computed 内副作用 (BUG-2)
+ *   - 2026-08-13 @v0.7.3: 修复 - setEnabled 广播 pet-enabled-changed，桌宠开关三窗口状态同步
  */
 import { reactive, computed, watch } from 'vue';
 import { emit } from '@tauri-apps/api/event';

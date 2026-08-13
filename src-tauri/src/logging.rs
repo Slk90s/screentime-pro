@@ -12,9 +12,12 @@
 //! - 各业务模块用 `tracing::{info, warn, error, debug}` 埋点
 //!
 //! ## 日志文件位置
-//! - macOS：`~/Library/Logs/com.screentime.pro/app.log.YYYY-MM-DD`
-//! - Windows：`%LOCALAPPDATA%\com.screentime.pro\logs\app.log.YYYY-MM-DD`
-//! - Linux：`~/.local/share/com.screentime.pro/logs/app.log.YYYY-MM-DD`
+//! - macOS：`~/Library/Logs/com.screentime.pro/app.YYYY-MM-DD.log`
+//! - Windows：`%LOCALAPPDATA%\com.screentime.pro\logs\app.YYYY-MM-DD.log`
+//! - Linux：`~/.local/share/com.screentime.pro/logs/app.YYYY-MM-DD.log`
+//!
+//! ## 修改历史
+//! - 2026-08-13 @v0.7.3: 修复 - init 在 build appender 前 create_dir_all 确保日志目录存在，修复 macOS 全新机无目录导致日志系统整体失效、无任何日志文件
 
 use std::path::Path;
 use tracing_appender::non_blocking::WorkerGuard;
