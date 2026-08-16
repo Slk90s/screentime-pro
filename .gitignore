@@ -31,12 +31,12 @@ gen_pet_frames.py
 gen_spiderman_frames.py
 sandbox-vite-tauri-workaround.zip
 
-# 计划 / 规格文档（agent 产出的草案，仅本地参考，不入库）
-# 仅保留 ARCHITECTURE.md 与 RELEASE.md 作为仓库文档；其余 plan 类文档不进 GitHub。
-docs/*-plan.md
-docs/pet-assets-manifest.md
-docs/I18N_PLAN.md
-docs/v060-pet-plan.md
+# 文档备份（§8：覆盖/追加不明时先备份落此目录，临时安全网，不入库）
+bak/
+
+# 文档 markdown（用户要求：所有 *.md 仅本地留存，不传 GitHub）
+# 含 AGENTS.md / CONVENTIONS.md / README.md / docs/*.md（原 docs/ 仅 ARCHITECTURE.md·RELEASE.md 入库约定作废）
+*.md
 
 # OS / editor
 .DS_Store
