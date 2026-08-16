@@ -34,9 +34,9 @@ sandbox-vite-tauri-workaround.zip
 # 文档备份（§8：覆盖/追加不明时先备份落此目录，临时安全网，不入库）
 bak/
 
-# 文档 markdown（用户要求：所有 *.md 仅本地留存，不传 GitHub）
-# 含 AGENTS.md / CONVENTIONS.md / README.md / docs/*.md（原 docs/ 仅 ARCHITECTURE.md·RELEASE.md 入库约定作废）
-*.md
+# 文档 markdown：仅 docs/ 下文档留本地，不传 GitHub；根目录 README/AGENTS/CONVENTIONS 随仓库公开
+docs/*.md
+docs/**/*.md
 
 # OS / editor
 .DS_Store
