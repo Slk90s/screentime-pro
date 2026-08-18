@@ -1,12 +1,57 @@
+/*
+ * src/style.css
+ * 全局设计令牌（Design Tokens）+ 基础样式（轻/暗双主题）。
+ *
+ * 修改历史：
+ *   - 2026-08-17 @v0.7.4: 新增暗色主题（跟随系统深色 prefers-color-scheme + 手动 [data-theme="dark"] 钩子）；
+ *     补 --text-dim / --accent-strong 令牌；语义色 success/danger 显式定义；
+ *     硬编码语义色改走令牌（.dot / .dot.on / .track-btn.active）；详见 docs/DESIGN.md。
+ */
+
 :root {
   --bg: #f5f5f7;
   --card: #ffffff;
   --text: #1d1d1f;
   --muted: #86868b;
+  --text-dim: #aeaeb2;
   --border: #e5e5ea;
   --accent: #ff7e27;
+  --accent-strong: #e8701f;
+  --neutral: #c7c7cc;
+  --success: #34c759;
+  --danger: #ff3b30;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
+}
+
+/* ===== 暗主题（推荐）：跟随系统深色偏好；或手动给根元素加 [data-theme="dark"] ===== */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161618;
+    --card: #2a2a2e;
+    --text: #f5f5f7;
+    --muted: #98989d;
+    --text-dim: #6e6e73;
+    --border: #3a3a3e;
+    --accent: #ff8a3d;
+    --accent-strong: #ff7e27;
+    --neutral: #48484a;
+    --success: #34c759;
+    --danger: #ff3b30;
+  }
+}
+[data-theme="dark"] {
+  --bg: #161618;
+  --card: #2a2a2e;
+  --text: #f5f5f7;
+  --muted: #98989d;
+  --text-dim: #6e6e73;
+  --border: #3a3a3e;
+  --accent: #ff8a3d;
+  --accent-strong: #ff7e27;
+  --neutral: #48484a;
+  --success: #34c759;
+  --danger: #ff3b30;
 }
 
 * {
@@ -81,10 +126,10 @@ body {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #c7c7cc;
+  background: var(--neutral);
 }
 .dot.on {
-  background: #34c759;
+  background: var(--success);
 }
 
 .live-name {
@@ -113,7 +158,7 @@ body {
   transition: background 0.15s;
 }
 .track-btn.active {
-  background: #ff3b30;
+  background: var(--danger);
 }
 
 /* 权限引导横幅：macOS 未授权辅助功能时显示 */

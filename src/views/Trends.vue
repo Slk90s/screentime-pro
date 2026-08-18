@@ -1,3 +1,11 @@
+<!--
+  src/views/Trends.vue
+  趋势对比视图（周/月 环比 + 同比）。
+
+  修改历史：
+    - 2026-08-17 @v0.7.4: 趋势增减色值统一复用语义色（up→var(--danger)、down→var(--success)），
+      消除散落 #d9534f / #2e9e5b，与 docs/DESIGN.md 配色体系统一。
+-->
 <template>
   <!-- 趋势对比：周/月 的本期 vs 上期（环比）与去年同期（同比） -->
   <div class="trends">
@@ -259,10 +267,10 @@ onBeforeUnmount(() => {
   color: var(--text);
 }
 .stat .val.up {
-  color: #d9534f; /* 用时增加偏红（提醒） */
+  color: var(--danger); /* 用时增加偏红（提醒） */
 }
 .stat .val.down {
-  color: #2e9e5b; /* 用时减少偏绿（好事） */
+  color: var(--success); /* 用时减少偏绿（好事） */
 }
 .stat .sub {
   font-size: 12px;

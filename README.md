@@ -5,7 +5,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](https://github.com/)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-0.7.3-blue)](./release)
+[![Version](https://img.shields.io/badge/version-0.7.4-blue)](./release)
 
 ---
 
@@ -74,23 +74,23 @@
 | Windows (x64) | `ScreenTime-Pro_{ver}_x64-setup.exe` | 双击运行（NSIS 安装包），需系统已装 **WebView2 运行时**（Win10/11 通常自带） |
 | Linux (x64) | `ScreenTime-Pro_{ver}_amd64.AppImage` / `.deb` | 由 CI 在 Linux 环境构建（详见下方「从源码构建」） |
 
-> 各平台最新安装包（macOS / Windows / Linux 三端）统一发布在 **[GitHub Releases](https://github.com/Slk90s/screentime-pro/releases)**（⭐ v0.7.3 Latest）。
-> 本地 `release/v0.7.3/` 仅作带版本号归档（不入库）；Linux 因本机构建环境限制需在 CI 中产出（见 `.github/workflows/build.yml`）。
+> 各平台最新安装包（macOS / Windows / Linux 三端）统一发布在 **[GitHub Releases](https://github.com/Slk90s/screentime-pro/releases)**（⭐ v0.7.4 Latest）。
+> 本地 `release/v0.7.4/` 仅作带版本号归档（不入库）；Linux 因本机构建环境限制需在 CI 中产出（见 `.github/workflows/build.yml`）。
 
 ---
 
 ## 🚀 快速开始
 
-> 💡 **下载入口**：所有平台的最新版本请从 **[GitHub Releases](https://github.com/Slk90s/screentime-pro/releases)** 下载（⭐ Latest 自动指向 v0.7.3）。
+> 💡 **下载入口**：所有平台的最新版本请从 **[GitHub Releases](https://github.com/Slk90s/screentime-pro/releases)** 下载（⭐ Latest 自动指向 v0.7.4）。
 
 ### macOS
-1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `ScreenTime-Pro_0.7.3_aarch64.dmg`，打开并拖入「应用程序」。
+1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `ScreenTime-Pro_0.7.4_aarch64.dmg`，打开并拖入「应用程序」。
 2. 首次打开若提示「已损坏 / 无法验证」：dmg 内已附带 **`修复门禁.command`**——把 app 拖入「应用程序」后，**右键该脚本 → 打开**即可自动移除隔离属性；或在终端执行 `xattr -d com.apple.quarantine "/Applications/ScreenTime Pro.app"`。
 3. 首次运行：系统设置 › 隐私与安全性 › **辅助功能** 中授予本应用权限（空闲检测必需）。
 4. 程序默认开机自启、启动即开始追踪，菜单栏/托盘常驻。
 
 ### Windows
-1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `ScreenTime-Pro_0.7.3_x64-setup.exe`（NSIS 安装包）。
+1. 从 [GitHub Releases](https://github.com/Slk90s/screentime-pro/releases) 下载 `ScreenTime-Pro_0.7.4_x64-setup.exe`（NSIS 安装包）。
 2. **首次安装**：若系统未装 WebView2 运行时，安装器会**自动下载并安装**（需联网，几秒到几分钟）。Win10 1809+ / Win11 通常已内置，无需此步。
 3. 托盘右键「退出」可彻底关闭；「设置」页可开关开机自启。
 
@@ -239,7 +239,7 @@ screentime-pro/
 ├── .github/workflows/
 │   └── build.yml            # 三端自动构建（macOS / Windows / Linux）
 ├── sql/                  # schema.sql / seed_categories.sql / seed_rules.sql
-├── release/v0.7.3/ # 已构建的带版本号安装包（不入库，走 GitHub Releases）
+├── release/v0.7.4/ # 已构建的带版本号安装包（不入库，走 GitHub Releases）
 ├── README.md / LICENSE / .gitignore
 └── package.json / vite.config.ts / tsconfig*.json
 ```
@@ -275,7 +275,8 @@ screentime-pro/
 
 | 当前版本 | 历史摘要 |
 |----------|----------|
-| ⭐ **v0.7.3**（正式版） | macOS 运行日志与导出日志修复（目录确保创建 + 滚动日志名精确匹配）+ 桌宠开关三处状态同步 + macOS 桌宠拖动改用与菜单一致的跟手方案 + DMG 门禁脚本（`修复门禁.command` + `首次打开必读.txt`）正式生效 |
+| ⭐ **v0.7.4**（正式版） | 设计系统落地：新增暗色主题（跟随系统深色 + 手动 `[data-theme="dark"]` 钩子），统一全站配色（机械师橙单一强调色 + 语义 success/danger/warning/info + 7 分类数据色），修正趋势图散落色值复用语义色；新增 `docs/DESIGN.md` 设计系统文档 |
+| **v0.7.3**（正式版） | macOS 运行日志与导出日志修复（目录确保创建 + 滚动日志名精确匹配）+ 桌宠开关三处状态同步 + macOS 桌宠拖动改用与菜单一致的跟手方案 + DMG 门禁脚本（`修复门禁.command` + `首次打开必读.txt`）正式生效 |
 | **v0.7.1**（正式版） | 修复发布：补齐此前 v0.7.0 缺失入库的桌宠皮肤源码资产（spider-man 皮肤、bubble-phrases.json、popmart3d PNG 资源），修复因源码未入库导致 CI 三端构建失败、Release 未生成的问题；功能与 v0.7.0 完全一致 |
 | **v0.7.0**（正式版） | 整合 0.6.2 全部 Beta 修复 + 新功能：日历月视图切换与本月统计概况 + 今天同步跳转；桌宠设置移除「已经吃饱啦→喂食」冗余提示；修复喂食无反馈与饿度值不变（菜单吐司 + 桌宠进食点头 + 好吃气泡 + 饱食度自然衰减）；优化桌面抖动（过载阈值上调）；梳理饿度/心情算法 |
 | v0.6.2-beta.27（已发布） | 桌宠 Pop Mart 3D 熊猫素材重构：单张透明 PNG 替代四层切图，从根上消除五官割裂/重影；保留 idle 浮动、状态动画、点击/拖拽/过载等交互 |
