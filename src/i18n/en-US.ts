@@ -130,7 +130,11 @@ export default {
     autostart: "Launch at startup",
     autostartOn: "Enabled",
     autostartOff: "Disabled",
-    // v0.6.2-beta.19 卡片化新标题/副标题
+    // v0.7.5: Status bar metrics
+    metricsTitle: "Status bar metrics",
+    metricsOn: "Enabled",
+    metricsOff: "Disabled",
+    metricsHint: "Show CPU / Memory / Disk usage in the menu bar in real time. 1Hz sampling, < 0.05% overhead. macOS only.",
     languageTitle: "Language",
     languageDesc: "Choose interface language, persists after restart",
     generalTitle: "General",
@@ -148,7 +152,6 @@ export default {
       "Export all local data as a JSON backup, or merge in files exported from other devices (deduped by time+app+device).",
     export: "Export backup",
     import: "Import & merge",
-    // v0.7.2 local auto-backup (WeChat desktop style)
     autoBackup: "Auto backup (local)",
     autoBackupDesc:
       "Daily, a full JSON backup is written to the folder below. Copy those files to your own cloud drive / external disk — that is your \"cloud backup\". After reinstall or on a new computer, copy the file back and use \"Import & merge\" above to restore.",
@@ -310,7 +313,6 @@ export default {
     hourUnit: "hours",
     hourShort: "h",
   },
-  // v0.6.0-beta Desktop Pet
   pet: {
     settings: {
       title: "Desktop Pet",
@@ -321,11 +323,9 @@ export default {
       resetPos: "Reset Position",
       resetPosDesc: "Move the pet back to the bottom-right default",
       editor: "Edit Expressions",
-      // v0.6.2-beta.2: skin picker (settings-level discoverability)
       skinTitle: "Skin",
       skinDesc: "Switch pet appearance (also available from pet right-click menu)",
       skinNewBadge: "New",
-      // v0.6.2-beta.19 toggle state copy (avoids "Enabled" + "Enable Pet" duplication)
       on: "On",
       off: "Off",
     },
