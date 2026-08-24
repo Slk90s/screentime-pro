@@ -128,7 +128,11 @@ export default {
     autostart: "开机自启",
     autostartOn: "已开启",
     autostartOff: "已关闭",
-    // v0.6.2-beta.19 卡片化新标题/副标题
+    // v0.7.5：状态栏系统指标
+    metricsTitle: "状态栏指标监测",
+    metricsOn: "已开启",
+    metricsOff: "已关闭",
+    metricsHint: "开启后菜单栏实时显示 CPU / 内存 / 磁盘占用率，1Hz 采样，< 0.05% 额外开销。macOS 专属。",
     languageTitle: "语言",
     languageDesc: "选择界面显示语言，重启后保持",
     generalTitle: "通用",
@@ -146,7 +150,6 @@ export default {
       "把本机全量数据导出为 JSON 备份；或从其他设备导出的文件合并进来（按时间+应用+设备去重）。",
     export: "导出备份",
     import: "导入合并",
-    // v0.7.2 本地自动备份（微信桌面版式）
     autoBackup: "自动备份（本地）",
     autoBackupDesc:
       "每天自动把全量数据生成一份 JSON 备份到下方目录。把该目录里的文件复制到你自己的云盘 / 移动硬盘，即相当于「云备份」。卸载或换电脑后，再从云盘取回文件用上方「导入合并」恢复。",
@@ -304,7 +307,6 @@ export default {
     hourUnit: "小时",
     hourShort: "h",
   },
-  // v0.6.0-beta 桌宠子系统
   pet: {
     settings: {
       title: "桌宠",
@@ -315,11 +317,9 @@ export default {
       resetPos: "重置位置",
       resetPosDesc: "把桌宠移回屏幕右下默认位置",
       editor: "编辑表情",
-      // v0.6.2-beta.2：皮肤选择器（Settings 显式可发现）
       skinTitle: "皮肤",
       skinDesc: "切换桌宠外观（也支持右键桌宠 → 切换皮肤）",
       skinNewBadge: "新",
-      // v0.6.2-beta.19 状态文字（避免 "已开启桌宠" + label "开启桌宠" 重复）
       on: "已开启",
       off: "已关闭",
     },
