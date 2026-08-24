@@ -2,8 +2,6 @@
  * tracker.ts
  * 设计思路：前端与 Rust 后端的通信封装。双模运行——Tauri 内通过 `invoke` 调用真实 Rust 命令，
  * 普通浏览器内（仅看 UI / 调试）自动走 `mock` 假数据，使前端可脱离 Rust 编译单独预览。
- * 修改历史：
- *   - 2026-08-05 @v0.6.2-beta.26: 修复 - 导出 `isTauri`，供 App.vue 判断是否在 Tauri 运行时，避免浏览器预览白屏
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -17,6 +15,7 @@ import type {
   DeviceStats,
   ExportResult,
   HourlyBucketOut,
+  MetricsOut,
   MonthSummaryOut,
   OverviewOut,
   PermissionStatus,
@@ -30,7 +29,6 @@ import type {
 } from "../types";
 import { mock } from "./mock";
 
-// 检测是否运行在 Tauri 运行时内
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown;
@@ -39,7 +37,6 @@ declare global {
 export const isTauri =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-// 统一调用入口：不在 Tauri 内就返回 mock 数据
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (!isTauri) {
     return mock(cmd, args) as T;
@@ -47,21 +44,15 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
   return invoke<T>(cmd, args);
 }
 
-// 对外暴露的 API 集合（对应后端 commands.rs 中的各个命令）
 export const tracker = {
-  // 开始 / 停止 / 查询追踪状态
   start: () => call<boolean>("start_tracking"),
   stop: () => call<boolean>("stop_tracking"),
   isTracking: () => call<boolean>("is_tracking"),
-  // 实时前台应用（用于 UI 显示「正在记录：XXX」，验证确实在采集其他软件）
   current: () => call<CurrentForegroundOut>("get_current_foreground"),
-  // 各维度统计（支持按设备过滤：device 为空表示合并全部设备）
-  // overview / ranking 支持 days 参数：days=0 单日（用 date），days>0 范围聚合（近 N 天）
   overview: (days: number, date: string, device?: string) =>
     call<OverviewOut>("get_overview", { days, date, device: device ?? null }),
   daily: (days: number, device?: string) =>
     call<DailySummaryOut[]>("get_daily_summaries", { days, device: device ?? null }),
-  // 按天 × 分类明细（iOS 风格堆叠柱状图）
   dailyCategories: (days: number, device?: string) =>
     call<DayCategoryOut[]>("get_daily_categories", { days, device: device ?? null }),
   hourly: (date: string, device?: string) =>
@@ -69,7 +60,6 @@ export const tracker = {
   ranking: (days: number, date: string, device?: string) =>
     call<AppRankingOut[]>("get_app_ranking", { days, date, device: device ?? null }),
   categories: () => call<CategoryOut[]>("get_categories"),
-  // ===== 日历月视图统计概括 =====
   monthSummary: (year: number, month: number, device?: string) =>
     call<MonthSummaryOut>("get_month_summary", {
       year,
@@ -77,32 +67,23 @@ export const tracker = {
       device: device ?? null,
     }),
   sessions: (date: string) => call<SessionOut[]>("get_sessions", { date }),
-  // 空闲阈值配置
   setIdle: (secs: number) => call<boolean>("set_idle_threshold", { secs }),
   getIdle: () => call<number>("get_idle_threshold"),
-  // 权限查询与引导（macOS）
   checkPermissions: () => call<PermissionStatus>("check_permissions"),
   openPrivacySettings: () => call<void>("open_privacy_settings"),
-  // ===== WebView2 运行时检测（仅 Windows 真正生效） =====
   checkWebview2: () => call<Webview2Status>("check_webview2"),
   openWebview2Download: () => call<void>("open_webview2_download"),
-  // ===== 检查更新（拉 GitHub Releases API） =====
   checkUpdate: () => call<UpdateInfo>("check_for_update"),
-  // 调系统默认浏览器打开 URL（用于「前往下载」按钮；Tauri WebView 默认拦截 target=_blank）
   openUrl: (url: string) => call<void>("open_url", { url }),
-  // ===== 周/月同比分析 =====
   trends: (period: string, device?: string) =>
     call<TrendsOut>("get_trends", { period, device: device ?? null }),
-  // ===== 全量导出 / 导入合并 =====
   exportAll: (deviceId?: string) =>
     call<ExportResult>("export_all", { deviceId: deviceId ?? null }),
-  // 按设备清理（先自动备份再全删）
   backupAndPruneDevice: (deviceId: string) =>
     call<{ backup_path: string; deleted_count: number }>("backup_and_prune_device", {
       deviceId,
     }),
   importData: (content: string) => call<number>("import_data", { content }),
-  // ===== v0.7.2 本地自动备份（微信桌面版式）=====
   getBackupConfig: () => call<BackupConfig>("get_backup_config"),
   saveBackupConfig: (s: { enabled: boolean; path: string; keepDays: number }) =>
     call<void>("save_backup_config", s),
@@ -112,22 +93,15 @@ export const tracker = {
       days,
       deviceIds: deviceIds && deviceIds.length > 0 ? deviceIds : null,
     }),
-  // 在系统文件管理器中打开路径（导出后定位备份文件）
   revealPath: (path: string) => call<void>("reveal_path", { path }),
-  // ===== 多设备合并 =====
   devices: () => call<DeviceInfo[]>("get_devices"),
   devicesWithStats: () => call<DeviceStats[]>("list_devices_with_stats"),
   getSettings: () => call<SettingsOut>("get_settings"),
-  // 注意：Tauri 命令参数在 JS 侧为 camelCase（idleThreshold 等），必须用 camelCase 键名传参
   saveSettings: (s: {
     idleThreshold: number;
     deviceName: string;
     dataRetentionDays: number;
   }) => call<boolean>("save_settings", s),
-  // ===== 分类规则引擎 =====
-  // 注：Tauri 2 默认把 Rust 命令的 snake_case 参数自动转为 camelCase 给 JS 侧；
-  //     之前这里传 snake_case（match_type/category_id）会被识别为缺参而抛错 → 按钮无反应。
-  //     必须用 camelCase，与 Settings.vue 的 saveSettings 保持一致。
   rules: () => call<RuleOut[]>("get_rules"),
   addRule: (r: {
     field: string;
@@ -147,8 +121,12 @@ export const tracker = {
   }) => call<boolean>("update_rule", r),
   deleteRule: (id: number) => call<boolean>("delete_rule", { id }),
   reclassify: () => call<number>("reclassify_all"),
-  // ===== 开机自启 =====
   setAutostart: (enabled: boolean) => call<boolean>("set_autostart", { enabled }),
   isAutostart: () => call<boolean>("is_autostart"),
   getAutostartPref: () => call<boolean | null>("get_autostart_pref"),
+  // ===== v0.7.5：状态栏系统指标 =====
+  getSystemMetrics: () => call<MetricsOut>("get_system_metrics"),
+  setSystemMetricsEnabled: (enabled: boolean) =>
+    call<boolean>("set_system_metrics_enabled", { enabled }),
+  getSystemMetricsEnabled: () => call<boolean>("get_system_metrics_enabled"),
 };
