@@ -46,6 +46,8 @@ tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 # 跨平台回收站：把「上一份」备份移入系统回收站（Windows 回收站 / macOS 废纸篓 / Linux 桌面 trash）
 trash = "5"
+# v0.7.6：跨平台网络采样（macOS getifaddrs 需要；Windows/Linux 暂不直接用，但保留以便统一跨平台 FFI 调用）
+libc = "0.2"
 
 # ---- macOS 专属依赖（对齐 Tauri 2.x 引入的 objc2 0.6，避免重复编译）----
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -68,6 +70,9 @@ windows = { version = "0.58", features = [
   "Win32_System_Threading",
   "Win32_Foundation",
   "Win32_System_SystemInformation",
+  # v0.7.6：网络采样（GetIfTable2 + MIB_IF_TABLE2 需要 Ndis 常量 IF_TYPE_*/MIB_IF_OPER_STATUS_*）
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_NetworkManagement_Ndis",
 ] }
 # 跨平台调用系统默认浏览器（用于打开 WebView2 下载页）
 open = "5"

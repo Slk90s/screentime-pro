@@ -1,8 +1,21 @@
 # ScreenTime Pro — 架构文档
 
+<!--
+备份记录：2026-09-04 备份至 bak/docs/ARCHITECTURE.md.bak（操作类型：局部更新 - 版本号对齐
+  v0.7.5、修正 IPC 命令名、补 classifier.rs / system_load/ 模块、更新桌宠文件树；
+  本文件为文档无 SemVer 版本号，版本声明跟随 tauri.conf.json）
+
+修改历史：
+  - 2026-09-04 @v0.7.5: 修复 - 头部版本声明由 v0.7.0 更新为 v0.7.5（实际代码已是 v0.7.5）
+  - 2026-09-04 @v0.7.5: 修复 - §5 IPC 契约表命令名与实际代码不一致（list_rules→get_rules、
+    get_today_summary→get_overview、get_app_summaries→get_app_ranking）
+  - 2026-09-04 @v0.7.5: 新增 - §3.1 补 classifier.rs 与 system_load/ 两个模块地图条目
+  - 2026-09-04 @v0.7.5: 修正 - §3.3 桌宠文件树与 §11 文件清单同步至当前实际结构
+-->
+
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-08-08（v0.7.0 发布 + 文档清理：移除 plan 类文档）
+> 最后更新：2026-09-04（同步至 v0.7.5；补齐 RELEASE.md / CONVENTIONS 死链）
 
 ---
 
@@ -10,7 +23,10 @@
 
 跨平台应用使用时长追踪（macOS / Windows / Linux），对标 iOS「屏幕使用时间」。**数据 100% 本地（SQLite bundled），零上传，隐私优先**。
 
-栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v0.7.0**（已发布，详见 RELEASE.md）。
+栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v0.7.6**（已发布，详见 [`RELEASE.md`](RELEASE.md)）。
+
+> ⚠️ 本节版本号在 v0.7.0 → v0.7.5 期间**长期未更新**（曾停留在 v0.7.0），与 `tauri.conf.json` 脱节。
+> 版本号唯一真实来源是 **`src-tauri/tauri.conf.json` 的 `version`**，改版本时务必回来同步本节。
 
 ---
 
@@ -47,13 +63,21 @@
 ### 3.1 Rust 后端（src-tauri/src/）
 | 模块 | 职责 | 改我会影响 |
 |------|------|------------|
-| `commands.rs` | 主 IPC 命令路由（Rust 端共约 50+ 个 `#[tauri::command]`，桌宠窗口/菜单命令在 `pet/` 子模块） | 前端 `api/*` 必须对齐字段名 |
+| `commands.rs` (~968 行) | 主 IPC 命令路由（48 个 `#[tauri::command]`；桌宠窗口/菜单命令 9 个在 `pet/` 子模块，合计 **57** 个） | 前端 `api/*` 必须对齐字段名 |
+| `lib.rs` (~478 行) | Tauri Builder、插件注册、`generate_handler!` 命令注册、系统托盘 | **新命令必须在此注册**，否则 invoke 报不存在 |
 | `tracker/{macos,windows,linux}.rs` | 平台采样器（10s tick） | 跨平台数据一致性 |
 | `tracker/mod.rs` | trait 抽象 + 后台循环 | — |
-| `db/mod.rs` (~1062 行) | SQLite 连接池 + schema 管理 | 数据库迁移 |
+| `tracker/platform.rs` | `RawApp` 跨平台原始数据结构 | `classifier.rs` 入参 |
+| `db/mod.rs` (~1148 行) | SQLite 连接池 + schema 管理 + 迁移队列 | 数据库迁移 |
 | `db/models.rs` | 所有 DTO（前后端对接处） | `src/types.ts` |
-| `categorizer.rs` | 自动归类（同步实现！） | 采样循环性能 |
+| **`classifier.rs`** (~181 行) | **分类规则引擎（纯逻辑，不依赖 DB）**：给定 `classification_rules` 规则 + 应用 → 分类 id。规则由上层内存缓存后传入 | 规则匹配语义。**`pattern` 与 `value` 两侧都必须小写化**，否则 `equals` 永不命中（v0.6.2-beta.17 踩坑） |
+| `categorizer.rs` (~347 行) | 兜底自动归类：本地字典（60+ 软件）+ Wikipedia API + LRU 缓存 → `other`。**同步实现！** | 采样循环性能 |
+| **`system_load/`** (~472 行) | **v0.7.5 新增**：`MetricsSampler` 统一指标采样器，macOS 托盘显示 CPU / 内存 / 磁盘占用率（1s 采样、磁盘 30s 缓存、变化 <1% 不重绘托盘）。Win/Linux 默认隐藏 | 仅 macOS 托盘，不影响采样主流程 |
 | `logging.rs` | 统一日志订阅器 | 日志路径 / 级别 |
+
+> **`classifier.rs` 与 `categorizer.rs` 是两个不同东西**，勿混淆：
+> `classifier` 按**用户定义的规则**匹配（纯计算、可单测）；`categorizer` 是规则都没命中时的**兜底**
+> （本地字典 → 联网 Wikipedia → `other`），且**必须保持同步实现**（v0.4.1 死锁教训，见 §9）。
 
 ### 3.2 前端结构（src/）
 | 目录 | 职责 |
@@ -70,40 +94,53 @@
 桌宠是独立透明置顶 webview，与 `main` 主窗口经 Tauri 全局事件 + `localStorage` 跨窗口同步（见 §7.4）。当前共 3 个窗口：`main`（设置）、`pet`（桌宠本体）、`pet-menu`（右键菜单，v0.6.2-beta.17 起独立窗口）。
 ```
 src/pet/
-├── PetWindow.vue          ← webview 根：拖拽 / 交互 / 监听 / 路由
+├── PetWindow.vue          ← 桌宠 webview 根：拖拽 / 交互 / 监听 / 路由（381 行）
+├── PetMenuWindow.vue      ← 右键菜单**独立窗口**根（v0.6.2-beta.17 起独立成窗，119 行）
 ├── components/
-│   ├── PetCanvas.vue              （原 2D 皮肤，未改动）
-│   ├── PetBody/PetLayer.vue       （部件叠加层，未改动）
-│   ├── PetSpriteEditor.vue        （部件编辑器，未改动）
-│   ├── PetPreviewStage.vue        （编辑器预览，未改动）
-│   ├── PetContextMenu.vue         （右键菜单，新增皮肤切换）
-│   └── PetSkinRenderer.vue        （NEW: 皮肤路由器）
-├── composables/                （未改动）
-│   ├── usePetDrag.ts
-│   ├── usePetCursorPassthrough.ts
-│   ├── usePetInteractions.ts
-│   ├── useForegroundWatcher.ts
-│   └── usePetSprites.ts
+│   ├── PetSkinRenderer.vue      （皮肤路由器：:is 动态组件 + :key 强制重建）
+│   ├── PetContextMenu.vue        （右键菜单主体：皮肤切换 / 喂食 / 状态，855 行最重）
+│   ├── PetCanvas.vue             （原 2D 渲染，150 行）
+│   ├── PetBody.vue / PetLayer.vue（部件叠加层）
+│   ├── PetBubble.vue             （气泡对话，104 行）
+│   ├── PetSpriteEditor.vue       （部件编辑器，546 行）
+│   └── PetPreviewStage.vue       （编辑器预览，63 行）
+├── composables/
+│   ├── usePetDrag.ts             （拖拽：越 4px 阈值才交 OS startDragging）
+│   ├── usePetCursorPassthrough.ts（鼠标穿透）
+│   ├── usePetInteractions.ts     （点击：跳跃 / 压扁 / 抖动）
+│   ├── useForegroundWatcher.ts   （每 2s 轮询 tracker.current()）
+│   ├── usePetSprites.ts          （自定义部件合成）
+│   ├── usePetBadges.ts           （徽章状态）
+│   ├── usePetBubble.ts           （气泡文案 / 随机弹出）
+│   └── useSystemOverloadWatcher.ts（系统过载 → 桌宠升温抖动，v0.7.0 阈值已上调）
 ├── engine/                     （未改动）
 │   ├── stateMachine.ts          （16 状态 → 四元组）
 │   ├── appToState.ts
 │   ├── stateIcons.ts
 │   └── spriteLayout.ts          （部件坐标唯一数据源）
-├── stores/petStore.ts          （未改动）
-├── types.ts                    （未改动）
+├── config/bubble-phrases.json   （气泡台词词条）
+├── assets/sprites/              （23 个旧版部件精灵：eye_* / mouth_* / brow_* / 装饰）
+├── stores/petStore.ts          （状态 + localStorage 持久化，289 行）
+├── types.ts
 └── skins/                      ← 解耦皮肤层（注册表模式，即插即用）
-    ├── types.ts                （PetSkin 接口）
-    ├── registry.ts             （注册表 + 持久化 + 订阅）
+    ├── types.ts                （PetSkinManifest 接口）
+    ├── registry.ts             （注册表 + 持久化 + 订阅，137 行）
     ├── index.ts                （引导：注册内置皮肤）
-    ├── popmart3d/              （Pop Mart 3D 熊猫：单张透明 PNG + emoji 浮层 + CSS transform 动画）
+    ├── popmart3d/              （Pop Mart 3D 熊猫）
     │   ├── PopMartPandaPet.vue
-    │   └── assets/popmart-panda-single.png
-    └── spiderman/              （蜘蛛侠：单张 + swing/pose/web/crouch 姿势精灵）
+    │   └── assets/            （14 个文件：single / transparent / body / eyes / mouth /
+    │                           nose / frame-0~5 待机帧 / reference.jpg / debug-stack）
+    └── spiderman/              （蜘蛛侠）
         ├── SpiderManPet.vue
-        └── assets/spiderman-*.png
+        └── assets/            （10 个：frame-0~5 + pose-{hero,swing,web,crouch}）
 ```
 
 > 早期"4 层精灵拼贴"（body/eyes/mouth/nose 分别切图）因切片羽化导致五官割裂，已废弃；现行方案为**单张透明 PNG + 表情/姿势精灵叠加**。旧规格 `docs/pet-assets-manifest.md` 已从仓库移除（仅本地保留）。
+
+> ⚠️ **本节文件树曾滞后于实际结构**（2026-09-04 同步）：此前未收录 `PetMenuWindow.vue`、
+> `PetBubble.vue` 与 `usePetBadges` / `usePetBubble` / `useSystemOverloadWatcher` 三个 composables；
+> 且 `popmart3d` 描述为"单张透明 PNG"，实际目录含 14 个素材文件（v0.7.1 为修复"皮肤源码资产
+> 缺失入库"而补齐）。**以实际目录为准。**
 
 ---
 
@@ -160,21 +197,34 @@ PetSkinRenderer.watchEffect → skinTick++
 
 ---
 
-## 5. IPC 契约（约 50+ 命令）
+## 5. IPC 契约（当前 57 个命令）
 
-Rust 端在 `commands.rs` 注册；前端通过 `src/api/*` 调用。**改 IPC 必须同时改两端**。
+Rust 端在 `commands.rs` / `pet/` 定义，**在 `lib.rs` 的 `generate_handler!` 注册**；前端通过 `src/api/*` 调用。**改 IPC 必须同时改两端，并记得注册。**
 
 | 类别 | 命令 | 说明 |
 |------|------|------|
 | 追踪 | `start_tracking` / `stop_tracking` / `is_tracking` | 启动/停止/查询采样循环 |
 | 实时 | `get_current_foreground` | 当前前台应用（v0.5→v0.6.1 字段名 bug 已修） |
-| 数据 | `get_today_summary` / `get_daily_summaries` / `get_app_summaries` | Dashboard/Trends 用 |
-| 规则 | `list_rules` / `add_rule` / `update_rule` / `delete_rule` | 用户归类规则 CRUD |
-| 桌宠 | `show_pet_window` / `hide_pet_window` / `move_pet_window` / `set_pet_passthrough` | 桌宠窗口控制 |
+| 数据 | `get_overview` / `get_daily_summaries` / `get_daily_categories` / `get_month_summary` / `get_hourly_buckets` / `get_app_ranking` / `get_sessions` | Dashboard / Trends 用 |
+| 趋势 | `get_trends` | 周 / 月同比 |
+| 规则 | `get_rules` / `add_rule` / `update_rule` / `delete_rule` / `reclassify_all` | 归类规则 CRUD + 一键重算历史 |
+| 分类 | `get_categories` | 分类字典 |
+| 设置 | `get_settings` / `save_settings` / `set_idle_threshold` / `get_idle_threshold` | 配置与空闲阈值 |
+| 自启 | `set_autostart` / `is_autostart` / `get_autostart_pref` | 开机自启 |
+| 数据管理 | `export_all` / `export_data` / `import_data` / `prune_data` / `backup_and_prune_device` / `get_backup_config` / `save_backup_config` / `run_backup_now` | 导出导入、清理、本地自动备份 |
+| 多设备 | `get_devices` / `list_devices_with_stats` | 多设备合并 |
+| 桌宠（`pet::`） | `create_pet_window` / `show_pet_window` / `hide_pet_window` / `move_pet_window` / `set_pet_cursor_passthrough` / `create_pet_menu_window` / `show_pet_menu_window` / `hide_pet_menu_window` / `move_pet_menu_window` | 桌宠窗口 + 右键菜单窗口（共 9 个） |
+| 系统指标 | `get_system_metrics` / `get_system_metrics_enabled` / `set_system_metrics_enabled` | v0.7.5 新增，macOS 托盘 CPU/内存/磁盘 |
 | 权限 | `check_permissions` / `open_privacy_settings` | macOS 辅助功能 |
-| 元 | `check_for_update` / `export_logs` / `get_log_path` | 升级、日志导出 |
+| 环境 | `check_webview2` / `open_webview2_download` / `reveal_path` | Windows WebView2 检测等 |
+| 元 | `check_for_update` / `open_url` / `export_logs` / `get_log_size` / `get_log_dir` | 升级、日志导出 |
 
-完整列表：`rg "#\[tauri::command\]" src-tauri/src/commands.rs`
+完整列表（权威）：`src-tauri/src/lib.rs` 的 `.invoke_handler(tauri::generate_handler![...])`。
+
+> ⚠️ **本节曾长期与实际代码不符**，以下旧写法会直接报「命令不存在」，勿再沿用：
+> `list_rules` → 实际 `get_rules`；`get_today_summary` → 实际 `get_overview`；
+> `get_app_summaries` → 实际 `get_app_ranking`；`set_pet_passthrough` → 实际 `set_pet_cursor_passthrough`；
+> `get_log_path` → 实际 `get_log_dir`。
 
 ---
 
@@ -310,8 +360,9 @@ interface WidgetManifest {
 
 | 不变量 | 为什么 |
 |--------|--------|
-| 采样循环**绝不**嵌套 `block_on` 同步函数 | v0.4.0 → v0.4.1 死锁；改 `spawn_blocking` |
+| 采样循环**绝不**嵌套 `block_on` 同步函数 | v0.4.0 → v0.4.1 死锁；改 `spawn_blocking` / `reqwest::blocking` |
 | 命令**返回值** snake_case，命令**参数** camelCase | Tauri v2 行为：仅参数转换；`types.ts:66` 旧注释是错的 |
+| `classifier` 比较时 `value` 与 `pattern` **两侧都小写化** | 只小写一侧则 `equals` 永不命中 → "规则没生效"（v0.6.2-beta.17） |
 | 所有 `Mutex::lock()` → `unwrap_or_else(|e| e.into_inner())` | poison 雪崩 |
 | macOS 权限用 `AXIsProcessTrustedWithOptions({prompt:false})` | ad-hoc 签名下 `AXIsProcessTrusted` 因 identifier 漂移永远返回 false |
 | 日志走 `logging.rs` + tauri-plugin-log | 散打日志抓不到；前后端同文件 |
@@ -321,44 +372,58 @@ interface WidgetManifest {
 
 ---
 
-## 10. 约定（详见 CONVENTIONS.md）
+## 10. 约定（详见 [`CONVENTIONS-screentime-pro.md`](../CONVENTIONS-screentime-pro.md)）
 
-- **命名**：Rust snake_case / TS camelCase / DB 字段 snake_case；类型 PascalCase / 常量 UPPER_SNAKE
+- **命名分层**：DB 列 `snake_case` / Rust 字段与函数 `snake_case` / IPC 参数 camelCase↔snake_case 自动转 / **IPC 返回值原样 snake_case** / 前端内部 `camelCase`；类型 PascalCase / 常量 UPPER_SNAKE
 - **注释**：所有源码强制中文（公开 API、关键设计、复杂算法、行内、注释、TODO/FIXME）
 - **文件头**：必带修改历史（`YYYY-MM-DD @vX.Y.Z: 类型 - 说明`）
-- **版本同步点**：`src-tauri/tauri.conf.json` 的 `version` 为唯一真实来源；UI 硬编码版本号用 `app.getVersion()`
-- **发布红线**：构建成功 ≠ 可发布；**必须等用户明确「发布」** 才能 push/tag/release
+- **版本同步点**：`src-tauri/tauri.conf.json` 的 `version` 为唯一真实来源；UI 硬编码版本号用 `app.getVersion()`。**`Cargo.toml` 的 version 不参与发布，勿顺手对齐**
+- **发布红线**：构建成功 ≠ 可发布；**必须等用户明确「发布」** 才能 push/tag/release。流程见 [`RELEASE.md`](RELEASE.md)
+
+> 本条在 v0.7.5 之前写的是「详见 CONVENTIONS.md」，但该文件从未存在（死链）。
+> 项目专属约束已于 2026-09-04 建立，路径为仓库根 **`CONVENTIONS-screentime-pro.md`**；
+> 与 `AGENTS.md` / `CHANGELOG.md` 同属约束类文档，已由 `.gitignore` 排除，不传 GitHub。
 
 ---
 
 ## 11. 文件清单速查
 
 ```
+根目录（约束类文档，已 gitignore，不传 GitHub）
+├── CONVENTIONS-screentime-pro.md ← 项目专属代码约束（本空间首要约束，见 §10）
+├── CHANGELOG.md                  ← 本地详细变更留底
+└── AGENTS.md                     ← （建议补）项目级 Agent 启动规则
+
 src-tauri/
-├── Cargo.toml           ← Rust 依赖
-├── tauri.conf.json      ← VERSION IS HERE
+├── Cargo.toml           ← Rust 依赖（version 为 0.1.0，**不参与发布**，勿对齐）
+├── tauri.conf.json      ← VERSION IS HERE（唯一真实来源，决定 CI tag 与产物名）
 └── src/
-    ├── main.rs          ← App 入口
-    ├── commands.rs      ← 主 IPC 命令路由（+ pet/ 子模块桌宠命令）
-    ├── pet/             ← 桌宠 Rust 端（window / menu_window / platform）
-    ├── tracker/         ← 平台采样
-    ├── db/              ← SQLite
-    ├── categorizer.rs
-    └── logging.rs
+    ├── main.rs          ← App 入口（仅转调 lib）
+    ├── lib.rs           ← Tauri Builder / 插件 / generate_handler! 命令注册 / 托盘
+    ├── commands.rs      ← 主 IPC 命令路由（48 个）+ pet/ 子模块桌宠命令（9 个）
+    ├── pet/             ← 桌宠 Rust 端（window / menu_window）
+    ├── tracker/         ← 平台采样（mod / platform / macos / windows / linux）
+    ├── db/              ← SQLite（mod 1148 行 / models）
+    ├── classifier.rs    ← 分类规则引擎（纯逻辑，不依赖 DB）
+    ├── categorizer.rs   ← 兜底归类：字典 + Wikipedia + LRU（必须同步实现）
+    ├── system_load/     ← v0.7.5 macOS 托盘系统指标（mod / macos / linux / windows / metrics）
+    ├── logging.rs
+    └── error.rs
 
 src/
 ├── App.vue              ← 主窗口/桌宠分支根
-├── types.ts             ← DTO 镜像（snake_case）
-├── api/                 ← invoke 包装
-├── views/               ← 主窗口 4 页
-├── components/          ← 通用组件
+├── types.ts             ← DTO 镜像（snake_case，Rust struct 原样）
+├── api/                 ← invoke 包装 + mock（无 Tauri 环境调试用）
+├── views/               ← 主窗口 4 页（Settings 1506 行最重）
+├── components/          ← 通用组件 + 图表
 ├── pet/                 ← 桌宠子系统（含 skins/ 两套皮肤）
-├── i18n/                ← vue-i18n 词条（zh-CN / en-US）
-└── lib/                 ← 工具
+├── i18n/                ← vue-i18n 词条（zh-CN / en-US，必须双语同步）
+├── utils/               ← 格式化
+└── lib/                 ← logger
 
-docs/
-├── ARCHITECTURE.md      ← 本文件（工程面）
-└── RELEASE.md           ← 版本管理与发布流程（唯一权威）
+docs/                    ← ⚠️ .gitignore 默认排除 docs/*.md，仅以下两份白名单入库
+├── ARCHITECTURE.md      ← 本文件（工程面）  [入库]
+└── RELEASE.md           ← 版本管理与发布流程（唯一权威）  [入库]
 
 # 以下为本地工作目录（已 gitignore，不入库，仅本机参考）：
 #   release/v0.x.y/      历史版本归档与 Release Notes（本地草稿）
@@ -366,7 +431,12 @@ docs/
 # 计划/规格类文档（pet-assets-manifest / I18N_PLAN / v060-pet-plan 等）已移出仓库，仅本地保留。
 
 sql/                     ← SQLite 迁移（已恢复入库，为数据库唯一权威）
+.github/workflows/build.yml ← 三平台 CI，push v* tag 触发
 ```
+
+> **往 `docs/` 新增需公开的文档时，必须同步在 `.gitignore` 加白名单例外**
+> （当前仅 `!docs/ARCHITECTURE.md`、`!docs/RELEASE.md`），否则会被 git 静默忽略——
+> `RELEASE.md` 此前"被引用却不存在"正是这个原因。
 
 ---
 
@@ -376,7 +446,12 @@ sql/                     ← SQLite 迁移（已恢复入库，为数据库唯�
 |------|------|
 | `output/` | 本地构建产物、安装包、临时调试文件 |
 | `release/v0.X.Y/` | 本地 dmg / AppImage / deb 自测包与 Release Notes 草稿 |
-| 各版本 `NOTES.md` | 发布说明草稿（CI 打 `v*` tag 时由 `.github/workflows/build.yml` 的 `releaseBody` 生成线上 Release Notes） |
+| 各版本 `NOTES.md` | 发布说明草稿（**需人工**回填到 `build.yml` 的 `releaseBody`，见下） |
+
+> ⚠️ `build.yml` 的 `releaseBody` 是**硬编码死文本**，不会自动跟随版本。
+> 当前仓库三份（windows / linux / macos job）仍是 **v0.7.0 的旧文案**。
+> 发版前必须手动替换，否则线上 Release Notes 显示错误版本的内容。
+> 模板与完整流程见 [`RELEASE.md`](RELEASE.md) §3.1 / §5。
 
 ---
 

@@ -196,7 +196,18 @@ export interface ExportBundle {
   sessions: ExportSession[];
 }
 
-// ===== v0.7.5：状态栏系统指标 =====
+// ===== v0.7.6：状态栏配置（取代 v0.7.5 单字段 metrics_enabled）=====
+
+export interface StatusBarConfig {
+  enabled: boolean;
+  show_cpu: boolean;
+  show_mem: boolean;
+  show_net: boolean;
+  // v0.7.6（2026-09-10）：悬浮指标条独立开关（与托盘状态栏总开关互不依赖）
+  float_enabled: boolean;
+}
+
+// ===== v0.7.5 / v0.7.6：状态栏系统指标 =====
 
 export interface MetricsOut {
   supported: boolean;
@@ -208,4 +219,7 @@ export interface MetricsOut {
   disk_usage: number;
   disk_used_bytes: number;
   disk_total_bytes: number;
+  // v0.7.6 新增：网络速率（bytes/sec）
+  net_rx_bps: number;
+  net_tx_bps: number;
 }

@@ -11,6 +11,7 @@ mod classifier;
 mod commands;
 mod db;
 mod error;
+mod float_window;
 mod logging;
 mod tracker;
 mod pet;
@@ -21,10 +22,12 @@ use std::sync::{Arc, Mutex};
 
 use classifier::Rule;
 use db::AppDb;
-use tauri::menu::{Menu, MenuItemBuilder};
-use tauri::tray::TrayIconBuilder;
-#[cfg(target_os = "macos")]
-use tauri::tray::TrayIconEvent;
+// v0.7.6（2026-09-10）：托盘菜单新增 CheckMenuItem 快捷开关 + 分隔线；
+// 非 mac 平台也需要 TrayIconEvent/MouseButton（左键点击显示主窗口，右键弹菜单）
+use tauri::menu::{CheckMenuItemBuilder, Menu, MenuItemBuilder, PredefinedMenuItem};
+#[cfg(not(target_os = "macos"))]
+use tauri::tray::{MouseButton, MouseButtonState};
+use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tracker::{create_tracker, PlatformTracker};
@@ -41,10 +44,29 @@ pub struct AppState {
     pub current: Mutex<Option<ActiveSession>>,
     pub rules: Mutex<Vec<Rule>>,
     pub category_cache: categorizer::CategoryCache,
-    // ===== v0.7.5：托盘系统指标监测 =====
-    pub metrics_enabled: Mutex<bool>,
-    #[cfg(target_os = "macos")]
-    pub metrics_sampler: Option<Arc<system_load::MetricsSampler>>,
+    // ===== v0.7.5 → v0.7.6：托盘系统指标监测 =====
+    // v0.7.5：仅 macOS，metrics_enabled + Option<MetricsSampler>；v0.7.6 拆 cfg，跨平台始终存在
+    pub metrics_sampler: Arc<system_load::MetricsSampler>,
+    pub status_bar_config: Mutex<commands::StatusBarConfig>,
+}
+
+/// v0.7.6（2026-09-10）：托盘快捷开关菜单项句柄（setup 构建 tray 菜单后 manage）。
+/// 用途：设置页 `set_status_bar_config` / `set_system_metrics_enabled` 保存成功后
+/// 调用 `sync()` 同步菜单勾选态，防止「设置页改了、托盘菜单还挂旧勾」的显示不一致。
+/// CheckMenuItem 句柄是廉价 clone（内部同一 Arc），与菜单事件闭包里持有的 clone 互不冲突。
+/// 内存子项仅 macOS 菜单存在，非 mac 编译期剔除（与 MEMORY_SUPPORTED 约定一致）。
+/// 托盘菜单唯一的快捷开关句柄（悬浮指标条）。
+/// v0.7.6 初版曾含 状态栏/CPU/网速/内存 四项勾选；2026-09-10 按 Ryan 反馈精简：
+/// 指标勾选只保留在设置页「状态栏」卡片，托盘右键菜单仅留浮窗开关，避免重复冗长。
+pub struct TrayFloatToggle {
+    pub float: tauri::menu::CheckMenuItem<tauri::Wry>,
+}
+
+impl TrayFloatToggle {
+    /// 设置页改 float_enabled 后同步托盘菜单勾选态（反向：托盘勾选 → emit 事件刷设置页）
+    pub fn sync(&self, cfg: &commands::StatusBarConfig) {
+        let _ = self.float.set_checked(cfg.float_enabled);
+    }
 }
 
 fn gen_device_id() -> String {
@@ -196,15 +218,13 @@ pub fn run() {
             let device_name_from_db = db
                 .get_setting("device_name")
                 .unwrap_or_else(|| device_id.clone());
-            let metrics_enabled = db
-                .get_setting("statusbar_metrics_enabled")
-                .and_then(|s| s.parse::<bool>().ok())
-                .unwrap_or(false);
-            #[cfg(target_os = "macos")]
-            let metrics_sampler = {
-                let cpu_monitor = Arc::new(system_load::CpuMonitor::new());
-                Some(Arc::new(system_load::MetricsSampler::new(cpu_monitor)))
-            };
+            let status_bar_config =
+                commands::StatusBarConfig::load(&db);
+            // v0.7.6：sampler 跨平台始终存在
+            let cpu_monitor_for_sampler = Arc::new(system_load::CpuMonitor::new());
+            let metrics_sampler = Arc::new(system_load::MetricsSampler::new(cpu_monitor_for_sampler));
+            metrics_sampler.warmup();
+            metrics_sampler.init();
             let app_state = Arc::new(AppState {
                 db,
                 tracker,
@@ -215,9 +235,8 @@ pub fn run() {
                 current: Mutex::new(None),
                 rules: Mutex::new(rules),
                 category_cache: categorizer::CategoryCache::new(),
-                metrics_enabled: Mutex::new(metrics_enabled),
-                #[cfg(target_os = "macos")]
                 metrics_sampler,
+                status_bar_config: Mutex::new(status_bar_config),
             });
             app.manage(app_state.clone());
             if let Some(g) = log_guard {
@@ -301,18 +320,56 @@ pub fn run() {
                     }
                 })
                 .ok();
+            // ===== v0.7.6（2026-09-10 精简）：托盘右键菜单 =「悬浮指标条 ✓ ─ 显示主窗口 / 退出」=====
+            // - 初版曾把 状态栏/CPU/网速/内存 四项勾选放进托盘菜单；Ryan 反馈（2026-09-10）：
+            //   托盘只留浮窗开关，指标勾选在设置页「状态栏」卡片里设计即可
+            // - 浮窗开关与设置页同源：写 AppState.status_bar_config + SQLite 持久化，
+            //   toggle 后 emit status-bar-config-changed → 设置页即时刷新（双向同步）
+            // - 菜单文案沿用硬编码中文（原生菜单不做 i18n，与既有约定一致）
+            let sb_cfg = *app_state
+                .status_bar_config
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let float_item = CheckMenuItemBuilder::with_id("toggle_float", "悬浮指标条")
+                .checked(sb_cfg.float_enabled)
+                .build(app)?;
+            let sep = PredefinedMenuItem::separator(app)?;
             let show_item = MenuItemBuilder::with_id("show", "显示主窗口")
                 .enabled(true)
                 .build(app)?;
             let quit_item =
                 MenuItemBuilder::with_id("quit", "退出").enabled(true).build(app)?;
-            let tray_menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+            // ⚠️ with_items 要求元素统一为 &dyn IsMenuItem；CheckMenuItem /
+            // PredefinedMenuItem / MenuItem 混排必须显式 Vec<&dyn ...> 注解，
+            // 否则数组字面量推断出单一具体类型而编译失败
+            let tray_items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
+                vec![&float_item, &sep, &show_item, &quit_item];
+            let tray_menu = Menu::with_items(app, &tray_items)?;
+            // 勾选态句柄：CheckMenuItem 点击后不自动翻转，菜单事件里手动 set_checked
+            let float_toggle = float_item.clone();
+            // 设置页 → 托盘菜单方向的同步句柄：manage 后 commands 里 try_state 取用
+            // （原始 item move 进 struct，菜单事件闭包用的是上面的 clone，互不影响）
+            app.manage(TrayFloatToggle { float: float_item });
             let icon = app.default_window_icon().unwrap().clone();
+            // v0.7.6：非 mac 平台需要在状态栏关闭时把托盘图标还原回品牌图。
+            // ⚠️ app.default_window_icon() 返回的 &Image 生命周期绑在 &mut App 上，
+            // .clone() 仍带借用，不能 move 进 'static 线程；必须拷出原始 RGBA 字节，
+            // 用 new_owned 重建一个 owned Image<'static>。
+            #[cfg(not(target_os = "macos"))]
+            let default_tray_icon: tauri::image::Image<'static> = {
+                let raw = app
+                    .default_window_icon()
+                    .expect("default window icon");
+                let rgba = raw.rgba().to_vec();
+                tauri::image::Image::new_owned(rgba, raw.width(), raw.height())
+            };
             let tray_icon = TrayIconBuilder::with_id("statusbar")
                 .icon(icon)
                 .menu(&tray_menu)
-                .show_menu_on_left_click(true)
-                .on_menu_event(|app, event| match event.id.as_ref() {
+                // v0.7.6：左键不再弹菜单——非 mac 左键=显示主窗口、右键=快捷菜单；
+                // macOS 左键沿用「点击切换主窗口显隐」（见下方 on_tray_icon_event）
+                .show_menu_on_left_click(false)
+                .on_menu_event(move |app, event| match event.id.as_ref() {
                     "show" => {
                         if let Some(w) = app.get_webview_window("main") {
                             let _ = w.show();
@@ -325,6 +382,44 @@ pub fn run() {
                             let _ = w.destroy();
                         }
                         app.exit(0);
+                    }
+                    // v0.7.6：悬浮指标条开关（与设置页 set_status_bar_config 同一套持久化）。
+                    // 2026-09-10 精简：指标勾选已从托盘菜单移除，此处只处理浮窗开关
+                    "toggle_float" => {
+                        let state = app.state::<Arc<AppState>>();
+                        let mut cfg = *state
+                            .status_bar_config
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        cfg.float_enabled = !cfg.float_enabled;
+                        // 2026-09-10：总开关统管后，托盘菜单勾浮窗时若「启用状态栏」还关着
+                        // → 顺手打开总开关（否则会出现「勾了浮窗却什么都不显示」的死开关体验；
+                        // emit 的 status-bar-config-changed 会把设置页一并刷成 enabled=true）
+                        if cfg.float_enabled && !cfg.enabled {
+                            cfg.enabled = true;
+                        }
+                        match cfg.save(&state.db) {
+                            Ok(()) => {
+                                *state
+                                    .status_bar_config
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner()) = cfg;
+                                // 菜单勾选态不自动翻转，手动同步
+                                let _ = float_toggle.set_checked(cfg.float_enabled);
+                                // 通知前端设置页刷新（托盘 ↔ 页面双向一致）
+                                let _ =
+                                    app.emit_to("main", "status-bar-config-changed", cfg);
+                                // 同步显隐浮窗（不存在则幂等创建）
+                                if let Err(e) =
+                                    float_window::set_float_visible(app, cfg.float_enabled)
+                                {
+                                    tracing::error!(error = %e, "切换悬浮指标条失败");
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!(error = %e, "悬浮指标条开关持久化失败");
+                            }
+                        }
                     }
                     _ => {}
                 })
@@ -343,57 +438,158 @@ pub fn run() {
                             }
                         }
                     }
+                    // v0.7.6：非 mac 左键单击 → 显示主窗口（右键由系统自动弹快捷菜单）
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = _event
+                        {
+                            if let Some(w) = _tray.app_handle().get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                                let _ = _tray.app_handle().emit_to("main", "tray-shown", ());
+                            }
+                        }
+                    }
                 })
                 .build(app)?;
-            #[cfg(target_os = "macos")]
-            {
-                use std::time::Duration;
-                let tray_clone = tray_icon.clone();
-                let sampler_opt = app_state.metrics_sampler.clone();
-                let state_clone = app_state.clone();
-                if let Some(ref sampler) = sampler_opt {
-                    let _ = sampler.sample_all();
-                }
-                std::thread::Builder::new()
-                    .name("metrics-sampler".into())
-                    .spawn(move || {
-                        const POLL_INTERVAL_MS: u64 = 1000;
-                        let mut slow_tick = 0u64;
-                        loop {
-                            let enabled = state_clone
-                                .metrics_enabled
-                                .lock()
-                                .map(|g| *g)
-                                .unwrap_or(false);
-                            if enabled {
-                                if let Some(ref sampler) = sampler_opt {
-                                    let snap = sampler.sample_all();
-                                    if sampler.should_update(&snap) {
-                                        let title = sampler.tray_title(&snap);
-                                        let _ = tray_clone.set_title(title);
-                                        sampler.cache_snapshot(snap);
-                                    }
+            // ===== v0.7.6：跨平台托盘指标采样线程 =====
+            // - macOS：set_title 到菜单栏（菜单栏原生支持完整文字）
+            // - Windows/Linux：tray.set_title 在 Win 上仅写 tooltip，Linux 多数 DE 也不显示
+            //   → 必须每 tick 把缩写文字画进 32x32 RGBA 图标 set_icon，
+            //   同时 set_title(完整) 作为 tooltip（Windows 悬停可见）
+            //   关闭时 set_icon(默认品牌图) + set_title(None) 还原
+            //   详见 system_load/tray_icon.rs 的「画布约束」段
+            use std::time::Duration;
+            let tray_clone = tray_icon.clone();
+            let sampler = app_state.metrics_sampler.clone();
+            let state_clone = app_state.clone();
+            #[cfg(not(target_os = "macos"))]
+            let default_tray_icon_for_thread = default_tray_icon.clone();
+            std::thread::Builder::new()
+                .name("metrics-sampler".into())
+                .spawn(move || {
+                    const POLL_INTERVAL_MS: u64 = 1000;
+                    #[cfg(target_os = "macos")]
+                    let mut slow_tick: u64 = 0;
+                    // v0.7.6：浮窗显隐状态缓存（只在翻转时调 show/hide，避免每秒无效调用）
+                    let mut float_shown = false;
+                    // 浮窗优先（用户反馈 2026-09-10）：开了悬浮指标条后托盘不再绘制指标，
+                    // 仅浮窗显示；此标记记录托盘当前是否处于「画指标」态，翻转时才还原品牌图
+                    let mut tray_shown_metrics = false;
+                    loop {
+                        let cfg = *state_clone
+                            .status_bar_config
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        let title_cfg: system_load::TrayTitleConfig = cfg.into();
+                        // v0.7.6：悬浮指标条显隐管理。
+                        // 2026-09-10 语义修正（Ryan 反馈）：受「启用状态栏」总开关统管——
+                        // enabled=false 时浮窗与托盘指标一并隐藏，消除「总开关关了浮窗还显示」
+                        // 造成的死开关困惑（旧设计「浮窗独立于总开关」作废）。
+                        // Windows 上前台全屏 → 自动隐藏，退出全屏恢复；设置页/菜单关闭时兜底隐藏。
+                        if cfg.enabled && cfg.float_enabled {
+                            let want_show =
+                                !system_load::fullscreen::foreground_is_fullscreen();
+                            if want_show != float_shown {
+                                float_shown = want_show;
+                                let handle = tray_clone.app_handle().clone();
+                                if let Err(e) =
+                                    float_window::set_float_visible(&handle, want_show)
+                                {
+                                    tracing::warn!(error = %e, "悬浮指标条显隐切换失败");
                                 }
-                                std::thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
-                            } else {
-                                let _ = tray_clone.set_title("");
-                                std::thread::sleep(Duration::from_secs(5));
                             }
-                            slow_tick = slow_tick.wrapping_add(1);
-                            if slow_tick % 60 == 0 && enabled {
-                                if let Some(ref sampler) = sampler_opt {
-                                    let snap = sampler.sample_all();
-                                    let title = sampler.tray_title(&snap);
-                                    let _ = tray_clone.set_title(title);
+                        } else if float_shown {
+                            float_shown = false;
+                            let handle = tray_clone.app_handle().clone();
+                            let _ = float_window::set_float_visible(&handle, false);
+                        }
+                        // 浮窗优先：悬浮指标条开启 → 托盘不画指标（还原品牌图 + 清 tooltip），仅浮窗显示
+                        let want_tray_metrics = cfg.enabled && !cfg.float_enabled;
+                        if want_tray_metrics {
+                            let snap = sampler.sample_all();
+                            let full_title =
+                                sampler.tray_title_with(&snap, &title_cfg);
+                            #[cfg(target_os = "macos")]
+                            {
+                                if sampler.should_update(&snap) {
+                                    let _ = tray_clone.set_title(Some(full_title));
                                     sampler.cache_snapshot(snap);
                                 }
                             }
+                            #[cfg(not(target_os = "macos"))]
+                            {
+                                // 画缩写文字进 32x32 图标；同时 set_title(完整) 作为 tooltip
+                                let lines = system_load::tray_icon::format_icon_lines(
+                                    &snap, &title_cfg,
+                                );
+                                let refs: Vec<&str> =
+                                    lines.iter().map(|s| s.as_str()).collect();
+                                let img = system_load::tray_icon::render_tray_icon(&refs);
+                                let _ = tray_clone.set_icon(Some(img));
+                                let _ = tray_clone.set_title(Some(full_title));
+                            }
+                            tray_shown_metrics = true;
+                            std::thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
+                        } else {
+                            // 还原品牌图 / 清 tooltip 只在「刚从画字态翻转过来」时执行一次，
+                            // 避免每秒重设图标（set_icon 每次都重建句柄）
+                            if tray_shown_metrics {
+                                #[cfg(target_os = "macos")]
+                                {
+                                    let _ = tray_clone.set_title(Some(String::new()));
+                                }
+                                #[cfg(not(target_os = "macos"))]
+                                {
+                                    // 还原品牌图标 + 清除 tooltip
+                                    let _ = tray_clone
+                                        .set_icon(Some(default_tray_icon_for_thread.clone()));
+                                    let _ = tray_clone.set_title(None::<&str>);
+                                }
+                                tray_shown_metrics = false;
+                            }
+                            // 浮窗可见时保持 1s 轮询（前台全屏检测的响应性依赖此循环）；
+                            // 托盘指标与浮窗都不可见 → 5s 低频轮询省 CPU
+                            if cfg.enabled && cfg.float_enabled {
+                                std::thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
+                            } else {
+                                std::thread::sleep(Duration::from_secs(5));
+                            }
                         }
-                    })
-                    .ok();
+                        #[cfg(target_os = "macos")]
+                        {
+                            slow_tick = slow_tick.wrapping_add(1);
+                            if slow_tick % 60 == 0 && want_tray_metrics {
+                                let snap = sampler.sample_all();
+                                let title =
+                                    sampler.tray_title_with(&snap, &title_cfg);
+                                let _ = tray_clone.set_title(Some(title));
+                                sampler.cache_snapshot(snap);
+                            }
+                        }
+                    }
+                })
+                .ok();
+            // ===== v0.7.6：启动时若「悬浮指标条」可见（enabled + float_enabled 双条件）
+            // → 创建并显示浮窗 =====
+            // 位置由前端 FloatBar.vue 从 localStorage 恢复；透明空窗 show 不可见，无白闪
+            let float_resume = {
+                let sb = app_state
+                    .status_bar_config
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                sb.enabled && sb.float_enabled
+            };
+            if float_resume {
+                let handle = app.handle().clone();
+                if let Err(e) = float_window::set_float_visible(&handle, true) {
+                    tracing::warn!(error = %e, "启动恢复悬浮指标条失败");
+                }
             }
-            #[cfg(not(target_os = "macos"))]
-            let _ = tray_icon;
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -448,6 +644,8 @@ pub fn run() {
             commands::get_system_metrics,
             commands::set_system_metrics_enabled,
             commands::get_system_metrics_enabled,
+            commands::get_status_bar_config,
+            commands::set_status_bar_config,
             commands::export_logs,
             commands::get_log_size,
             commands::get_log_dir,
@@ -460,6 +658,10 @@ pub fn run() {
             pet::show_pet_menu_window,
             pet::hide_pet_menu_window,
             pet::move_pet_menu_window,
+            float_window::create_float_window,
+            float_window::show_float_window,
+            float_window::hide_float_window,
+            float_window::move_float_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

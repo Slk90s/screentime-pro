@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "float",
+  "description": "悬浮指标条窗口权限：前端 show/hide/位置恢复 + 原生拖拽与显示器信息读取（自定义命令本身无需权限）",
+  "windows": ["float"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-position",
+    "core:window:allow-start-dragging",
+    "core:window:allow-outer-position",
+    "core:window:allow-scale-factor",
+    "core:window:allow-current-monitor",
+    "core:webview:allow-internal-toggle-devtools"
+  ]
+}

@@ -118,6 +118,90 @@
       </div>
     </div>
 
+    <!-- ============ 状态栏（v0.7.6：总开关 + 3 个子项复选框）============ -->
+    <div class="setting-card">
+      <div class="card-head">
+        <div class="head-icon icon-orange">
+          <AppIcon name="tool" :size="20" />
+        </div>
+        <div class="head-text">
+          <h3>{{ t("settings.statusBarTitle") }}</h3>
+          <p>{{ t("settings.statusBarDesc") }}</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <!-- 总开关：启用状态栏 -->
+        <div class="form-row row between">
+          <label>{{ t("settings.statusBarEnabled") }}</label>
+          <label class="toggle-switch" :class="{ on: statusBarConfig.enabled }">
+            <input
+              type="checkbox"
+              :checked="statusBarConfig.enabled"
+              @change="onStatusBarEnabled($event)"
+            />
+            <span class="toggle-slider" />
+            <span class="toggle-state">
+              {{ statusBarConfig.enabled ? t("settings.statusBarOn") : t("settings.statusBarOff") }}
+            </span>
+          </label>
+        </div>
+
+        <!-- 3 个子项复选框（仅启用时可交互） -->
+        <div class="sub-zone" :class="{ disabled: !statusBarConfig.enabled }">
+          <div class="form-row row between">
+            <label>{{ t("settings.statusBarShowCpu") }}</label>
+            <input
+              type="checkbox"
+              class="check-input"
+              :checked="statusBarConfig.show_cpu"
+              :disabled="!statusBarConfig.enabled"
+              @change="onStatusBarItem($event, 'show_cpu')"
+            />
+          </div>
+          <div class="form-row row between" :class="{ 'op-muted': !isMac }">
+            <label>
+              {{ t("settings.statusBarShowMem") }}
+              <span v-if="!isMac" class="platform-note">{{ t("settings.memMacOnly") }}</span>
+            </label>
+            <input
+              type="checkbox"
+              class="check-input"
+              :checked="statusBarConfig.show_mem"
+              :disabled="!statusBarConfig.enabled || !isMac"
+              @change="onStatusBarItem($event, 'show_mem')"
+            />
+          </div>
+          <div class="form-row row between">
+            <label>{{ t("settings.statusBarShowNet") }}</label>
+            <input
+              type="checkbox"
+              class="check-input"
+              :checked="statusBarConfig.show_net"
+              :disabled="!statusBarConfig.enabled"
+              @change="onStatusBarItem($event, 'show_net')"
+            />
+          </div>
+          <p class="field-hint">{{ t("settings.statusBarHint") }}</p>
+          <!-- v0.7.6 修复：非 mac 平台托盘因画布仅 16-24px，文字会缩写，提示用户悬停查看完整 -->
+          <p v-if="!isMac" class="field-hint platform-note">{{ t("settings.statusBarWinNote") }}</p>
+
+          <!-- v0.7.6：悬浮指标条（2026-09-10 起受「启用状态栏」总开关统管，随子项一并置灰；
+               可拖拽，全屏自动隐藏。旧设计「独立于总开关」作废——死开关体验，见 CHANGELOG） -->
+          <div class="form-row row between">
+            <label>{{ t("settings.statusBarFloat") }}</label>
+            <input
+              type="checkbox"
+              class="check-input"
+              :checked="statusBarConfig.float_enabled"
+              :disabled="!statusBarConfig.enabled"
+              @change="onStatusBarItem($event, 'float_enabled')"
+            />
+          </div>
+          <p class="field-hint platform-note">{{ t("settings.statusBarFloatHint") }}</p>
+        </div>
+      </div>
+    </div>
+
     <!-- ============ 设备 ID ============ -->
     <div class="setting-card">
       <div class="card-head">
@@ -533,7 +617,13 @@ import Modal from "../components/Modal.vue";
 import AppIcon from "../components/AppIcon.vue";
 import { tracker } from "../api/tracker";
 import { i18n, setLocale, type Locale } from "../i18n";
-import type { BackupConfig, DeviceStats, SettingsOut, UpdateInfo } from "../types";
+import type {
+  BackupConfig,
+  DeviceStats,
+  SettingsOut,
+  StatusBarConfig,
+  UpdateInfo,
+} from "../types";
 import { formatDuration } from "../utils/format";
 import { petStore } from "../pet/stores/petStore";
 import PetSpriteEditor from "../pet/components/PetSpriteEditor.vue";
@@ -555,6 +645,8 @@ function pickSkin(id: string): void {
 // v0.6.2-beta.3：跨窗口皮肤同步
 let unlistenSkin: (() => void) | null = null;
 let unlistenPetEnabled: (() => void) | null = null;
+// v0.7.6（2026-09-10）：托盘右键快捷开关 ↔ 设置页双向同步
+let unlistenStatusBarCfg: (() => void) | null = null;
 onMounted(async () => {
   try {
     unlistenSkin = await listen("pet-skin-changed", () => {
@@ -570,10 +662,22 @@ onMounted(async () => {
   } catch (e) {
     console.error("[Settings] 监听 pet-enabled-changed 失败", e);
   }
+  // 托盘菜单勾选后后端 emit 此事件，设置页卡片即时反映（避免两处状态不一致）
+  try {
+    unlistenStatusBarCfg = await listen<StatusBarConfig>(
+      "status-bar-config-changed",
+      (e) => {
+        statusBarConfig.value = e.payload;
+      },
+    );
+  } catch (e) {
+    console.error("[Settings] 监听 status-bar-config-changed 失败", e);
+  }
 });
 onBeforeUnmount(() => {
   if (unlistenSkin) unlistenSkin();
   if (unlistenPetEnabled) unlistenPetEnabled();
+  if (unlistenStatusBarCfg) unlistenStatusBarCfg();
 });
 
 // 语言切换
@@ -735,6 +839,58 @@ function onAlertConfirm() {
 
 // ============ 导出/按设备清理 ============
 const exportDialogOpen = ref(false);
+
+// ============ v0.7.6：状态栏配置（总开关 + 3 子项）============
+// isMac：内存指标仅 macOS 支持；非 macOS 上禁用「显示内存占用」子项（与后端 MEMORY_SUPPORTED 对齐）
+const isMac = /Mac|iPhone|iPod|iPad/i.test(navigator.platform || navigator.userAgent || "");
+const statusBarConfig = ref<StatusBarConfig>({
+  enabled: false,
+  show_cpu: true,
+  show_mem: true,
+  show_net: true,
+  float_enabled: false,
+});
+async function loadStatusBarConfig() {
+  try {
+    statusBarConfig.value = await tracker.getStatusBarConfig();
+  } catch (err) {
+    console.warn("[Settings] 加载状态栏配置失败", err);
+  }
+}
+// 乐观更新：先翻 ref 再 await IPC，失败回滚（与 onAutostart 模式一致）
+async function onStatusBarEnabled(e: Event) {
+  const next = (e.target as HTMLInputElement).checked;
+  const prev = statusBarConfig.value.enabled;
+  statusBarConfig.value = { ...statusBarConfig.value, enabled: next };
+  try {
+    await tracker.setStatusBarConfig(statusBarConfig.value);
+  } catch (err) {
+    statusBarConfig.value = { ...statusBarConfig.value, enabled: prev };
+    showAlert(
+      "warn",
+      t("settings.statusBarOff"),
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+async function onStatusBarItem(
+  e: Event,
+  key: "show_cpu" | "show_mem" | "show_net" | "float_enabled",
+) {
+  const next = (e.target as HTMLInputElement).checked;
+  const prev = statusBarConfig.value[key];
+  statusBarConfig.value = { ...statusBarConfig.value, [key]: next };
+  try {
+    await tracker.setStatusBarConfig(statusBarConfig.value);
+  } catch (err) {
+    statusBarConfig.value = { ...statusBarConfig.value, [key]: prev };
+    showAlert(
+      "warn",
+      t("settings.statusBarOff"),
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
 const exportPath = ref("");
 
 const pruneDialogOpen = ref(false);
@@ -824,6 +980,11 @@ onMounted(async () => {
   }
   try {
     await loadBackupConfig();
+  } catch {
+    /* 浏览器预览模式忽略 */
+  }
+  try {
+    await loadStatusBarConfig();
   } catch {
     /* 浏览器预览模式忽略 */
   }
@@ -1294,6 +1455,33 @@ async function onCheckUpdate() {
   margin-top: 16px;
   padding-top: 12px;
   border-top: 1px dashed rgba(0, 0, 0, 0.08);
+}
+.sub-zone.disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+/* v0.7.6：状态栏子项复选框（基础原生 checkbox + 大点击区） */
+.check-input {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: #3b82f6;
+}
+.check-input:disabled {
+  cursor: not-allowed;
+}
+/* v0.7.6：非 macOS 平台内存项禁用态（配合后端 MEMORY_SUPPORTED） */
+.op-muted {
+  opacity: 0.5;
+}
+.op-muted .check-input {
+  cursor: not-allowed;
+}
+.platform-note {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--text-dim, #86868b);
+  font-weight: 400;
 }
 .sub-zone h4 {
   display: flex;

@@ -937,32 +937,159 @@ fn semver_gt(latest: &str, current: &str) -> bool {
     false
 }
 
-#[tauri::command]
-pub fn get_system_metrics(state: tauri::State<'_, Arc<AppState>>) -> MetricsOut {
-    let enabled = *state.metrics_enabled.lock().unwrap_or_else(|e| e.into_inner());
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(ref sampler) = state.metrics_sampler {
-            let snap = sampler.sample_all();
-            return MetricsOut { supported: true, enabled, cpu_usage: snap.cpu_usage, memory_usage: snap.memory_usage, memory_used_bytes: snap.memory_used_bytes, memory_total_bytes: snap.memory_total_bytes, disk_usage: snap.disk_usage, disk_used_bytes: snap.disk_used_bytes, disk_total_bytes: snap.disk_total_bytes };
-        }
-        MetricsOut { supported: true, enabled, cpu_usage: 0.0, memory_usage: 0.0, memory_used_bytes: 0, memory_total_bytes: 0, disk_usage: 0.0, disk_used_bytes: 0, disk_total_bytes: 0 }
+// ===== v0.7.6：状态栏配置（取代 v0.7.5 的 metrics_enabled 总开关）=====
+// 4 个 key 落 settings 表：
+//   - status_bar_enabled   → 启用状态栏（替换旧 statusbar_metrics_enabled）
+//   - status_bar_show_cpu  → 是否显示 CPU 占用
+//   - status_bar_show_mem  → 是否显示内存占用
+//   - status_bar_show_net  → 是否显示网速
+// 默认值：enabled 默认**关闭**（首启用户需手动打开状态栏；见 load()，其从旧
+//   statusbar_metrics_enabled 迁移且缺省 false）；CPU/内存/网速三个子项默认全部开启。
+//   旧 statusbar_metrics_enabled 用户的选择会迁移到 status_bar_enabled。
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct StatusBarConfig {
+    pub enabled: bool,
+    pub show_cpu: bool,
+    pub show_mem: bool,
+    pub show_net: bool,
+    // v0.7.6（2026-09-10）：悬浮指标条独立开关（与托盘状态栏总开关互不依赖，
+    // 全屏时由采样线程自动隐藏，见 system_load/fullscreen.rs）
+    pub float_enabled: bool,
+}
+
+impl Default for StatusBarConfig {
+    fn default() -> Self {
+        // enabled=false 与 load() 首启行为一致（状态栏默认关闭，用户主动开启）
+        Self { enabled: false, show_cpu: true, show_mem: true, show_net: true, float_enabled: false }
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = &state;
-        MetricsOut { supported: false, enabled, cpu_usage: 0.0, memory_usage: 0.0, memory_used_bytes: 0, memory_total_bytes: 0, disk_usage: 0.0, disk_used_bytes: 0, disk_total_bytes: 0 }
+}
+
+impl StatusBarConfig {
+    pub fn load(db: &crate::db::AppDb) -> Self {
+        // 迁移：优先读新 key `status_bar_enabled`；缺失时回退旧 key `statusbar_metrics_enabled`
+        // （旧 v0.7.5 仅写旧 key）。两者都缺失 → 默认 false（状态栏默认关闭，用户主动开启）。
+        let enabled = db
+            .get_setting("status_bar_enabled")
+            .or_else(|| db.get_setting("statusbar_metrics_enabled"))
+            .map(|s| s == "true")
+            .unwrap_or(false);
+        let show_cpu = db
+            .get_setting("status_bar_show_cpu")
+            .map(|s| s == "true")
+            .unwrap_or(true);
+        let show_mem = db
+            .get_setting("status_bar_show_mem")
+            .map(|s| s == "true")
+            .unwrap_or(true);
+        let show_net = db
+            .get_setting("status_bar_show_net")
+            .map(|s| s == "true")
+            .unwrap_or(true);
+        let float_enabled = db
+            .get_setting("status_bar_float_enabled")
+            .map(|s| s == "true")
+            .unwrap_or(false);
+        Self { enabled, show_cpu, show_mem, show_net, float_enabled }
+    }
+
+    pub fn save(&self, db: &crate::db::AppDb) -> rusqlite::Result<()> {
+        let b = |v: bool| if v { "true" } else { "false" };
+        db.set_setting("statusbar_metrics_enabled", b(self.enabled))?;
+        db.set_setting("status_bar_enabled", b(self.enabled))?;
+        db.set_setting("status_bar_show_cpu", b(self.show_cpu))?;
+        db.set_setting("status_bar_show_mem", b(self.show_mem))?;
+        db.set_setting("status_bar_show_net", b(self.show_net))?;
+        db.set_setting("status_bar_float_enabled", b(self.float_enabled))?;
+        Ok(())
     }
 }
 
 #[tauri::command]
-pub fn set_system_metrics_enabled(state: tauri::State<'_, Arc<AppState>>, enabled: bool) -> Result<bool, String> {
-    *state.metrics_enabled.lock().unwrap_or_else(|e| e.into_inner()) = enabled;
-    state.db.set_setting("statusbar_metrics_enabled", if enabled { "true" } else { "false" }).map_err(|e| e.to_string())?;
+pub fn get_status_bar_config(state: tauri::State<'_, Arc<AppState>>) -> StatusBarConfig {
+    *state.status_bar_config.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[tauri::command]
+pub fn set_status_bar_config(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    config: StatusBarConfig,
+) -> Result<bool, String> {
+    // v0.7.6：记录旧可见态，判断是否需要显隐浮窗。
+    // 2026-09-10 总开关统管：浮窗可见 = enabled && float_enabled，
+    // 任一翻转导致可见态变化都要动窗口（含「关总开关 → 浮窗立即隐藏」）
+    let (old_enabled, old_float) = {
+        let c = state
+            .status_bar_config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        (c.enabled, c.float_enabled)
+    };
+    config.save(&state.db).map_err(|e| e.to_string())?;
+    *state.status_bar_config.lock().unwrap_or_else(|e| e.into_inner()) = config;
+    // v0.7.6：设置页改动 → 托盘菜单勾选态即时同步（防「页面改了、菜单还挂旧勾」）。
+    // 2026-09-10 精简：托盘菜单只剩悬浮指标条一个勾选项，sync 只刷它
+    if let Some(toggles) = app.try_state::<crate::TrayFloatToggle>() {
+        toggles.sync(&config);
+    }
+    // v0.7.6：浮窗可见态翻转 → 显隐浮窗（幂等创建；透明空窗 show 不可见，无白闪）
+    let old_shown = old_enabled && old_float;
+    let new_shown = config.enabled && config.float_enabled;
+    if old_shown != new_shown {
+        crate::float_window::set_float_visible(&app, new_shown)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn get_system_metrics(state: tauri::State<'_, Arc<AppState>>) -> MetricsOut {
+    let cfg = *state.status_bar_config.lock().unwrap_or_else(|e| e.into_inner());
+    let snap = state.metrics_sampler.sample_all();
+    MetricsOut {
+        supported: true,
+        enabled: cfg.enabled,
+        cpu_usage: snap.cpu_usage,
+        memory_usage: snap.memory_usage,
+        memory_used_bytes: snap.memory_used_bytes,
+        memory_total_bytes: snap.memory_total_bytes,
+        disk_usage: snap.disk_usage,
+        disk_used_bytes: snap.disk_used_bytes,
+        disk_total_bytes: snap.disk_total_bytes,
+        net_rx_bps: snap.net_rx_bps,
+        net_tx_bps: snap.net_tx_bps,
+    }
+}
+
+// ===== v0.7.5 兼容 IPC：set/get_system_metrics_enabled 改为操作新 config（enabled 字段）=====
+#[tauri::command]
+pub fn set_system_metrics_enabled(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    enabled: bool,
+) -> Result<bool, String> {
+    // 2026-09-10 总开关统管：enabled 翻转影响浮窗可见态（关总开关 → 开着的浮窗立即隐藏）
+    let (old_enabled, old_float) = {
+        let c = state.status_bar_config.lock().unwrap_or_else(|e| e.into_inner());
+        (c.enabled, c.float_enabled)
+    };
+    let mut cfg = *state.status_bar_config.lock().unwrap_or_else(|e| e.into_inner());
+    cfg.enabled = enabled;
+    cfg.save(&state.db).map_err(|e| e.to_string())?;
+    *state.status_bar_config.lock().unwrap_or_else(|e| e.into_inner()) = cfg;
+    // v0.7.6：旧兼容命令同样同步托盘菜单勾选态（2026-09-10 精简后仅悬浮指标条）
+    if let Some(toggles) = app.try_state::<crate::TrayFloatToggle>() {
+        toggles.sync(&cfg);
+    }
+    let old_shown = old_enabled && old_float;
+    let new_shown = cfg.enabled && cfg.float_enabled;
+    if old_shown != new_shown {
+        crate::float_window::set_float_visible(&app, new_shown).map_err(|e| e.to_string())?;
+    }
     Ok(true)
 }
 
 #[tauri::command]
 pub fn get_system_metrics_enabled(state: tauri::State<'_, Arc<AppState>>) -> bool {
-    *state.metrics_enabled.lock().unwrap_or_else(|e| e.into_inner())
+    state.status_bar_config.lock().unwrap_or_else(|e| e.into_inner()).enabled
 }

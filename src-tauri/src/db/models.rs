@@ -206,4 +206,7 @@ pub struct MetricsOut {
     pub disk_usage: f32,
     pub disk_used_bytes: u64,
     pub disk_total_bytes: u64,
+    // v0.7.6 新增：网络速率
+    pub net_rx_bps: f64,
+    pub net_tx_bps: f64,
 }

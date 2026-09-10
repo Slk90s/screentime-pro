@@ -22,6 +22,7 @@ import type {
   RuleOut,
   SessionOut,
   SettingsOut,
+  StatusBarConfig,
   TrendsOut,
   UpdateInfo,
   Webview2Status,
@@ -124,9 +125,13 @@ export const tracker = {
   setAutostart: (enabled: boolean) => call<boolean>("set_autostart", { enabled }),
   isAutostart: () => call<boolean>("is_autostart"),
   getAutostartPref: () => call<boolean | null>("get_autostart_pref"),
-  // ===== v0.7.5：状态栏系统指标 =====
+  // ===== v0.7.5：状态栏系统指标（v0.7.6 起扩展网络字段，向后兼容）=====
   getSystemMetrics: () => call<MetricsOut>("get_system_metrics"),
   setSystemMetricsEnabled: (enabled: boolean) =>
     call<boolean>("set_system_metrics_enabled", { enabled }),
   getSystemMetricsEnabled: () => call<boolean>("get_system_metrics_enabled"),
+  // ===== v0.7.6：状态栏配置（总开关 + 3 个子项）=====
+  getStatusBarConfig: () => call<StatusBarConfig>("get_status_bar_config"),
+  setStatusBarConfig: (config: StatusBarConfig) =>
+    call<boolean>("set_status_bar_config", { config }),
 };

@@ -13,6 +13,7 @@
     - 2026-07-24 @v0.6.1-beta.1: 修复 - 顶部实时栏 IPC 字段名 bug（camelCase → snake_case，与 Rust 返回值对齐）
     - 2026-07-25 @v0.6.2-beta.17: 新增 - 桌宠右键菜单独立 webview 分支
     - 2026-08-05 @v0.6.2-beta.26: 修复 - 浏览器预览时 getCurrentWebviewWindow() 抛错导致白屏
+    - 2026-09-10 @Unreleased: 新增 - 悬浮指标条独立 webview 分支（FloatBar，label='float'）
 -->
 <template>
   <!-- v0.6.0-beta 桌宠窗口分支：独立 webview 渲染 PetWindow（透明/置顶/无主 UI） -->
@@ -20,6 +21,8 @@
   <!-- v0.6.2-beta.17 桌宠菜单独立 webview 分支：在独立 Tauri 窗口内渲染菜单，
        position:fixed 相对自己 webview 视口（≈ 全桌面），菜单可自由拖到任意位置 -->
   <PetMenuWindow v-else-if="isPetMenuWindow" />
+  <!-- v0.7.6 悬浮指标条独立 webview 分支：透明置顶指标条（label='float'） -->
+  <FloatBar v-else-if="isFloatWindow" />
   <div v-else class="app">
     <!-- 顶部栏：品牌 + 实时记录指示（启动即自动追踪，无需手动开关） -->
     <header class="topbar">
@@ -86,11 +89,15 @@ const currentLabel = isTauri ? getCurrentWebviewWindow().label : "";
 const isPetWindow = currentLabel === "pet";
 // v0.6.2-beta.17 桌宠菜单窗口检测：label 是 'pet-menu' 时只渲染 PetMenuWindow
 const isPetMenuWindow = currentLabel === "pet-menu";
+// v0.7.6 悬浮指标条窗口检测：label 是 'float' 时只渲染 FloatBar
+const isFloatWindow = currentLabel === "float";
 
 // 仅在桌宠窗口引入 PetWindow 组件，避免主窗口打包
 import PetWindow from "./pet/PetWindow.vue";
 // 仅在菜单窗口引入 PetMenuWindow 组件，避免桌宠窗口和主窗口打包
 import PetMenuWindow from "./pet/PetMenuWindow.vue";
+// v0.7.6：悬浮指标条分支
+import FloatBar from "./float/FloatBar.vue";
 import Dashboard from "./views/Dashboard.vue";
 import { tracker } from "./api/tracker";
 import { formatDuration } from "./utils/format";

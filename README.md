@@ -5,7 +5,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](https://github.com/)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-0.7.5-blue)](./release)
+[![Version](https://img.shields.io/badge/version-0.7.6-blue)](./release)
 
 ---
 
@@ -39,6 +39,7 @@
 
 | 版本 | 发布时间 | 状态 | 关键说明 |
 |------|----------|------|----------|
+| **v0.7.6** | 2026-09-10 | ✨ **功能版** | **状态栏指标体系跨平台落地**：① 悬浮指标条——桌面常驻可拖拽透明指标条，1Hz 实时显示 CPU / 网速（macOS 另含内存），全屏自动隐藏、位置跨启动记忆；② Windows / Linux 托盘真正显示指标——缩写文字画进托盘图标（此前 `set_title` 在 Windows 上仅悬停可见，是"状态栏看不见"的根因），悬停查看完整数据，关闭还原品牌图；③ 托盘右键快捷菜单——悬浮指标条一键开关（自动联动总开关），左键单击唤出主窗口；④ 设置页「状态栏」卡片——总开关统管托盘与浮窗，CPU / 网速 / 内存子项勾选，托盘 ↔ 设置页双向同步；⑤ 底层新增 `float_window` / `fullscreen`（全屏检测 FFI）/ `tray_icon`（5×7 位图字体）/ `network`（Win `GetIfTable2`、Linux `/proc/net/dev` 跨平台网速）模块与 `get/set_status_bar_config` IPC |
 | **v0.7.5** | 2026-08-23 | 🚀 **正式版** | **macOS 状态栏系统指标监测（新增）**：可选在菜单栏实时显示 CPU / 内存 / 磁盘占用率。复用 `system_load` 基础设施新增统一 `MetricsSampler`——CPU 走已有 `kern.cp_time` 差分采样，内存用 `host_statistics64 + hw.memsize`（口径对齐活动监视器：`available = free + inactive + speculative`），磁盘用 `statfs("/")`（对齐 Finder 读取信息），均为 macOS 原生 API、零 webview 开销；采样线程 1s 一次、磁盘 30s 缓存，变化 < 1% 不更新托盘 title（减少 NSStatusItem 重绘），开关关闭即恢复纯图标；设置页新增开关（仅 macOS 显示）+ `get/set_system_metrics_enabled`、`get_system_metrics` IPC 命令。Windows/Linux 默认隐藏该功能 |
 | **v0.7.3** | 2026-08-13 | 🚀 **正式版** | **macOS 日志/导出修复 + 桌宠开关同步 + macOS 拖拽跟手 + DMG 门禁脚本正式生效** |
 | **v0.7.2** | 2026-08-09 | 旧版 | **本地自动备份 + macOS 门禁修复 + 设备ID稳定化** |
