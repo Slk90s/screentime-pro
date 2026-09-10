@@ -23,6 +23,11 @@
 //! - v0.7.6 拆掉文件级 cfg，FFI 块与 macOS-only 内部函数加 cfg 门
 //! - 非 macOS 平台上，memory/disk 字段恒为 0；CPU 与网络三平台一致工作
 //! - 托盘 title 根据 StatusBarConfig 动态拼接（见 tray_title_with）
+//!
+//! ⚠️ v0.7.6 hotfix（2026-09-10，macOS CI E0599）：文件尾部的 read_page_size /
+//!    read_memory_total / read_vm_stats / read_disk_usage 是【模块级自由函数】，
+//!    impl 内调用禁止加 Self:: 前缀。该错误仅 macOS 编译路径可见（其余平台被
+//!    cfg 编译掉），本地 cargo check 无法拦截——改 macOS-only 代码后必须看 CI。
 
 use crate::system_load::CpuMonitor;
 use crate::system_load::network::NetworkSampler;
@@ -197,7 +202,9 @@ impl MetricsSampler {
                 (inner.page_size, inner.memory_total)
             }
         };
-        let stats = unsafe { Self::read_vm_stats() };
+        // v0.7.6 hotfix（macOS CI E0599）：read_vm_stats 是模块级自由函数（见文件尾部），
+        // 不在 impl 内，禁用 Self:: 前缀——Windows/Linux 路径 cfg 掉该调用，本地 check 测不出
+        let stats = unsafe { read_vm_stats() };
         if let Some(st) = stats {
             let avail_pages = st.free_count + st.inactive_count + st.speculative_count;
             let avail_bytes = avail_pages.saturating_mul(page_size);
@@ -235,7 +242,7 @@ impl MetricsSampler {
                     }
                 }
             }
-            let (used, total) = unsafe { Self::read_disk_usage() };
+            let (used, total) = unsafe { read_disk_usage() };
             if used > 0 && total > 0 {
                 if let Ok(mut inner) = self.inner.lock() {
                     inner.last_disk = Some((used, total));
@@ -257,7 +264,7 @@ impl MetricsSampler {
     #[cfg(target_os = "macos")]
     fn init_memory_constants(&self) {
         let (page_size, memory_total) = unsafe {
-            (Self::read_page_size(), Self::read_memory_total())
+            (read_page_size(), read_memory_total())
         };
         if let Ok(mut inner) = self.inner.lock() {
             inner.page_size = page_size.max(4096);
@@ -319,6 +326,10 @@ fn format_bps(bps: f64) -> String {
 
 // ============================================================
 // macOS 专属 FFI（v0.7.5 原有代码迁移至 impl 外部，加 cfg 门）
+// ⚠️ v0.7.6 hotfix 教训：这里是【模块级自由函数】不是关联函数——
+//    impl 内调用必须直接写 read_vm_stats(...)，禁止 Self::read_vm_stats(...)；
+//    该错误在 Windows/Linux 被 cfg 编译掉，本地 cargo check 无法发现，
+//    只有 macOS CI 会以 E0599 暴露（v0.7.5 / v0.7.6 首次打 tag 均因此失败）。
 // ============================================================
 
 #[cfg(target_os = "macos")]
