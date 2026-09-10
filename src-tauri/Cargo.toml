@@ -73,6 +73,9 @@ windows = { version = "0.58", features = [
   # v0.7.6：网络采样（GetIfTable2 + MIB_IF_TABLE2 需要 Ndis 常量 IF_TYPE_*/MIB_IF_OPER_STATUS_*）
   "Win32_NetworkManagement_IpHelper",
   "Win32_NetworkManagement_Ndis",
+  # v0.7.7：磁盘采样（GetDiskFreeSpaceExW）；内存的 GlobalMemoryStatusEx 属
+  # Win32_System_SystemInformation，该特性上方已启用
+  "Win32_Storage_FileSystem",
 ] }
 # 跨平台调用系统默认浏览器（用于打开 WebView2 下载页）
 open = "5"

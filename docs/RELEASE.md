@@ -122,7 +122,7 @@ grep -n 'badge/version' README.md
 
 ```bash
 # ① 改版本号（唯一真实来源）
-#    src-tauri/tauri.conf.json → version: "0.7.6"
+#    src-tauri/tauri.conf.json → version: "0.7.7"
 #    同步 package.json / README 徽章 / README 版本历史表 / ARCHITECTURE 头部
 
 # ② 改写 build.yml 三处 releaseBody（§3.1，最容易漏）
@@ -133,12 +133,12 @@ npm run tauri build
 
 # ④ 提交
 git add -A
-git commit -m "release: v0.7.6"
+git commit -m "release: v0.7.7"
 
 # ⑤ 打 tag 并推送（这一步会触发 CI 三平台构建）
-git tag v0.7.6
+git tag v0.7.7
 git push origin main
-git push origin v0.7.6
+git push origin v0.7.7
 
 # ⑥ 观察 CI：https://github.com/Slk90s/screentime-pro/actions
 #    三平台全绿后，核对 Release 页面的 Notes 与产物

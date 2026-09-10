@@ -803,13 +803,16 @@ pub fn check_webview2(app: tauri::AppHandle) -> Webview2Status {
 
 #[cfg(target_os = "windows")]
 fn read_webview2_version() -> Option<String> {
-    use std::process::Command;
     let keys = [
         r"HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\ClientState\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
         r"HKLM\SOFTWARE\Microsoft\EdgeUpdate\ClientState\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
     ];
     for key in keys {
-        let output = Command::new("reg").args(["query", key, "/v", "pv"]).output().ok()?;
+        // v0.7.7：全部走 proc::hidden——否则首次启动会连续闪 3 个 reg 控制台黑框
+        let output = crate::proc::hidden("reg")
+            .args(["query", key, "/v", "pv"])
+            .output()
+            .ok()?;
         if !output.status.success() { continue; }
         let text = String::from_utf8_lossy(&output.stdout);
         for line in text.lines() {
@@ -818,7 +821,10 @@ fn read_webview2_version() -> Option<String> {
             }
         }
     }
-    let output = Command::new("reg").args(["query", r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Edge\BLBeacon", "/v", "version"]).output().ok()?;
+    let output = crate::proc::hidden("reg")
+        .args(["query", r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Edge\BLBeacon", "/v", "version"])
+        .output()
+        .ok()?;
     if output.status.success() {
         let text = String::from_utf8_lossy(&output.stdout);
         for line in text.lines() {
@@ -951,6 +957,9 @@ pub struct StatusBarConfig {
     pub enabled: bool,
     pub show_cpu: bool,
     pub show_mem: bool,
+    // v0.7.7（2026-09-10）：磁盘占用开关。此前磁盘采样只有 macOS 有，且没有任何开关，
+    // 界面上完全不可见；补齐三平台采样后新增本项（默认关，避免浮窗默认过长）
+    pub show_disk: bool,
     pub show_net: bool,
     // v0.7.6（2026-09-10）：悬浮指标条独立开关（与托盘状态栏总开关互不依赖，
     // 全屏时由采样线程自动隐藏，见 system_load/fullscreen.rs）
@@ -960,7 +969,14 @@ pub struct StatusBarConfig {
 impl Default for StatusBarConfig {
     fn default() -> Self {
         // enabled=false 与 load() 首启行为一致（状态栏默认关闭，用户主动开启）
-        Self { enabled: false, show_cpu: true, show_mem: true, show_net: true, float_enabled: false }
+        Self {
+            enabled: false,
+            show_cpu: true,
+            show_mem: true,
+            show_disk: false,
+            show_net: true,
+            float_enabled: false,
+        }
     }
 }
 
@@ -981,6 +997,11 @@ impl StatusBarConfig {
             .get_setting("status_bar_show_mem")
             .map(|s| s == "true")
             .unwrap_or(true);
+        // v0.7.7 新增：旧版本 DB 无此 key → 默认 false（磁盘默认不显示）
+        let show_disk = db
+            .get_setting("status_bar_show_disk")
+            .map(|s| s == "true")
+            .unwrap_or(false);
         let show_net = db
             .get_setting("status_bar_show_net")
             .map(|s| s == "true")
@@ -989,7 +1010,14 @@ impl StatusBarConfig {
             .get_setting("status_bar_float_enabled")
             .map(|s| s == "true")
             .unwrap_or(false);
-        Self { enabled, show_cpu, show_mem, show_net, float_enabled }
+        Self {
+            enabled,
+            show_cpu,
+            show_mem,
+            show_disk,
+            show_net,
+            float_enabled,
+        }
     }
 
     pub fn save(&self, db: &crate::db::AppDb) -> rusqlite::Result<()> {
@@ -998,6 +1026,7 @@ impl StatusBarConfig {
         db.set_setting("status_bar_enabled", b(self.enabled))?;
         db.set_setting("status_bar_show_cpu", b(self.show_cpu))?;
         db.set_setting("status_bar_show_mem", b(self.show_mem))?;
+        db.set_setting("status_bar_show_disk", b(self.show_disk))?;
         db.set_setting("status_bar_show_net", b(self.show_net))?;
         db.set_setting("status_bar_float_enabled", b(self.float_enabled))?;
         Ok(())

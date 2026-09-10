@@ -15,6 +15,12 @@ src-tauri/Cargo.lock
 # Release binaries (发布安装包通过 GitHub Releases 分发，不入库)
 release/
 
+# 本地发布下载暂存（从 GitHub Releases 拉安装包核对 / 转传 Gitee 时用，勿入库）
+# - 2026-09-10 @v0.7.7: 新增。一次 Gitee 发版在此目录留下 6 个安装包 + 8 个 AppImage 分片
+#   共 245MB 且此前未被忽略——`git add -A` 会把整包提交进仓库（GitHub 单文件 100MB 上限
+#   会直接拒绝推送）。新增同类临时目录时务必同步补规则。
+.tmp-release/
+
 # 本地构建产物 / AI 生图临时目录（不入库，CI 重新产出）
 output/
 generated-images/

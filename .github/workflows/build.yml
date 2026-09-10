@@ -32,12 +32,14 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v0.7.6 更新（状态栏指标体系）
-            - 📊 悬浮指标条（新增）：桌面常驻可拖拽透明指标条，1Hz 实时显示 CPU / 网速（macOS 另含内存占用），全屏自动隐藏，位置跨启动记忆
-            - 🔧 Windows / Linux 托盘真正显示指标：CPU / 网速缩写文字画进托盘图标，悬停查看完整数据，关闭时还原品牌图标（此前 set_title 在 Windows 上仅悬停可见）
-            - 🖱 托盘右键快捷菜单：悬浮指标条一键开关（自动联动总开关）；左键单击直接唤出主窗口
-            - 🎛 设置页「状态栏」卡片重构：总开关统管托盘与浮窗，CPU / 网速 / 内存子项自由勾选，托盘 ↔ 设置页双向实时同步
-            - 🌐 中英双语（zh-CN / en-US）同步
+            ### 屏幕时间管家 ScreenTime Pro — v0.7.7 更新（稳定性修复）
+            - 🩹 macOS 闪退修复（重要）：状态栏 / 悬浮指标条开启后 macOS 启动即崩。根因是磁盘指标采样用 statfs(2) 时输出缓冲仅 256 字节，而 Darwin struct statfs 实为 2168 字节且该 API 无长度参数，内核写满即造成栈越界写。现改用真实布局的 repr(C) 结构体接收，并加 size_of 编译期断言防回归
+            - 🩹 Windows 首次启动闪黑框修复：查询 WebView2 / MachineGuid 的 reg 子进程改为无窗口方式创建（CREATE_NO_WINDOW），不再连续闪过命令框
+            - 📈 Windows / Linux 补齐内存与磁盘指标：Windows 用 GlobalMemoryStatusEx + GetDiskFreeSpaceExW，Linux 用 /proc/meminfo + statvfs。此前这两项仅在 macOS 可用，Win / Linux 一直显示为空
+            - 🔢 悬浮指标条数值修正：CPU / 内存百分比此前漏乘 100（如 77% 显示成 1%）
+            - 📏 悬浮指标条宽度贴合内容：不再右侧大片空白；数值定宽右对齐，位数变化时不再抖动
+            - ➕ 设置页新增「显示磁盘占用」开关（默认关闭）
+            - 🛡 崩溃可诊断：新增 panic 兜底钩子，闪退会在应用日志留下 PANIC 行，不再无现场
             完整版本历史见仓库 README。
           releaseDraft: false
           prerelease: false
@@ -77,12 +79,14 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v0.7.6 更新（状态栏指标体系）
-            - 📊 悬浮指标条（新增）：桌面常驻可拖拽透明指标条，1Hz 实时显示 CPU / 网速（macOS 另含内存占用），全屏自动隐藏，位置跨启动记忆
-            - 🔧 Windows / Linux 托盘真正显示指标：CPU / 网速缩写文字画进托盘图标，悬停查看完整数据，关闭时还原品牌图标（此前 set_title 在 Windows 上仅悬停可见）
-            - 🖱 托盘右键快捷菜单：悬浮指标条一键开关（自动联动总开关）；左键单击直接唤出主窗口
-            - 🎛 设置页「状态栏」卡片重构：总开关统管托盘与浮窗，CPU / 网速 / 内存子项自由勾选，托盘 ↔ 设置页双向实时同步
-            - 🌐 中英双语（zh-CN / en-US）同步
+            ### 屏幕时间管家 ScreenTime Pro — v0.7.7 更新（稳定性修复）
+            - 🩹 macOS 闪退修复（重要）：状态栏 / 悬浮指标条开启后 macOS 启动即崩。根因是磁盘指标采样用 statfs(2) 时输出缓冲仅 256 字节，而 Darwin struct statfs 实为 2168 字节且该 API 无长度参数，内核写满即造成栈越界写。现改用真实布局的 repr(C) 结构体接收，并加 size_of 编译期断言防回归
+            - 🩹 Windows 首次启动闪黑框修复：查询 WebView2 / MachineGuid 的 reg 子进程改为无窗口方式创建（CREATE_NO_WINDOW），不再连续闪过命令框
+            - 📈 Windows / Linux 补齐内存与磁盘指标：Windows 用 GlobalMemoryStatusEx + GetDiskFreeSpaceExW，Linux 用 /proc/meminfo + statvfs。此前这两项仅在 macOS 可用，Win / Linux 一直显示为空
+            - 🔢 悬浮指标条数值修正：CPU / 内存百分比此前漏乘 100（如 77% 显示成 1%）
+            - 📏 悬浮指标条宽度贴合内容：不再右侧大片空白；数值定宽右对齐，位数变化时不再抖动
+            - ➕ 设置页新增「显示磁盘占用」开关（默认关闭）
+            - 🛡 崩溃可诊断：新增 panic 兜底钩子，闪退会在应用日志留下 PANIC 行，不再无现场
             完整版本历史见仓库 README。
           releaseDraft: false
           prerelease: false
@@ -117,12 +121,14 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v0.7.6 更新（状态栏指标体系）
-            - 📊 悬浮指标条（新增）：桌面常驻可拖拽透明指标条，1Hz 实时显示 CPU / 网速（macOS 另含内存占用），全屏自动隐藏，位置跨启动记忆
-            - 🔧 Windows / Linux 托盘真正显示指标：CPU / 网速缩写文字画进托盘图标，悬停查看完整数据，关闭时还原品牌图标（此前 set_title 在 Windows 上仅悬停可见）
-            - 🖱 托盘右键快捷菜单：悬浮指标条一键开关（自动联动总开关）；左键单击直接唤出主窗口
-            - 🎛 设置页「状态栏」卡片重构：总开关统管托盘与浮窗，CPU / 网速 / 内存子项自由勾选，托盘 ↔ 设置页双向实时同步
-            - 🌐 中英双语（zh-CN / en-US）同步
+            ### 屏幕时间管家 ScreenTime Pro — v0.7.7 更新（稳定性修复）
+            - 🩹 macOS 闪退修复（重要）：状态栏 / 悬浮指标条开启后 macOS 启动即崩。根因是磁盘指标采样用 statfs(2) 时输出缓冲仅 256 字节，而 Darwin struct statfs 实为 2168 字节且该 API 无长度参数，内核写满即造成栈越界写。现改用真实布局的 repr(C) 结构体接收，并加 size_of 编译期断言防回归
+            - 🩹 Windows 首次启动闪黑框修复：查询 WebView2 / MachineGuid 的 reg 子进程改为无窗口方式创建（CREATE_NO_WINDOW），不再连续闪过命令框
+            - 📈 Windows / Linux 补齐内存与磁盘指标：Windows 用 GlobalMemoryStatusEx + GetDiskFreeSpaceExW，Linux 用 /proc/meminfo + statvfs。此前这两项仅在 macOS 可用，Win / Linux 一直显示为空
+            - 🔢 悬浮指标条数值修正：CPU / 内存百分比此前漏乘 100（如 77% 显示成 1%）
+            - 📏 悬浮指标条宽度贴合内容：不再右侧大片空白；数值定宽右对齐，位数变化时不再抖动
+            - ➕ 设置页新增「显示磁盘占用」开关（默认关闭）
+            - 🛡 崩溃可诊断：新增 panic 兜底钩子，闪退会在应用日志留下 PANIC 行，不再无现场
             完整版本历史见仓库 README。
           releaseDraft: false
           prerelease: false
@@ -171,8 +177,8 @@ jobs:
           3. 脚本会自动执行 xattr -dr com.apple.quarantine，弹窗提示成功后即可正常打开 App。
 
           【解决办法二（手动命令）】
-          打开「终端」，粘贴并执行：
-            xattr -d com.apple.quarantine "/Applications/ScreenTime Pro.app"
+          打开「终端」，粘贴并执行（-r 递归，确保 App 内部文件也一并清除隔离属性）：
+            xattr -dr com.apple.quarantine "/Applications/ScreenTime Pro.app"
           若提示「No such xattr」，说明已无隔离属性，直接打开即可。
 
           处理一次之后，今后打开 App 都不再被拦截。

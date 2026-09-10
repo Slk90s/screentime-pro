@@ -158,17 +158,25 @@
               @change="onStatusBarItem($event, 'show_cpu')"
             />
           </div>
-          <div class="form-row row between" :class="{ 'op-muted': !isMac }">
-            <label>
-              {{ t("settings.statusBarShowMem") }}
-              <span v-if="!isMac" class="platform-note">{{ t("settings.memMacOnly") }}</span>
-            </label>
+          <div class="form-row row between">
+            <label>{{ t("settings.statusBarShowMem") }}</label>
             <input
               type="checkbox"
               class="check-input"
               :checked="statusBarConfig.show_mem"
-              :disabled="!statusBarConfig.enabled || !isMac"
+              :disabled="!statusBarConfig.enabled"
               @change="onStatusBarItem($event, 'show_mem')"
+            />
+          </div>
+          <!-- v0.7.7（2026-09-10）：磁盘占用（取系统盘；三平台均已支持采样，默认关） -->
+          <div class="form-row row between">
+            <label>{{ t("settings.statusBarShowDisk") }}</label>
+            <input
+              type="checkbox"
+              class="check-input"
+              :checked="statusBarConfig.show_disk"
+              :disabled="!statusBarConfig.enabled"
+              @change="onStatusBarItem($event, 'show_disk')"
             />
           </div>
           <div class="form-row row between">
@@ -840,13 +848,16 @@ function onAlertConfirm() {
 // ============ 导出/按设备清理 ============
 const exportDialogOpen = ref(false);
 
-// ============ v0.7.6：状态栏配置（总开关 + 3 子项）============
-// isMac：内存指标仅 macOS 支持；非 macOS 上禁用「显示内存占用」子项（与后端 MEMORY_SUPPORTED 对齐）
+// ============ v0.7.6：状态栏配置（总开关 + 子项）============
+// v0.7.7（2026-09-10）：内存与磁盘采样已补齐三平台，不再按平台禁用子项
+//（旧版用于禁用内存项的 isMac 判据与后端 MEMORY_SUPPORTED 编译期常量一并作废）。
+// isMac 仍保留：Windows / Linux 托盘图标空间有限，需要给出「显示缩写数字」的差异化说明。
 const isMac = /Mac|iPhone|iPod|iPad/i.test(navigator.platform || navigator.userAgent || "");
 const statusBarConfig = ref<StatusBarConfig>({
   enabled: false,
   show_cpu: true,
   show_mem: true,
+  show_disk: false,
   show_net: true,
   float_enabled: false,
 });
@@ -875,7 +886,7 @@ async function onStatusBarEnabled(e: Event) {
 }
 async function onStatusBarItem(
   e: Event,
-  key: "show_cpu" | "show_mem" | "show_net" | "float_enabled",
+  key: "show_cpu" | "show_mem" | "show_disk" | "show_net" | "float_enabled",
 ) {
   const next = (e.target as HTMLInputElement).checked;
   const prev = statusBarConfig.value[key];

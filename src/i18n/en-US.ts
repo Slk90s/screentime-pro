@@ -130,21 +130,25 @@ export default {
     autostart: "Launch at startup",
     autostartOn: "Enabled",
     autostartOff: "Disabled",
-    // v0.7.6: Status bar config (master + 3 sub-toggles; replaces v0.7.5 metricsTitle)
+    // v0.7.6: Status bar config (master + sub-toggles; replaces v0.7.5 metricsTitle)
     statusBarTitle: "Status bar",
     statusBarDesc: "Show system metrics in the macOS menu bar / Windows & Linux system tray or on a desktop float bar at 1Hz",
     statusBarEnabled: "Enable status bar",
     statusBarShowCpu: "Show CPU usage",
     statusBarShowMem: "Show memory usage",
+    // v0.7.7 (2026-09-10): disk usage (system volume)
+    statusBarShowDisk: "Show disk usage",
     statusBarShowNet: "Show network speed",
     statusBarOn: "Enabled",
     statusBarOff: "Disabled",
-    statusBarHint: "Real-time system metrics. Network & CPU work on all platforms; memory usage is macOS-only.",
+    // v0.7.7: memory & disk are now supported on all three platforms
+    statusBarHint: "Real-time system metrics. CPU / memory / disk / network are supported on all platforms (disk = system volume).",
+    // Deprecated since v0.7.7 (memory now works everywhere); kept for old caches
     memMacOnly: "macOS only",
     // v0.7.6 fix: Windows / Linux tray icons are only 16-24px so text is abbreviated; hover for full
-    statusBarWinNote: "On Windows / Linux the tray icon shows abbreviated numbers (CPU + dominant net direction) due to space constraints. Hover the icon for the full metrics. When the float metrics bar is enabled, the tray icon reverts to the brand icon and metrics are shown in the float bar only (both are governed by the master switch).",
+    statusBarWinNote: "On Windows / Linux the tray icon shows abbreviated numbers (CPU + dominant net direction) due to space constraints. Hover the icon for the full metrics. To also see memory / disk, enable the floating metrics bar; the tray icon then reverts to the brand icon and metrics are shown in the float bar only (both are governed by the master switch).",
     statusBarFloat: "Floating metrics bar",
-    statusBarFloatHint: "A draggable transparent metrics bar on your desktop showing live CPU / network. Auto-hides in fullscreen. Governed by the master switch; when enabled, the tray icon shows the brand icon only.",
+    statusBarFloatHint: "A draggable transparent metrics bar on your desktop showing the metrics you enable (CPU / memory / disk / network). It auto-sizes to its content and hides in fullscreen. Governed by the master switch; when enabled, the tray icon shows the brand icon only.",
     languageTitle: "Language",
     languageDesc: "Choose interface language, persists after restart",
     generalTitle: "General",

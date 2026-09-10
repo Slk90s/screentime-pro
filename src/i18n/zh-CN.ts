@@ -128,21 +128,25 @@ export default {
     autostart: "开机自启",
     autostartOn: "已开启",
     autostartOff: "已关闭",
-    // v0.7.6：状态栏配置（总开关 + 3 个子项；取代 v0.7.5 单字段 metricsTitle）
+    // v0.7.6：状态栏配置（总开关 + 子项；取代 v0.7.5 单字段 metricsTitle）
     statusBarTitle: "状态栏",
     statusBarDesc: "在 macOS 菜单栏 / Windows 与 Linux 托盘或桌面悬浮窗实时显示系统指标，1Hz 采样",
     statusBarEnabled: "启用状态栏",
     statusBarShowCpu: "显示 CPU 占用",
     statusBarShowMem: "显示内存占用",
+    // v0.7.7（2026-09-10）：磁盘占用（取系统盘）。此前磁盘仅有 macOS 采样且无开关
+    statusBarShowDisk: "显示磁盘占用",
     statusBarShowNet: "显示网速",
     statusBarOn: "已开启",
     statusBarOff: "已关闭",
-    statusBarHint: "实时显示系统指标。网速与 CPU 占用全平台支持；内存占用仅在 macOS 上可显示。",
+    // v0.7.7：内存/磁盘已补齐三平台，原「仅 macOS 支持」说明作废
+    statusBarHint: "实时显示系统指标，CPU / 内存 / 磁盘 / 网速四项均为全平台支持（磁盘取系统盘）。",
+    // 已废弃（v0.7.7 起内存全平台可用）；保留以兼容旧版本缓存，勿删
     memMacOnly: "仅 macOS 支持",
     // v0.7.6 修复：Windows / Linux 托盘因图标仅 16-24px，文字大幅缩写（悬停查看完整）
-    statusBarWinNote: "Windows / Linux 上托盘图标会因空间限制显示缩写数字（CPU + 网速较大方向），悬停图标可查看完整指标。开启「悬浮指标条」后，托盘图标只显示品牌图标，指标仅在浮窗中展示（两者均受「启用状态栏」总开关控制）。",
+    statusBarWinNote: "Windows / Linux 上托盘图标会因空间限制只显示缩写数字（CPU + 网速较大方向），悬停图标可查看完整指标。需要同时看内存 / 磁盘时，建议开启「悬浮指标条」。开启后托盘图标只显示品牌图标，指标仅在浮窗中展示（两者均受「启用状态栏」总开关控制）。",
     statusBarFloat: "悬浮指标条",
-    statusBarFloatHint: "桌面上常驻一块可拖拽的透明指标条，实时显示 CPU / 网速，全屏时自动隐藏；受「启用状态栏」总开关控制，开启后托盘只显示品牌图标。",
+    statusBarFloatHint: "桌面上常驻一块可拖拽的透明指标条，实时显示已勾选的指标（CPU / 内存 / 磁盘 / 网速），条宽随内容自动收缩，全屏时自动隐藏；受「启用状态栏」总开关控制，开启后托盘只显示品牌图标。",
     languageTitle: "语言",
     languageDesc: "选择界面显示语言，重启后保持",
     generalTitle: "通用",

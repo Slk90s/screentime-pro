@@ -16,8 +16,9 @@ mod logging;
 mod tracker;
 mod pet;
 mod system_load;
+// v0.7.7：隐藏控制台窗口地创建子进程（修复 Windows 首次启动 reg 命令框闪烁）
+mod proc;
 
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use classifier::Rule;
@@ -54,10 +55,11 @@ pub struct AppState {
 /// 用途：设置页 `set_status_bar_config` / `set_system_metrics_enabled` 保存成功后
 /// 调用 `sync()` 同步菜单勾选态，防止「设置页改了、托盘菜单还挂旧勾」的显示不一致。
 /// CheckMenuItem 句柄是廉价 clone（内部同一 Arc），与菜单事件闭包里持有的 clone 互不冲突。
-/// 内存子项仅 macOS 菜单存在，非 mac 编译期剔除（与 MEMORY_SUPPORTED 约定一致）。
 /// 托盘菜单唯一的快捷开关句柄（悬浮指标条）。
 /// v0.7.6 初版曾含 状态栏/CPU/网速/内存 四项勾选；2026-09-10 按 Ryan 反馈精简：
 /// 指标勾选只保留在设置页「状态栏」卡片，托盘右键菜单仅留浮窗开关，避免重复冗长。
+/// v0.7.7：旧的「内存子项仅 macOS 菜单存在」注释作废——内存/磁盘已三平台齐备，
+/// 且托盘菜单本身不再承载任何指标勾选。
 pub struct TrayFloatToggle {
     pub float: tauri::menu::CheckMenuItem<tauri::Wry>,
 }
@@ -103,7 +105,7 @@ fn hardware_device_id() -> String {
 
 #[cfg(target_os = "macos")]
 fn mac_hardware_uuid() -> Option<String> {
-    let out = Command::new("ioreg")
+    let out = crate::proc::hidden("ioreg")
         .args(["-rd1", "-c", "IOPlatformExpertDevice"])
         .output()
         .ok()?;
@@ -126,7 +128,8 @@ fn mac_hardware_uuid() -> Option<String> {
 
 #[cfg(target_os = "windows")]
 fn windows_machine_guid() -> Option<String> {
-    let out = Command::new("reg")
+    // v0.7.7：必须走 proc::hidden——GUI 进程直接 spawn reg.exe 会闪一个控制台黑框
+    let out = crate::proc::hidden("reg")
         .args(["query", "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid"])
         .output()
         .ok()?;
@@ -179,6 +182,24 @@ pub fn run() {
                 debug = cfg!(debug_assertions),
                 "ScreenTime Pro 启动"
             );
+            // v0.7.7（2026-09-10）：panic 兜底钩子。
+            // 背景：release 是 GUI 进程（Windows 无控制台 / macOS .app 双击无 stderr 终端），
+            // 一旦 panic，用户只看到「闪退」而拿不到任何信息（macOS 反馈的现场即如此）。
+            // 这里把 panic 内容写进日志文件，让闪退可被诊断：
+            //   macOS   ~/Library/Logs/com.screentime.pro/app.YYYY-MM-DD.log
+            //   Windows %LOCALAPPDATA%\com.screentime.pro\logs\app.YYYY-MM-DD.log
+            // 必须装在 logging::init 之后（否则 tracing 无 subscriber，日志会被丢弃）。
+            {
+                let default_hook = std::panic::take_hook();
+                std::panic::set_hook(Box::new(move |info| {
+                    let location = info
+                        .location()
+                        .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+                        .unwrap_or_else(|| "<unknown>".to_string());
+                    tracing::error!(target: "panic", location = %location, "PANIC: {info}");
+                    default_hook(info);
+                }));
+            }
             let dir = app.path().app_data_dir()?;
             let db = AppDb::open(&dir)?;
             let device_id = db
@@ -662,6 +683,7 @@ pub fn run() {
             float_window::show_float_window,
             float_window::hide_float_window,
             float_window::move_float_window,
+            float_window::resize_float_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

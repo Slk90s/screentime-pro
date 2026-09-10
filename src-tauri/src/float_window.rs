@@ -15,11 +15,23 @@
 //!
 //! 修改历史：
 //!   - 2026-09-10 @Unreleased: 初始创建 - 创建/显示/隐藏/移动 4 个命令 + 显隐 helper
+//!   - 2026-09-10 @v0.7.7: 尺寸 340×44 → 200×36，新增 resize_float_window 命令。
+//!     原因：窗口固定 340px 而内容（如「● CPU 77% ↓1.4M ↑3.5M」）只有 ~200px，
+//!     右侧一大片空白，用户反馈「浮窗过长」。改为由 FloatBar.vue 测量内容宽度后
+//!     调本命令自适应收缩，窗口始终贴合内容（也顺带消除了透明窗口右侧的无效点击热区）。
 
-use tauri::{AppHandle, LogicalPosition, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder};
 
 /// 浮窗固定 label（与 tauri.conf.json 的 windows[].label 一致）
 pub const FLOAT_WINDOW_LABEL: &str = "float";
+
+/// 浮窗初始/最小尺寸（逻辑像素）。实际宽度由前端测量内容后经 resize_float_window 调整。
+///
+/// 初始宽度取 340（与前端 BAR_W 一致）：这是「四项指标全开」时的安全上限，
+/// 保证首次布局不被裁切；FloatBar.vue 会在 show 之前先测量并收缩，用户看不到宽态。
+pub const FLOAT_INITIAL_WIDTH: f64 = 340.0;
+pub const FLOAT_HEIGHT: f64 = 36.0;
+pub const FLOAT_MIN_WIDTH: f64 = 140.0;
 
 /// 幂等创建浮窗（已存在则直接复用）
 ///
@@ -35,8 +47,8 @@ pub fn ensure_float_window(app: &AppHandle) -> Result<(), String> {
         WebviewUrl::App("index.html".into()),
     )
     .title("ScreenTime Float")
-    .inner_size(340.0, 44.0)
-    .min_inner_size(340.0, 44.0)
+    .inner_size(FLOAT_INITIAL_WIDTH, FLOAT_HEIGHT)
+    .min_inner_size(FLOAT_MIN_WIDTH, FLOAT_HEIGHT)
     .resizable(false)
     .maximizable(false)
     .minimizable(false)
@@ -96,4 +108,37 @@ pub async fn move_float_window(app: AppHandle, x: f64, y: f64) -> Result<(), Str
     window
         .set_position(LogicalPosition::new(x, y))
         .map_err(|e| format!("移动悬浮指标条失败: {e}"))
+}
+
+/// 按内容自适应调整浮窗宽度（逻辑像素；前端测量 DOM 宽度后调用）
+///
+/// v0.7.7 新增：窗口宽度 = 内容宽度，避免固定 340px 时的右侧大片空白。
+/// 高度用常量（FLOAT_HEIGHT）保持稳定，只有宽度变化。
+///
+/// **右边缘锚定**：宽度变化时同步平移窗口，使右上角位置保持不动
+/// （浮窗默认贴在屏幕右上，若只改宽度会看起来往右「长」或往左「缩」）。
+/// 锚定计算放在 Rust 侧完成，前端不需要额外申请 window 读取权限。
+#[tauri::command]
+pub async fn resize_float_window(app: AppHandle, width: f64) -> Result<(), String> {
+    let window = app
+        .get_webview_window(FLOAT_WINDOW_LABEL)
+        .ok_or_else(|| "float 窗口尚未创建".to_string())?;
+    let target_w = width.max(FLOAT_MIN_WIDTH);
+    let scale = window.scale_factor().unwrap_or(1.0);
+    // 当前物理尺寸/位置 → 换算成逻辑坐标做锚定
+    let cur = window
+        .inner_size()
+        .map(|s| s.to_logical::<f64>(scale).width)
+        .unwrap_or(FLOAT_INITIAL_WIDTH);
+    if (cur - target_w).abs() < 0.5 {
+        return Ok(()); // 宽度无变化，免抖动
+    }
+    if let Ok(pos) = window.outer_position() {
+        let logical = pos.to_logical::<f64>(scale);
+        let new_x = logical.x + (cur - target_w);
+        let _ = window.set_position(LogicalPosition::new(new_x, logical.y));
+    }
+    window
+        .set_size(LogicalSize::new(target_w, FLOAT_HEIGHT))
+        .map_err(|e| format!("调整悬浮指标条尺寸失败: {e}"))
 }

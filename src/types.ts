@@ -202,6 +202,8 @@ export interface StatusBarConfig {
   enabled: boolean;
   show_cpu: boolean;
   show_mem: boolean;
+  // v0.7.7（2026-09-10）：磁盘占用开关（三平台均已支持采样，默认关）
+  show_disk: boolean;
   show_net: boolean;
   // v0.7.6（2026-09-10）：悬浮指标条独立开关（与托盘状态栏总开关互不依赖）
   float_enabled: boolean;
