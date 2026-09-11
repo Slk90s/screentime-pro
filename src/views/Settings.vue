@@ -851,7 +851,9 @@ const exportDialogOpen = ref(false);
 // ============ v0.7.6：状态栏配置（总开关 + 子项）============
 // v0.7.7（2026-09-10）：内存与磁盘采样已补齐三平台，不再按平台禁用子项
 //（旧版用于禁用内存项的 isMac 判据与后端 MEMORY_SUPPORTED 编译期常量一并作废）。
-// isMac 仍保留：Windows / Linux 托盘图标空间有限，需要给出「显示缩写数字」的差异化说明。
+// v0.7.8（2026-09-11）：Windows / Linux 托盘改为恒显示品牌图标（画字逻辑已从
+// Rust 侧整体剔除），因此 isMac 只用来切换「指标显示在哪里」的说明文案：
+// 非 mac → 提示走悬浮指标条；mac → 提示显示在菜单栏。
 const isMac = /Mac|iPhone|iPod|iPad/i.test(navigator.platform || navigator.userAgent || "");
 const statusBarConfig = ref<StatusBarConfig>({
   enabled: false,

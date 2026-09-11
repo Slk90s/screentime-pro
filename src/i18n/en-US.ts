@@ -145,10 +145,12 @@ export default {
     statusBarHint: "Real-time system metrics. CPU / memory / disk / network are supported on all platforms (disk = system volume).",
     // Deprecated since v0.7.7 (memory now works everywhere); kept for old caches
     memMacOnly: "macOS only",
-    // v0.7.6 fix: Windows / Linux tray icons are only 16-24px so text is abbreviated; hover for full
-    statusBarWinNote: "On Windows / Linux the tray icon shows abbreviated numbers (CPU + dominant net direction) due to space constraints. Hover the icon for the full metrics. To also see memory / disk, enable the floating metrics bar; the tray icon then reverts to the brand icon and metrics are shown in the float bar only (both are governed by the master switch).",
+    // v0.7.8 (2026-09-11): Windows / Linux tray no longer shows any metrics (the icon-drawing
+    // code was removed); the tray is always the brand icon. Metrics on those platforms appear
+    // only in the floating bar; only macOS uses the native menu bar.
+    statusBarWinNote: "On Windows / Linux the tray icon is always the brand icon and shows no numbers. View system metrics via the Floating metrics bar below (enable both the master switch and the float toggle). On macOS they appear in the menu bar.",
     statusBarFloat: "Floating metrics bar",
-    statusBarFloatHint: "A draggable transparent metrics bar on your desktop showing the metrics you enable (CPU / memory / disk / network). It auto-sizes to its content and hides in fullscreen. Governed by the master switch; when enabled, the tray icon shows the brand icon only.",
+    statusBarFloatHint: "A draggable transparent metrics bar on your desktop showing the metrics you enable (CPU / memory / disk / network). It auto-sizes to its content and hides in fullscreen. Governed by the master switch. On Windows / Linux this is the only place metrics are shown.",
     languageTitle: "Language",
     languageDesc: "Choose interface language, persists after restart",
     generalTitle: "General",

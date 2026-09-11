@@ -130,7 +130,7 @@ export default {
     autostartOff: "已关闭",
     // v0.7.6：状态栏配置（总开关 + 子项；取代 v0.7.5 单字段 metricsTitle）
     statusBarTitle: "状态栏",
-    statusBarDesc: "在 macOS 菜单栏 / Windows 与 Linux 托盘或桌面悬浮窗实时显示系统指标，1Hz 采样",
+    statusBarDesc: "macOS 在菜单栏实时显示系统指标；Windows / Linux 通过桌面悬浮指标条显示（托盘图标恒为品牌图标），1Hz 采样",
     statusBarEnabled: "启用状态栏",
     statusBarShowCpu: "显示 CPU 占用",
     statusBarShowMem: "显示内存占用",

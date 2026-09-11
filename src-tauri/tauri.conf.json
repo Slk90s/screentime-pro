@@ -110,7 +110,8 @@
         "installMode": "currentUser",
         "displayLanguageSelector": false,
         "languages": ["SimpChinese", "English"],
-        "minimumWebview2Version": "110.0.1587.50"
+        "minimumWebview2Version": "110.0.1587.50",
+        "installerHooks": "./windows/hooks.nsh"
       }
     }
   },

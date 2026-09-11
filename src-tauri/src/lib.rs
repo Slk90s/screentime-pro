@@ -372,18 +372,6 @@ pub fn run() {
             // （原始 item move 进 struct，菜单事件闭包用的是上面的 clone，互不影响）
             app.manage(TrayFloatToggle { float: float_item });
             let icon = app.default_window_icon().unwrap().clone();
-            // v0.7.6：非 mac 平台需要在状态栏关闭时把托盘图标还原回品牌图。
-            // ⚠️ app.default_window_icon() 返回的 &Image 生命周期绑在 &mut App 上，
-            // .clone() 仍带借用，不能 move 进 'static 线程；必须拷出原始 RGBA 字节，
-            // 用 new_owned 重建一个 owned Image<'static>。
-            #[cfg(not(target_os = "macos"))]
-            let default_tray_icon: tauri::image::Image<'static> = {
-                let raw = app
-                    .default_window_icon()
-                    .expect("default window icon");
-                let rgba = raw.rgba().to_vec();
-                tauri::image::Image::new_owned(rgba, raw.width(), raw.height())
-            };
             let tray_icon = TrayIconBuilder::with_id("statusbar")
                 .icon(icon)
                 .menu(&tray_menu)
@@ -477,41 +465,43 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
-            // ===== v0.7.6：跨平台托盘指标采样线程 =====
-            // - macOS：set_title 到菜单栏（菜单栏原生支持完整文字）
-            // - Windows/Linux：tray.set_title 在 Win 上仅写 tooltip，Linux 多数 DE 也不显示
-            //   → 必须每 tick 把缩写文字画进 32x32 RGBA 图标 set_icon，
-            //   同时 set_title(完整) 作为 tooltip（Windows 悬停可见）
-            //   关闭时 set_icon(默认品牌图) + set_title(None) 还原
-            //   详见 system_load/tray_icon.rs 的「画布约束」段
+            // ===== 后台线程：浮窗显隐管理 + macOS 菜单栏指标 =====
+            // v0.7.8（2026-09-11）按产品决策收敛（Ryan 反馈）：
+            // - **只有 macOS** 把指标写进原生菜单栏（`tray.set_title`，系统原生支持完整文字）；
+            // - **Windows / Linux 的托盘恒为品牌图标**——不再把文字画进 32x32 图标。
+            //   原 `system_load/tray_icon.rs`（5x7 位图字体手绘）已整体删除。
+            //   这两个平台的指标只在「悬浮指标条」里显示。
+            // 于是本线程只剩两件事：① 浮窗显隐（含全屏自动隐藏，全平台）；
+            // ② macOS 菜单栏文字刷新。非 macOS 完全不采样，零额外开销。
+            //
+            // 旧约定失效：v0.7.6 的「非 mac 必须 set_icon 画字 + set_title 当 tooltip」作废。
             use std::time::Duration;
             let tray_clone = tray_icon.clone();
             let sampler = app_state.metrics_sampler.clone();
             let state_clone = app_state.clone();
-            #[cfg(not(target_os = "macos"))]
-            let default_tray_icon_for_thread = default_tray_icon.clone();
             std::thread::Builder::new()
                 .name("metrics-sampler".into())
                 .spawn(move || {
                     const POLL_INTERVAL_MS: u64 = 1000;
-                    #[cfg(target_os = "macos")]
-                    let mut slow_tick: u64 = 0;
+                    // 非 macOS 不采样：托盘恒为品牌图标，指标由浮窗前端自己 1Hz 拉取
+                    #[cfg(not(target_os = "macos"))]
+                    let _ = &sampler;
                     // v0.7.6：浮窗显隐状态缓存（只在翻转时调 show/hide，避免每秒无效调用）
                     let mut float_shown = false;
-                    // 浮窗优先（用户反馈 2026-09-10）：开了悬浮指标条后托盘不再绘制指标，
-                    // 仅浮窗显示；此标记记录托盘当前是否处于「画指标」态，翻转时才还原品牌图
+                    // macOS：记录菜单栏当前是否已写入指标文字，翻转时置空一次
+                    #[cfg(target_os = "macos")]
                     let mut tray_shown_metrics = false;
+                    #[cfg(target_os = "macos")]
+                    let mut slow_tick: u64 = 0;
                     loop {
                         let cfg = *state_clone
                             .status_bar_config
                             .lock()
                             .unwrap_or_else(|e| e.into_inner());
-                        let title_cfg: system_load::TrayTitleConfig = cfg.into();
-                        // v0.7.6：悬浮指标条显隐管理。
-                        // 2026-09-10 语义修正（Ryan 反馈）：受「启用状态栏」总开关统管——
-                        // enabled=false 时浮窗与托盘指标一并隐藏，消除「总开关关了浮窗还显示」
-                        // 造成的死开关困惑（旧设计「浮窗独立于总开关」作废）。
-                        // Windows 上前台全屏 → 自动隐藏，退出全屏恢复；设置页/菜单关闭时兜底隐藏。
+                        // 悬浮指标条显隐管理（全平台）。
+                        // 2026-09-10 语义修正：受「启用状态栏」总开关统管——enabled=false 时
+                        // 浮窗一并隐藏，消除「总开关关了浮窗还显示」的死开关困惑。
+                        // Windows 上前台全屏 → 自动隐藏，退出全屏恢复。
                         if cfg.enabled && cfg.float_enabled {
                             let want_show =
                                 !system_load::fullscreen::foreground_is_fullscreen();
@@ -529,69 +519,39 @@ pub fn run() {
                             let handle = tray_clone.app_handle().clone();
                             let _ = float_window::set_float_visible(&handle, false);
                         }
-                        // 浮窗优先：悬浮指标条开启 → 托盘不画指标（还原品牌图 + 清 tooltip），仅浮窗显示
-                        let want_tray_metrics = cfg.enabled && !cfg.float_enabled;
-                        if want_tray_metrics {
-                            let snap = sampler.sample_all();
-                            let full_title =
-                                sampler.tray_title_with(&snap, &title_cfg);
-                            #[cfg(target_os = "macos")]
-                            {
-                                if sampler.should_update(&snap) {
-                                    let _ = tray_clone.set_title(Some(full_title));
-                                    sampler.cache_snapshot(snap);
-                                }
-                            }
-                            #[cfg(not(target_os = "macos"))]
-                            {
-                                // 画缩写文字进 32x32 图标；同时 set_title(完整) 作为 tooltip
-                                let lines = system_load::tray_icon::format_icon_lines(
-                                    &snap, &title_cfg,
-                                );
-                                let refs: Vec<&str> =
-                                    lines.iter().map(|s| s.as_str()).collect();
-                                let img = system_load::tray_icon::render_tray_icon(&refs);
-                                let _ = tray_clone.set_icon(Some(img));
-                                let _ = tray_clone.set_title(Some(full_title));
-                            }
-                            tray_shown_metrics = true;
-                            std::thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
-                        } else {
-                            // 还原品牌图 / 清 tooltip 只在「刚从画字态翻转过来」时执行一次，
-                            // 避免每秒重设图标（set_icon 每次都重建句柄）
-                            if tray_shown_metrics {
-                                #[cfg(target_os = "macos")]
-                                {
-                                    let _ = tray_clone.set_title(Some(String::new()));
-                                }
-                                #[cfg(not(target_os = "macos"))]
-                                {
-                                    // 还原品牌图标 + 清除 tooltip
-                                    let _ = tray_clone
-                                        .set_icon(Some(default_tray_icon_for_thread.clone()));
-                                    let _ = tray_clone.set_title(None::<&str>);
-                                }
-                                tray_shown_metrics = false;
-                            }
-                            // 浮窗可见时保持 1s 轮询（前台全屏检测的响应性依赖此循环）；
-                            // 托盘指标与浮窗都不可见 → 5s 低频轮询省 CPU
-                            if cfg.enabled && cfg.float_enabled {
-                                std::thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
-                            } else {
-                                std::thread::sleep(Duration::from_secs(5));
-                            }
-                        }
+                        // macOS：唯一使用托盘文字的平台（菜单栏原生渲染完整指标）
                         #[cfg(target_os = "macos")]
                         {
-                            slow_tick = slow_tick.wrapping_add(1);
-                            if slow_tick % 60 == 0 && want_tray_metrics {
+                            let visible = cfg.enabled && !cfg.float_enabled;
+                            if visible {
+                                slow_tick = slow_tick.wrapping_add(1);
+                                let title_cfg: system_load::TrayTitleConfig = cfg.into();
                                 let snap = sampler.sample_all();
-                                let title =
-                                    sampler.tray_title_with(&snap, &title_cfg);
-                                let _ = tray_clone.set_title(Some(title));
-                                sampler.cache_snapshot(snap);
+                                // 常规路径：数值有变化才写；每 60s 兜底强制写一次，
+                                // 防止休眠唤醒 / 菜单栏重排后 title 被系统丢掉、
+                                // 而 should_update 又判为「无变化」导致长时间不恢复。
+                                if sampler.should_update(&snap) || slow_tick % 60 == 0 {
+                                    let title = sampler.tray_title_with(&snap, &title_cfg);
+                                    let _ = tray_clone.set_title(Some(title));
+                                    sampler.cache_snapshot(snap);
+                                }
+                                tray_shown_metrics = true;
+                            } else if tray_shown_metrics {
+                                // 总开关关闭 / 切到浮窗模式 → 清空菜单栏文字
+                                let _ = tray_clone.set_title(Some(String::new()));
+                                tray_shown_metrics = false;
                             }
                         }
+                        // 轮询节奏：
+                        // - 浮窗可见 → 1s（前台全屏检测需要及时响应）
+                        // - macOS 状态栏可见 → 1s（菜单栏数值需要每秒刷新）
+                        // - 其余（Windows/Linux 关掉浮窗后）→ 5s 低频，几乎零开销
+                        let fast = cfg.enabled && (cfg.float_enabled || cfg!(target_os = "macos"));
+                        std::thread::sleep(Duration::from_millis(if fast {
+                            POLL_INTERVAL_MS
+                        } else {
+                            5000
+                        }));
                     }
                 })
                 .ok();

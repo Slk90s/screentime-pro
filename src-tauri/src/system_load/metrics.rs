@@ -21,10 +21,19 @@
 //! ## 平台支持矩阵（v0.7.7 起）
 //! | 指标 | macOS | Windows | Linux |
 //! | ---- | ----- | ------- | ----- |
-//! | CPU  | ✅ sysctl kern.cp_time | ✅ GetSystemTimes | ✅ /proc/stat |
-//! | 内存 | ✅ host_statistics64 | ✅ GlobalMemoryStatusEx | ✅ /proc/meminfo |
+//! | CPU  | ✅ Mach host_statistics(HOST_CPU_LOAD_INFO) | ✅ GetSystemTimes | ✅ /proc/stat |
+//! | 内存 | ✅ host_statistics64 + sysctlbyname(hw.memsize) | ✅ GlobalMemoryStatusEx | ✅ /proc/meminfo |
 //! | 磁盘 | ✅ statfs | ✅ GetDiskFreeSpaceExW | ✅ statvfs |
 //! | 网络 | ✅ getifaddrs | ✅ GetIfTable2 | ✅ /proc/net/dev |
+//!
+//! ⚠️ v0.7.8（2026-09-11）macOS「CPU / 内存恒 0%」连环根因修复：
+//!   1. **CPU**：`kern.cp_time` **在 macOS 上不存在**（那是 BSD 的 OID），
+//!      Darwin 只能走 Mach `host_statistics(HOST_CPU_LOAD_INFO)`——详见 `macos.rs`。
+//!   2. **内存**：本文件旧代码把 `sysctl()` 当 `sysctlbyname()` 用（把名字字符串传给
+//!      需要 **MIB 整型数组** 的 `sysctl(2)`）→ `hw.memsize` 永远读失败 →
+//!      `memory_total` 恒 0 → 浮窗 MEM 恒 0%、菜单栏干脆不显示 M 段；
+//!      `hw.pagesize` 也一直走 4096 兜底（Apple Silicon 实为 16384，会放大误差）。
+//!      现已改为正确的 `sysctlbyname(3)`，并在失败时 `tracing::warn` 留痕。
 //!
 //! v0.7.6 及以前：内存/磁盘被文件级思路限制为「macOS-only」，非 macOS 恒返回 (0,0)，
 //! 且托盘 title 用**编译期常量** MEMORY_SUPPORTED 决定是否拼 M 段。v0.7.7 改为
@@ -358,9 +367,13 @@ fn format_bps(bps: f64) -> String {
 
 #[cfg(target_os = "macos")]
 extern "C" {
-    fn sysctl(
+    /// ⚠️ v0.7.8 修复：这里必须是 **`sysctlbyname`（按名字查）**，不是 `sysctl`（按 MIB 查）。
+    /// `sysctl(2)` 的 `name` 参数是 **`int[]` MIB 数组**（如 `[CTL_HW=6, HW_MEMSIZE=24]`），
+    /// 传名字字符串进去会被当成整数字节解释 → 必然失败。
+    /// 旧实现声明成 `sysctl` 却传 `b"hw.memsize"`，导致 `memory_total` 恒为 0
+    /// （→ 菜单栏不显示 M 段、浮窗 MEM 恒 0%），页大小也一直走 4096 兜底。
+    fn sysctlbyname(
         name: *const i8,
-        namelen: u32,
         oldp: *mut std::ffi::c_void,
         oldlenp: *mut usize,
         newp: *const std::ffi::c_void,
@@ -381,17 +394,18 @@ unsafe fn read_page_size() -> u64 {
     let name = b"hw.pagesize\0";
     let mut page_size: u32 = 0;
     let mut len = std::mem::size_of::<u32>();
-    let rc = sysctl(
+    let rc = sysctlbyname(
         name.as_ptr() as *const i8,
-        name.len() as u32 - 1,
         &mut page_size as *mut u32 as *mut std::ffi::c_void,
         &mut len,
         std::ptr::null(),
         0,
     );
+    // Apple Silicon 的物理页是 16KB（不是 4KB），读不到会直接让内存占用算错，故只兜底不静默
     if rc == 0 && page_size > 0 {
         page_size as u64
     } else {
+        tracing::warn!(rc, "sysctlbyname(hw.pagesize) 失败，回落到 4096");
         4096
     }
 }
@@ -401,9 +415,8 @@ unsafe fn read_memory_total() -> u64 {
     let name = b"hw.memsize\0";
     let mut total: u64 = 0;
     let mut len = std::mem::size_of::<u64>();
-    let rc = sysctl(
+    let rc = sysctlbyname(
         name.as_ptr() as *const i8,
-        name.len() as u32 - 1,
         &mut total as *mut u64 as *mut std::ffi::c_void,
         &mut len,
         std::ptr::null(),
@@ -412,6 +425,7 @@ unsafe fn read_memory_total() -> u64 {
     if rc == 0 && total > 0 {
         total
     } else {
+        tracing::warn!(rc, "sysctlbyname(hw.memsize) 失败，本次内存总量记为 0");
         0
     }
 }
