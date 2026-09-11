@@ -32,14 +32,12 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v0.7.7 更新（稳定性修复）
-            - 🩹 macOS 闪退修复（重要）：状态栏 / 悬浮指标条开启后 macOS 启动即崩。根因是磁盘指标采样用 statfs(2) 时输出缓冲仅 256 字节，而 Darwin struct statfs 实为 2168 字节且该 API 无长度参数，内核写满即造成栈越界写。现改用真实布局的 repr(C) 结构体接收，并加 size_of 编译期断言防回归
-            - 🩹 Windows 首次启动闪黑框修复：查询 WebView2 / MachineGuid 的 reg 子进程改为无窗口方式创建（CREATE_NO_WINDOW），不再连续闪过命令框
-            - 📈 Windows / Linux 补齐内存与磁盘指标：Windows 用 GlobalMemoryStatusEx + GetDiskFreeSpaceExW，Linux 用 /proc/meminfo + statvfs。此前这两项仅在 macOS 可用，Win / Linux 一直显示为空
-            - 🔢 悬浮指标条数值修正：CPU / 内存百分比此前漏乘 100（如 77% 显示成 1%）
-            - 📏 悬浮指标条宽度贴合内容：不再右侧大片空白；数值定宽右对齐，位数变化时不再抖动
-            - ➕ 设置页新增「显示磁盘占用」开关（默认关闭）
-            - 🛡 崩溃可诊断：新增 panic 兜底钩子，闪退会在应用日志留下 PANIC 行，不再无现场
+            ### 屏幕时间管家 ScreenTime Pro — v0.7.8 更新（macOS 指标修复 / 托盘收敛 / 安装修复）
+            - 🩹 macOS CPU 恒 0% 彻底修复（P0）：上版（v0.7.7）把根因误判为「sysctl 缓冲宽度写死 16 字节」，实际是 kern.cp_time 这个 OID 在 macOS 上根本不存在（BSD 专有），sysctlbyname 必返 ENOENT。现改用 macOS 原生 Mach API host_statistics(HOST_CPU_LOAD_INFO) 读取 CPU 累计 tick 差分
+            - 🩹 macOS 内存恒 0% 修复：sysctl(2)（MIB 整型数组）与 sysctlbyname(3)（名字符串）两个接口混用，内存总量取值失败恒 0。统一改用 sysctlbyname("hw.memsize") / ("hw.pagesize")
+            - 🧹 Windows / Linux 托盘回归纯品牌图标：剔除把 CPU / 网速指标文字画进 32×32 托盘图标的位图字体整套代码。关闭悬浮窗后托盘只显示品牌图，运行状态一律走悬浮窗；仅 macOS 用菜单栏（状态栏）显示
+            - 🔧 Windows 安装「写入错误」修复（P0）：应用常驻托盘且首次运行自动开启开机自启，覆盖安装时旧进程仍占用安装目录下的 exe，NSIS 写文件失败即弹「写入错误」。新增 NSIS 安装钩子，在覆盖安装前 / 卸载前自动结束当前用户正在运行的旧进程（最多 3 轮重试）后再拷贝文件
+            - 📝 设置页「状态栏」说明文案同步更新（不再提「托盘显示缩略数字」）
             完整版本历史见仓库 README。
           releaseDraft: false
           prerelease: false
@@ -79,14 +77,12 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v0.7.7 更新（稳定性修复）
-            - 🩹 macOS 闪退修复（重要）：状态栏 / 悬浮指标条开启后 macOS 启动即崩。根因是磁盘指标采样用 statfs(2) 时输出缓冲仅 256 字节，而 Darwin struct statfs 实为 2168 字节且该 API 无长度参数，内核写满即造成栈越界写。现改用真实布局的 repr(C) 结构体接收，并加 size_of 编译期断言防回归
-            - 🩹 Windows 首次启动闪黑框修复：查询 WebView2 / MachineGuid 的 reg 子进程改为无窗口方式创建（CREATE_NO_WINDOW），不再连续闪过命令框
-            - 📈 Windows / Linux 补齐内存与磁盘指标：Windows 用 GlobalMemoryStatusEx + GetDiskFreeSpaceExW，Linux 用 /proc/meminfo + statvfs。此前这两项仅在 macOS 可用，Win / Linux 一直显示为空
-            - 🔢 悬浮指标条数值修正：CPU / 内存百分比此前漏乘 100（如 77% 显示成 1%）
-            - 📏 悬浮指标条宽度贴合内容：不再右侧大片空白；数值定宽右对齐，位数变化时不再抖动
-            - ➕ 设置页新增「显示磁盘占用」开关（默认关闭）
-            - 🛡 崩溃可诊断：新增 panic 兜底钩子，闪退会在应用日志留下 PANIC 行，不再无现场
+            ### 屏幕时间管家 ScreenTime Pro — v0.7.8 更新（macOS 指标修复 / 托盘收敛 / 安装修复）
+            - 🩹 macOS CPU 恒 0% 彻底修复（P0）：上版（v0.7.7）把根因误判为「sysctl 缓冲宽度写死 16 字节」，实际是 kern.cp_time 这个 OID 在 macOS 上根本不存在（BSD 专有），sysctlbyname 必返 ENOENT。现改用 macOS 原生 Mach API host_statistics(HOST_CPU_LOAD_INFO) 读取 CPU 累计 tick 差分
+            - 🩹 macOS 内存恒 0% 修复：sysctl(2)（MIB 整型数组）与 sysctlbyname(3)（名字符串）两个接口混用，内存总量取值失败恒 0。统一改用 sysctlbyname("hw.memsize") / ("hw.pagesize")
+            - 🧹 Windows / Linux 托盘回归纯品牌图标：剔除把 CPU / 网速指标文字画进 32×32 托盘图标的位图字体整套代码。关闭悬浮窗后托盘只显示品牌图，运行状态一律走悬浮窗；仅 macOS 用菜单栏（状态栏）显示
+            - 🔧 Windows 安装「写入错误」修复（P0）：应用常驻托盘且首次运行自动开启开机自启，覆盖安装时旧进程仍占用安装目录下的 exe，NSIS 写文件失败即弹「写入错误」。新增 NSIS 安装钩子，在覆盖安装前 / 卸载前自动结束当前用户正在运行的旧进程（最多 3 轮重试）后再拷贝文件
+            - 📝 设置页「状态栏」说明文案同步更新（不再提「托盘显示缩略数字」）
             完整版本历史见仓库 README。
           releaseDraft: false
           prerelease: false
@@ -121,14 +117,12 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v0.7.7 更新（稳定性修复）
-            - 🩹 macOS 闪退修复（重要）：状态栏 / 悬浮指标条开启后 macOS 启动即崩。根因是磁盘指标采样用 statfs(2) 时输出缓冲仅 256 字节，而 Darwin struct statfs 实为 2168 字节且该 API 无长度参数，内核写满即造成栈越界写。现改用真实布局的 repr(C) 结构体接收，并加 size_of 编译期断言防回归
-            - 🩹 Windows 首次启动闪黑框修复：查询 WebView2 / MachineGuid 的 reg 子进程改为无窗口方式创建（CREATE_NO_WINDOW），不再连续闪过命令框
-            - 📈 Windows / Linux 补齐内存与磁盘指标：Windows 用 GlobalMemoryStatusEx + GetDiskFreeSpaceExW，Linux 用 /proc/meminfo + statvfs。此前这两项仅在 macOS 可用，Win / Linux 一直显示为空
-            - 🔢 悬浮指标条数值修正：CPU / 内存百分比此前漏乘 100（如 77% 显示成 1%）
-            - 📏 悬浮指标条宽度贴合内容：不再右侧大片空白；数值定宽右对齐，位数变化时不再抖动
-            - ➕ 设置页新增「显示磁盘占用」开关（默认关闭）
-            - 🛡 崩溃可诊断：新增 panic 兜底钩子，闪退会在应用日志留下 PANIC 行，不再无现场
+            ### 屏幕时间管家 ScreenTime Pro — v0.7.8 更新（macOS 指标修复 / 托盘收敛 / 安装修复）
+            - 🩹 macOS CPU 恒 0% 彻底修复（P0）：上版（v0.7.7）把根因误判为「sysctl 缓冲宽度写死 16 字节」，实际是 kern.cp_time 这个 OID 在 macOS 上根本不存在（BSD 专有），sysctlbyname 必返 ENOENT。现改用 macOS 原生 Mach API host_statistics(HOST_CPU_LOAD_INFO) 读取 CPU 累计 tick 差分
+            - 🩹 macOS 内存恒 0% 修复：sysctl(2)（MIB 整型数组）与 sysctlbyname(3)（名字符串）两个接口混用，内存总量取值失败恒 0。统一改用 sysctlbyname("hw.memsize") / ("hw.pagesize")
+            - 🧹 Windows / Linux 托盘回归纯品牌图标：剔除把 CPU / 网速指标文字画进 32×32 托盘图标的位图字体整套代码。关闭悬浮窗后托盘只显示品牌图，运行状态一律走悬浮窗；仅 macOS 用菜单栏（状态栏）显示
+            - 🔧 Windows 安装「写入错误」修复（P0）：应用常驻托盘且首次运行自动开启开机自启，覆盖安装时旧进程仍占用安装目录下的 exe，NSIS 写文件失败即弹「写入错误」。新增 NSIS 安装钩子，在覆盖安装前 / 卸载前自动结束当前用户正在运行的旧进程（最多 3 轮重试）后再拷贝文件
+            - 📝 设置页「状态栏」说明文案同步更新（不再提「托盘显示缩略数字」）
             完整版本历史见仓库 README。
           releaseDraft: false
           prerelease: false

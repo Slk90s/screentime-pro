@@ -190,7 +190,7 @@
             />
           </div>
           <p class="field-hint">{{ t("settings.statusBarHint") }}</p>
-          <!-- v0.7.6 修复：非 mac 平台托盘因画布仅 16-24px，文字会缩写，提示用户悬停查看完整 -->
+          <!-- v0.7.8（2026-09-11）：非 mac 平台托盘恒为品牌图标（不再画指标），此提示改为引导用户走悬浮指标条 -->
           <p v-if="!isMac" class="field-hint platform-note">{{ t("settings.statusBarWinNote") }}</p>
 
           <!-- v0.7.6：悬浮指标条（2026-09-10 起受「启用状态栏」总开关统管，随子项一并置灰；

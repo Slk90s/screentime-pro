@@ -13,7 +13,7 @@
 
 > 目的：定义 **版本号从哪来、发版前改哪些地方、CI 怎么跑、出问题怎么回滚**。
 > 与 README 区别：README 是用户面（去哪下载、每个版本有什么），本文件是维护者面（怎么发出去）。
-> 最后更新：2026-09-04（对账 v0.7.5 实际状态）
+> 最后更新：2026-09-11（对账 v0.7.8 实际状态）
 
 ---
 
@@ -122,7 +122,7 @@ grep -n 'badge/version' README.md
 
 ```bash
 # ① 改版本号（唯一真实来源）
-#    src-tauri/tauri.conf.json → version: "0.7.7"
+#    src-tauri/tauri.conf.json → version: "0.7.8"
 #    同步 package.json / README 徽章 / README 版本历史表 / ARCHITECTURE 头部
 
 # ② 改写 build.yml 三处 releaseBody（§3.1，最容易漏）
@@ -133,12 +133,12 @@ npm run tauri build
 
 # ④ 提交
 git add -A
-git commit -m "release: v0.7.7"
+git commit -m "release: v0.7.8"
 
 # ⑤ 打 tag 并推送（这一步会触发 CI 三平台构建）
-git tag v0.7.7
+git tag v0.7.8
 git push origin main
-git push origin v0.7.7
+git push origin v0.7.8
 
 # ⑥ 观察 CI：https://github.com/Slk90s/screentime-pro/actions
 #    三平台全绿后，核对 Release 页面的 Notes 与产物

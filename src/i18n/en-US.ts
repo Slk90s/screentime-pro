@@ -132,7 +132,7 @@ export default {
     autostartOff: "Disabled",
     // v0.7.6: Status bar config (master + sub-toggles; replaces v0.7.5 metricsTitle)
     statusBarTitle: "Status bar",
-    statusBarDesc: "Show system metrics in the macOS menu bar / Windows & Linux system tray or on a desktop float bar at 1Hz",
+    statusBarDesc: "Show system metrics in the macOS menu bar, or on a desktop float bar for Windows / Linux (the tray stays the brand icon), sampled at 1Hz",
     statusBarEnabled: "Enable status bar",
     statusBarShowCpu: "Show CPU usage",
     statusBarShowMem: "Show memory usage",
