@@ -75,7 +75,9 @@ h3 {
   width: 32px;
   height: 32px;
   border-radius: 8px;
-  background: #f0f0f3;
+  /* v0.7.9（2026-09-12）：占位底色改主题令牌——原先硬编码浅灰，深色主题下
+     浅色方块 + var(--muted) 文字对比度极低（取不到图标时的首字母几乎看不见） */
+  background: var(--seg-bg);
   display: flex;
   align-items: center;
   justify-content: center;

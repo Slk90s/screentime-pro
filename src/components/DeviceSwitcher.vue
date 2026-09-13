@@ -35,7 +35,8 @@ defineEmits<{ (e: "update:modelValue", v: string): void }>();
 .switcher {
   display: inline-flex;
   gap: 4px;
-  background: #f0f0f3;
+  /* v0.7.9（2026-09-12）：改用主题令牌，避免深色主题下「选中项白字压白底」不可见 */
+  background: var(--seg-bg);
   padding: 3px;
   border-radius: 10px;
   max-width: 100%;
@@ -53,7 +54,7 @@ defineEmits<{ (e: "update:modelValue", v: string): void }>();
   white-space: nowrap;
 }
 .switcher button.active {
-  background: #fff;
+  background: var(--seg-active-bg);
   color: var(--text);
   font-weight: 500;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);

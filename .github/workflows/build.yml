@@ -32,7 +32,7 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v0.7.8 更新（macOS 指标修复 / 托盘收敛 / 安装修复）
+            ### 屏幕时间管家 ScreenTime Pro — v0.7.9 更新（macOS 托盘单击修复 / 深色分段控件可见 / 设备名诊断加固）
             - 🩹 macOS CPU 恒 0% 彻底修复（P0）：上版（v0.7.7）把根因误判为「sysctl 缓冲宽度写死 16 字节」，实际是 kern.cp_time 这个 OID 在 macOS 上根本不存在（BSD 专有），sysctlbyname 必返 ENOENT。现改用 macOS 原生 Mach API host_statistics(HOST_CPU_LOAD_INFO) 读取 CPU 累计 tick 差分
             - 🩹 macOS 内存恒 0% 修复：sysctl(2)（MIB 整型数组）与 sysctlbyname(3)（名字符串）两个接口混用，内存总量取值失败恒 0。统一改用 sysctlbyname("hw.memsize") / ("hw.pagesize")
             - 🧹 Windows / Linux 托盘回归纯品牌图标：剔除把 CPU / 网速指标文字画进 32×32 托盘图标的位图字体整套代码。关闭悬浮窗后托盘只显示品牌图，运行状态一律走悬浮窗；仅 macOS 用菜单栏（状态栏）显示
@@ -77,7 +77,7 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v0.7.8 更新（macOS 指标修复 / 托盘收敛 / 安装修复）
+            ### 屏幕时间管家 ScreenTime Pro — v0.7.9 更新（macOS 托盘单击修复 / 深色分段控件可见 / 设备名诊断加固）
             - 🩹 macOS CPU 恒 0% 彻底修复（P0）：上版（v0.7.7）把根因误判为「sysctl 缓冲宽度写死 16 字节」，实际是 kern.cp_time 这个 OID 在 macOS 上根本不存在（BSD 专有），sysctlbyname 必返 ENOENT。现改用 macOS 原生 Mach API host_statistics(HOST_CPU_LOAD_INFO) 读取 CPU 累计 tick 差分
             - 🩹 macOS 内存恒 0% 修复：sysctl(2)（MIB 整型数组）与 sysctlbyname(3)（名字符串）两个接口混用，内存总量取值失败恒 0。统一改用 sysctlbyname("hw.memsize") / ("hw.pagesize")
             - 🧹 Windows / Linux 托盘回归纯品牌图标：剔除把 CPU / 网速指标文字画进 32×32 托盘图标的位图字体整套代码。关闭悬浮窗后托盘只显示品牌图，运行状态一律走悬浮窗；仅 macOS 用菜单栏（状态栏）显示
@@ -117,7 +117,7 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v0.7.8 更新（macOS 指标修复 / 托盘收敛 / 安装修复）
+            ### 屏幕时间管家 ScreenTime Pro — v0.7.9 更新（macOS 托盘单击修复 / 深色分段控件可见 / 设备名诊断加固）
             - 🩹 macOS CPU 恒 0% 彻底修复（P0）：上版（v0.7.7）把根因误判为「sysctl 缓冲宽度写死 16 字节」，实际是 kern.cp_time 这个 OID 在 macOS 上根本不存在（BSD 专有），sysctlbyname 必返 ENOENT。现改用 macOS 原生 Mach API host_statistics(HOST_CPU_LOAD_INFO) 读取 CPU 累计 tick 差分
             - 🩹 macOS 内存恒 0% 修复：sysctl(2)（MIB 整型数组）与 sysctlbyname(3)（名字符串）两个接口混用，内存总量取值失败恒 0。统一改用 sysctlbyname("hw.memsize") / ("hw.pagesize")
             - 🧹 Windows / Linux 托盘回归纯品牌图标：剔除把 CPU / 网速指标文字画进 32×32 托盘图标的位图字体整套代码。关闭悬浮窗后托盘只显示品牌图，运行状态一律走悬浮窗；仅 macOS 用菜单栏（状态栏）显示

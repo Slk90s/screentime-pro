@@ -609,11 +609,34 @@ pub fn get_autostart_pref(state: tauri::State<'_, Arc<AppState>>) -> Option<bool
     state.db.get_setting("autostart").map(|v| v == "true")
 }
 
+/// 列出所有设备（首页「全部设备」切换器用）。
+///
+/// v0.7.9（2026-09-12）加固（Ryan 反馈 Windows 首页只剩「全部设备」一个按钮）：
+///   ① **名称兜底**：旧写法 `get_setting(..).unwrap_or_else(|| id.clone())` 只区分
+///      `Some/None`——若设置里存的是**空串/纯空白**（用户把「本机设备名称」清空后保存过），
+///      会原样返回空字符串，前端按钮就渲染成一块空白。现把空白也视为「没名字」，回落设备 id。
+///   ② **加日志**：成功/失败都记一行。出问题时能在应用日志里区分
+///      「前端根本没调用」（无此行）与「调用了但查询报错」（有 error 行），无需再靠猜。
 #[tauri::command]
 pub fn get_devices(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<DeviceInfo>, String> {
     let id = state.device_id.clone();
-    let name = state.db.get_setting("device_name").unwrap_or_else(|| id.clone());
-    state.db.get_devices(&id, &name).map_err(|e| e.to_string())
+    let name = state
+        .db
+        .get_setting("device_name")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| id.clone());
+    let res = state.db.get_devices(&id, &name);
+    match &res {
+        Ok(list) => tracing::info!(
+            device_id = %id,
+            device_name = %name,
+            count = list.len(),
+            "get_devices 返回"
+        ),
+        Err(e) => tracing::error!(device_id = %id, error = %e, "get_devices 查询失败"),
+    }
+    res.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

@@ -23,12 +23,11 @@ use std::sync::{Arc, Mutex};
 
 use classifier::Rule;
 use db::AppDb;
-// v0.7.6（2026-09-10）：托盘菜单新增 CheckMenuItem 快捷开关 + 分隔线；
-// 非 mac 平台也需要 TrayIconEvent/MouseButton（左键点击显示主窗口，右键弹菜单）
+// v0.7.6（2026-09-10）：托盘菜单新增 CheckMenuItem 快捷开关 + 分隔线
+// v0.7.9（2026-09-12）：两个平台的托盘点击处理都要按「按键 + 按下/抬起」过滤，
+//   故 MouseButton / MouseButtonState 不再限定非 mac（原 cfg 门控会让 macOS 侧少这两个符号）
 use tauri::menu::{CheckMenuItemBuilder, Menu, MenuItemBuilder, PredefinedMenuItem};
-#[cfg(not(target_os = "macos"))]
-use tauri::tray::{MouseButton, MouseButtonState};
-use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tracker::{create_tracker, PlatformTracker};
@@ -433,9 +432,20 @@ pub fn run() {
                     _ => {}
                 })
                 .on_tray_icon_event(|_tray, _event| {
+                    // ===== v0.7.9（2026-09-12）macOS 左键点击「只闪一下」修复 =====
+                    // 根因：此处原写 `TrayIconEvent::Click { .. }`——既不筛按键、也不筛 button_state。
+                    // macOS 上一次左键单击会先后派发 Click{Left,Down} 与 Click{Left,Up} 两个事件，
+                    // 于是 toggle 被执行两次（显示后又立刻隐藏）→ 界面一闪而过；右键同理也会误切显隐。
+                    // 现在与下方非 mac 分支一致：只认「左键 + 抬起」，单击刚好一次 toggle。
+                    // （右键不再触发 toggle，只由系统弹出快捷菜单 → 「显示主窗口」菜单项兜底）
                     #[cfg(target_os = "macos")]
                     {
-                        if let TrayIconEvent::Click { .. } = _event {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = _event
+                        {
                             if let Some(w) = _tray.app_handle().get_webview_window("main") {
                                 if w.is_visible().unwrap_or(false) {
                                     let _ = w.hide();

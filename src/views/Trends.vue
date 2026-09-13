@@ -224,7 +224,8 @@ onBeforeUnmount(() => {
 .seg {
   display: inline-flex;
   gap: 4px;
-  background: #f0f0f3;
+  /* v0.7.9（2026-09-12）：改用主题令牌，深色主题下选中项不再白字压白底 */
+  background: var(--seg-bg);
   padding: 3px;
   border-radius: 10px;
 }
@@ -238,7 +239,7 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 .seg button.active {
-  background: #fff;
+  background: var(--seg-active-bg);
   color: var(--text);
   font-weight: 500;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);

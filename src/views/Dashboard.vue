@@ -170,11 +170,20 @@ function selectToday() {
   selectedDate.value = todayStr();
 }
 
+// v0.7.9（2026-09-12）加固：
+//   原实现是「赋值 + 空 catch」——① 若后端返回 null/undefined，会被直接赋给 devices，
+//   `v-for` 静默渲染 0 个按钮（首页只剩「全部设备」）；② catch 为空，出问题无迹可查。
+//   现改为：只在拿到数组时覆盖（失败保留旧值），并留痕便于定位。
 async function loadDevices() {
   try {
-    devices.value = await tracker.devices();
-  } catch {
-    devices.value = [];
+    const list = await tracker.devices();
+    if (Array.isArray(list)) {
+      devices.value = list;
+    } else {
+      console.error("[devices] get_devices 返回非数组：", list);
+    }
+  } catch (e) {
+    console.error("[devices] get_devices 调用失败：", e);
   }
 }
 
@@ -228,7 +237,8 @@ watch([range, device], () => {
 .range {
   display: inline-flex;
   gap: 4px;
-  background: #f0f0f3;
+  /* v0.7.9（2026-09-12）：改用主题令牌，深色主题下选中项不再白字压白底 */
+  background: var(--seg-bg);
   padding: 3px;
   border-radius: 10px;
 }
@@ -242,7 +252,7 @@ watch([range, device], () => {
   cursor: pointer;
 }
 .range button.active {
-  background: #fff;
+  background: var(--seg-active-bg);
   color: var(--text);
   font-weight: 500;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);

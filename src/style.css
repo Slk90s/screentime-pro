@@ -15,6 +15,12 @@
   --muted: #86868b;
   --text-dim: #aeaeb2;
   --border: #e5e5ea;
+  /* v0.7.9（2026-09-12）新增：分段控件（时间范围 / 设备切换器）底色。
+     原先这些控件在组件里硬编码 #f0f0f3 / #fff，而选中项文字用 var(--text)——
+     深色主题下 --text 是 #f5f5f7，压在硬编码的 #fff 上 → 文字完全不可见。
+     改为令牌后随主题切换；未选中项继续用 var(--muted)。 */
+  --seg-bg: #f0f0f3;
+  --seg-active-bg: #ffffff;
   --accent: #ff7e27;
   --accent-strong: #e8701f;
   --neutral: #c7c7cc;
@@ -33,6 +39,8 @@
     --muted: #98989d;
     --text-dim: #6e6e73;
     --border: #3a3a3e;
+    --seg-bg: #2a2a2e;
+    --seg-active-bg: #48484a;
     --accent: #ff8a3d;
     --accent-strong: #ff7e27;
     --neutral: #48484a;
@@ -47,6 +55,8 @@
   --muted: #98989d;
   --text-dim: #6e6e73;
   --border: #3a3a3e;
+  --seg-bg: #2a2a2e;
+  --seg-active-bg: #48484a;
   --accent: #ff8a3d;
   --accent-strong: #ff7e27;
   --neutral: #48484a;
