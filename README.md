@@ -5,7 +5,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](https://github.com/)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-0.7.8-blue)](./release)
+[![Version](https://img.shields.io/badge/version-0.7.10-blue)](./release)
 
 ---
 
@@ -39,6 +39,7 @@
 
 | 版本 | 发布时间 | 状态 | 关键说明 |
 |------|----------|------|----------|
+| **v0.7.10** | 2026-09-13 | 🩹 **修复版** | **首屏竞态重试 / 设备名稳定显示**：① **首屏数据加载竞态修复（P1）**——前端 `invoke` 封装层对 tauri「state not managed」瞬态错误做指数退避重试（最多 6 次），避免首屏挂载时偶发竞态导致首页设备切换器 / 概览数据永久为空（此前仅「全部设备」按钮）；本机验证 `get_devices` 稳定返回本机设备 `DESKTOP-SV0FM39`；② 版本链路：v0.7.9 已含 macOS 托盘左键单击「只闪一下」修复、深色分段控件选中项可见修复、设备名诊断加固（名称空串兜底 + `tracing` 日志），v0.7.10 补强首屏竞态重试确保升级后设备名稳定显示 |
 | **v0.7.9** | 2026-09-13 | ✨ **修复版** | **macOS 托盘单击修复 + 深色分段控件可见 + 设备名诊断加固**：① **macOS 状态栏左键单击「只闪一下」修复（P0）**——旧实现 `TrayIconEvent::Click {..}` 不筛按键 / 抬起，macOS 一次左键单击会先后派发 Down+Up 两个事件 → 主窗口 toggle 两次（显示后立刻隐藏）一闪而过；改为只认「左键 + 抬起」，与 Windows / Linux 行为一致；② **深色模式分段控件选中项「白字压白底」不可见修复（P1）**——首页时间范围 / 设备切换器 / 趋势分段控件的底色硬编码 `#f0f0f3` / `#fff`，深色下选中项文字（`var(--text)` 浅色）压在白色底上完全看不见；改为主题令牌 `--seg-bg` / `--seg-active-bg` 随系统深浅色切换，AppRanking 首字母占位底色同步改令牌；③ **Windows 首页设备名不显示诊断加固（P1）**——`get_devices` 增加名称空串 / 空白兜底（回落设备 id）+ 成功 / 失败 `tracing` 日志；前端 `loadDevices` 改为仅在收到数组时覆盖、失败 / 非数组留痕（旧代码空 `catch` 静默置空，无法定位）。本机核查 `sessions` 含本机设备、`device_name=DESKTOP-SV0FM39` 正常，v0.7.7 旧版因 `sessions` 缺 `device` 列导致查询报错被吞、首页只剩「全部设备」按钮，升级到 v0.7.9 用现有数据库即可恢复 |
 | **v0.7.8** | 2026-09-11 | ✨ **修复版** | **macOS 指标连环修复 + 托盘收敛 + 安装修复**：① **macOS CPU 恒 0% 彻底修复（P0）**——上版（v0.7.7）把根因误判为「sysctl 缓冲宽度写死 16 字节」，实际是 `kern.cp_time` 这个 OID 在 macOS 上**根本不存在**（BSD 专有），`sysctlbyname` 必然返回 ENOENT；现改用 macOS 原生 Mach API `host_statistics(HOST_CPU_LOAD_INFO)` 读取 CPU 累计 tick 差分；② **macOS 内存恒 0% 修复**——`sysctl(2)`（MIB 整型数组）与 `sysctlbyname(3)`（名字符串）两个接口混用，内存总量取值失败恒 0，统一改用 `sysctlbyname("hw.memsize")` / `("hw.pagesize")`；③ **托盘回归纯品牌图标（Windows / Linux）**——剔除把 CPU / 网速指标文字画进 32×32 托盘图标的位图字体整套代码，关闭悬浮窗后托盘只显示品牌图，运行状态一律走悬浮窗，仅 macOS 用菜单栏（状态栏）显示；④ **Windows 安装「写入错误」修复（P0）**——应用常驻托盘且首次运行自动开启开机自启，覆盖安装时旧进程仍占用安装目录下的 exe，NSIS 写文件失败即弹「写入错误」，新增 NSIS 安装钩子在**覆盖安装前 / 卸载前**自动结束当前用户正在运行的旧进程（最多 3 轮重试）后再拷贝文件；⑤ 设置页「状态栏」说明文案同步更新（不再提「托盘显示缩略数字」，改为「Windows / Linux 托盘仅品牌图、指标见悬浮窗，仅 macOS 显示在菜单栏」）|
 | **v0.7.7** | 2026-09-10 | ✨ **修复版** | **稳定性修复 + 指标口径纠正**：① **macOS 闪退修复（P0）**——磁盘指标用 `statfs(2)` 时输出缓冲只声明 256 字节，而 Darwin `struct statfs` 实为 2168 字节且该 API 无长度参数，内核写满即造成栈越界写 → 开启状态栏或悬浮指标条后 macOS 启动即崩；改为按真实布局的 `repr(C)` 结构体接收并加 `size_of` 编译期断言；② **Windows 首次启动闪命令框修复**——查询 WebView2 / MachineGuid 的 `reg` 子进程改用 `CREATE_NO_WINDOW` 方式创建（新增 `proc::hidden`）；③ **Windows / Linux 补齐内存与磁盘指标**——Win 用 `GlobalMemoryStatusEx` + `GetDiskFreeSpaceExW`，Linux 用 `/proc/meminfo` + `statvfs`（此前两项仅 macOS 可用，Win/Linux 恒为 0）；④ **悬浮指标条数值修正**——CPU / 内存百分比漏乘 100（后端返回 0~1 分数，前端直接当百分比，77% 显示成 1%）；⑤ 悬浮指标条宽度自适应内容、数值定宽右对齐，不再右侧留白、不再随位数抖动；⑥ 新增「显示磁盘占用」开关（默认关）；⑦ 新增 panic 兜底钩子，闪退会在应用日志留下 `PANIC:` 现场，不再是无头案 |

@@ -42,7 +42,28 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
   if (!isTauri) {
     return mock(cmd, args) as T;
   }
-  return invoke<T>(cmd, args);
+  // v0.7.10（2026-09-13）：首屏挂载期偶发 tauri「state not managed」瞬时竞态
+  // （窗口 / 命令处理器就绪前的极短窗口）。该错误会瞬态自愈，重试即可恢复正常。
+  // 仅对这类已知瞬态错误重试，不掩盖真实业务错误。
+  const MAX = 6;
+  let lastErr: unknown;
+  for (let i = 0; i < MAX; i++) {
+    try {
+      return await invoke<T>(cmd, args);
+    } catch (e) {
+      lastErr = e;
+      const msg =
+        typeof e === "string"
+          ? e
+          : ((e as { message?: string })?.message ?? "");
+      if (typeof msg === "string" && msg.includes("state not managed") && i < MAX - 1) {
+        await new Promise((r) => setTimeout(r, 120 * (i + 1)));
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr;
 }
 
 export const tracker = {

@@ -32,12 +32,9 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v0.7.9 更新（macOS 托盘单击修复 / 深色分段控件可见 / 设备名诊断加固）
-            - 🩹 macOS CPU 恒 0% 彻底修复（P0）：上版（v0.7.7）把根因误判为「sysctl 缓冲宽度写死 16 字节」，实际是 kern.cp_time 这个 OID 在 macOS 上根本不存在（BSD 专有），sysctlbyname 必返 ENOENT。现改用 macOS 原生 Mach API host_statistics(HOST_CPU_LOAD_INFO) 读取 CPU 累计 tick 差分
-            - 🩹 macOS 内存恒 0% 修复：sysctl(2)（MIB 整型数组）与 sysctlbyname(3)（名字符串）两个接口混用，内存总量取值失败恒 0。统一改用 sysctlbyname("hw.memsize") / ("hw.pagesize")
-            - 🧹 Windows / Linux 托盘回归纯品牌图标：剔除把 CPU / 网速指标文字画进 32×32 托盘图标的位图字体整套代码。关闭悬浮窗后托盘只显示品牌图，运行状态一律走悬浮窗；仅 macOS 用菜单栏（状态栏）显示
-            - 🔧 Windows 安装「写入错误」修复（P0）：应用常驻托盘且首次运行自动开启开机自启，覆盖安装时旧进程仍占用安装目录下的 exe，NSIS 写文件失败即弹「写入错误」。新增 NSIS 安装钩子，在覆盖安装前 / 卸载前自动结束当前用户正在运行的旧进程（最多 3 轮重试）后再拷贝文件
-            - 📝 设置页「状态栏」说明文案同步更新（不再提「托盘显示缩略数字」）
+            ### 屏幕时间管家 ScreenTime Pro — v0.7.10 更新（首屏竞态重试 / 设备名稳定显示）
+            - 🩹 首屏数据加载竞态修复（P1）：前端 invoke 封装层对 tauri「state not managed」瞬态错误做指数退避重试（最多 6 次），避免首屏挂载时偶发竞态导致首页设备切换器 / 概览数据永久为空（此前仅显示「全部设备」按钮）；本机验证 get_devices 稳定返回本机设备 DESKTOP-SV0FM39
+            - 📝 版本链路：v0.7.9 已含 macOS 托盘左键单击「只闪一下」修复、深色模式分段控件选中项可见修复、设备名诊断加固（名称空串兜底 + tracing 日志）；v0.7.10 在此基础上补强首屏竞态重试，确保升级后设备名稳定显示
             完整版本历史见仓库 README。
           releaseDraft: false
           prerelease: false
@@ -77,12 +74,9 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v0.7.9 更新（macOS 托盘单击修复 / 深色分段控件可见 / 设备名诊断加固）
-            - 🩹 macOS CPU 恒 0% 彻底修复（P0）：上版（v0.7.7）把根因误判为「sysctl 缓冲宽度写死 16 字节」，实际是 kern.cp_time 这个 OID 在 macOS 上根本不存在（BSD 专有），sysctlbyname 必返 ENOENT。现改用 macOS 原生 Mach API host_statistics(HOST_CPU_LOAD_INFO) 读取 CPU 累计 tick 差分
-            - 🩹 macOS 内存恒 0% 修复：sysctl(2)（MIB 整型数组）与 sysctlbyname(3)（名字符串）两个接口混用，内存总量取值失败恒 0。统一改用 sysctlbyname("hw.memsize") / ("hw.pagesize")
-            - 🧹 Windows / Linux 托盘回归纯品牌图标：剔除把 CPU / 网速指标文字画进 32×32 托盘图标的位图字体整套代码。关闭悬浮窗后托盘只显示品牌图，运行状态一律走悬浮窗；仅 macOS 用菜单栏（状态栏）显示
-            - 🔧 Windows 安装「写入错误」修复（P0）：应用常驻托盘且首次运行自动开启开机自启，覆盖安装时旧进程仍占用安装目录下的 exe，NSIS 写文件失败即弹「写入错误」。新增 NSIS 安装钩子，在覆盖安装前 / 卸载前自动结束当前用户正在运行的旧进程（最多 3 轮重试）后再拷贝文件
-            - 📝 设置页「状态栏」说明文案同步更新（不再提「托盘显示缩略数字」）
+            ### 屏幕时间管家 ScreenTime Pro — v0.7.10 更新（首屏竞态重试 / 设备名稳定显示）
+            - 🩹 首屏数据加载竞态修复（P1）：前端 invoke 封装层对 tauri「state not managed」瞬态错误做指数退避重试（最多 6 次），避免首屏挂载时偶发竞态导致首页设备切换器 / 概览数据永久为空（此前仅显示「全部设备」按钮）；本机验证 get_devices 稳定返回本机设备 DESKTOP-SV0FM39
+            - 📝 版本链路：v0.7.9 已含 macOS 托盘左键单击「只闪一下」修复、深色模式分段控件选中项可见修复、设备名诊断加固（名称空串兜底 + tracing 日志）；v0.7.10 在此基础上补强首屏竞态重试，确保升级后设备名稳定显示
             完整版本历史见仓库 README。
           releaseDraft: false
           prerelease: false
@@ -117,12 +111,9 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v0.7.9 更新（macOS 托盘单击修复 / 深色分段控件可见 / 设备名诊断加固）
-            - 🩹 macOS CPU 恒 0% 彻底修复（P0）：上版（v0.7.7）把根因误判为「sysctl 缓冲宽度写死 16 字节」，实际是 kern.cp_time 这个 OID 在 macOS 上根本不存在（BSD 专有），sysctlbyname 必返 ENOENT。现改用 macOS 原生 Mach API host_statistics(HOST_CPU_LOAD_INFO) 读取 CPU 累计 tick 差分
-            - 🩹 macOS 内存恒 0% 修复：sysctl(2)（MIB 整型数组）与 sysctlbyname(3)（名字符串）两个接口混用，内存总量取值失败恒 0。统一改用 sysctlbyname("hw.memsize") / ("hw.pagesize")
-            - 🧹 Windows / Linux 托盘回归纯品牌图标：剔除把 CPU / 网速指标文字画进 32×32 托盘图标的位图字体整套代码。关闭悬浮窗后托盘只显示品牌图，运行状态一律走悬浮窗；仅 macOS 用菜单栏（状态栏）显示
-            - 🔧 Windows 安装「写入错误」修复（P0）：应用常驻托盘且首次运行自动开启开机自启，覆盖安装时旧进程仍占用安装目录下的 exe，NSIS 写文件失败即弹「写入错误」。新增 NSIS 安装钩子，在覆盖安装前 / 卸载前自动结束当前用户正在运行的旧进程（最多 3 轮重试）后再拷贝文件
-            - 📝 设置页「状态栏」说明文案同步更新（不再提「托盘显示缩略数字」）
+            ### 屏幕时间管家 ScreenTime Pro — v0.7.10 更新（首屏竞态重试 / 设备名稳定显示）
+            - 🩹 首屏数据加载竞态修复（P1）：前端 invoke 封装层对 tauri「state not managed」瞬态错误做指数退避重试（最多 6 次），避免首屏挂载时偶发竞态导致首页设备切换器 / 概览数据永久为空（此前仅显示「全部设备」按钮）；本机验证 get_devices 稳定返回本机设备 DESKTOP-SV0FM39
+            - 📝 版本链路：v0.7.9 已含 macOS 托盘左键单击「只闪一下」修复、深色模式分段控件选中项可见修复、设备名诊断加固（名称空串兜底 + tracing 日志）；v0.7.10 在此基础上补强首屏竞态重试，确保升级后设备名稳定显示
             完整版本历史见仓库 README。
           releaseDraft: false
           prerelease: false
