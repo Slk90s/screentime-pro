@@ -54,19 +54,20 @@ pub struct AppState {
 /// 用途：设置页 `set_status_bar_config` / `set_system_metrics_enabled` 保存成功后
 /// 调用 `sync()` 同步菜单勾选态，防止「设置页改了、托盘菜单还挂旧勾」的显示不一致。
 /// CheckMenuItem 句柄是廉价 clone（内部同一 Arc），与菜单事件闭包里持有的 clone 互不冲突。
-/// 托盘菜单唯一的快捷开关句柄（悬浮指标条）。
-/// v0.7.6 初版曾含 状态栏/CPU/网速/内存 四项勾选；2026-09-10 按 Ryan 反馈精简：
-/// 指标勾选只保留在设置页「状态栏」卡片，托盘右键菜单仅留浮窗开关，避免重复冗长。
+/// 托盘菜单唯一的快捷开关句柄（**启用状态栏**总开关）。
+/// v0.7.6 初版曾含 状态栏/CPU/网速/内存 四项勾选；2026-09-10 按 Ryan 反馈精简为
+/// 「悬浮指标条」单项；v0.7.11（2026-09-14）再按 Ryan 反馈改为「启用状态栏」——
+/// 总开关才是用户心智里唯一的开关，浮窗开关退化为设置页内的细项。
 /// v0.7.7：旧的「内存子项仅 macOS 菜单存在」注释作废——内存/磁盘已三平台齐备，
 /// 且托盘菜单本身不再承载任何指标勾选。
-pub struct TrayFloatToggle {
-    pub float: tauri::menu::CheckMenuItem<tauri::Wry>,
+pub struct TrayStatusBarToggle {
+    pub status_bar: tauri::menu::CheckMenuItem<tauri::Wry>,
 }
 
-impl TrayFloatToggle {
-    /// 设置页改 float_enabled 后同步托盘菜单勾选态（反向：托盘勾选 → emit 事件刷设置页）
+impl TrayStatusBarToggle {
+    /// 设置页改 `enabled` 后同步托盘菜单勾选态（反向：托盘勾选 → emit 事件刷设置页）
     pub fn sync(&self, cfg: &commands::StatusBarConfig) {
-        let _ = self.float.set_checked(cfg.float_enabled);
+        let _ = self.status_bar.set_checked(cfg.enabled);
     }
 }
 
@@ -340,18 +341,19 @@ pub fn run() {
                     }
                 })
                 .ok();
-            // ===== v0.7.6（2026-09-10 精简）：托盘右键菜单 =「悬浮指标条 ✓ ─ 显示主窗口 / 退出」=====
-            // - 初版曾把 状态栏/CPU/网速/内存 四项勾选放进托盘菜单；Ryan 反馈（2026-09-10）：
-            //   托盘只留浮窗开关，指标勾选在设置页「状态栏」卡片里设计即可
-            // - 浮窗开关与设置页同源：写 AppState.status_bar_config + SQLite 持久化，
+            // ===== v0.7.11（2026-09-14）：托盘右键菜单 =「启用状态栏 ✓ ─ 显示主窗口 / 退出」=====
+            // - 历史沿革：v0.7.6 初版曾把 状态栏/CPU/网速/内存 四项勾选放进托盘菜单；
+            //   同日精简为单项「悬浮指标条」；2026-09-14 Ryan 反馈——托盘快捷项应当是
+            //   「启用状态栏」总开关（用户心智里的唯一开关），且勾选态必须与设置页一致。
+            // - 与设置页同源：写 AppState.status_bar_config + SQLite 持久化，
             //   toggle 后 emit status-bar-config-changed → 设置页即时刷新（双向同步）
             // - 菜单文案沿用硬编码中文（原生菜单不做 i18n，与既有约定一致）
             let sb_cfg = *app_state
                 .status_bar_config
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            let float_item = CheckMenuItemBuilder::with_id("toggle_float", "悬浮指标条")
-                .checked(sb_cfg.float_enabled)
+            let status_item = CheckMenuItemBuilder::with_id("toggle_status_bar", "启用状态栏")
+                .checked(sb_cfg.enabled)
                 .build(app)?;
             let sep = PredefinedMenuItem::separator(app)?;
             let show_item = MenuItemBuilder::with_id("show", "显示主窗口")
@@ -363,13 +365,13 @@ pub fn run() {
             // PredefinedMenuItem / MenuItem 混排必须显式 Vec<&dyn ...> 注解，
             // 否则数组字面量推断出单一具体类型而编译失败
             let tray_items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
-                vec![&float_item, &sep, &show_item, &quit_item];
+                vec![&status_item, &sep, &show_item, &quit_item];
             let tray_menu = Menu::with_items(app, &tray_items)?;
             // 勾选态句柄：CheckMenuItem 点击后不自动翻转，菜单事件里手动 set_checked
-            let float_toggle = float_item.clone();
+            let status_toggle = status_item.clone();
             // 设置页 → 托盘菜单方向的同步句柄：manage 后 commands 里 try_state 取用
             // （原始 item move 进 struct，菜单事件闭包用的是上面的 clone，互不影响）
-            app.manage(TrayFloatToggle { float: float_item });
+            app.manage(TrayStatusBarToggle { status_bar: status_item });
             let icon = app.default_window_icon().unwrap().clone();
             let tray_icon = TrayIconBuilder::with_id("statusbar")
                 .icon(icon)
@@ -391,20 +393,21 @@ pub fn run() {
                         }
                         app.exit(0);
                     }
-                    // v0.7.6：悬浮指标条开关（与设置页 set_status_bar_config 同一套持久化）。
-                    // 2026-09-10 精简：指标勾选已从托盘菜单移除，此处只处理浮窗开关
-                    "toggle_float" => {
+                    // v0.7.11（2026-09-14）：托盘「启用状态栏」总开关（与设置页
+                    // set_status_bar_config 同一套持久化）。
+                    // - 三端已统一为「指标只由悬浮指标条展示」，故打开总开关时顺手打开
+                    //   浮窗子项，避免「开了状态栏却什么都不显示」的死开关体验；
+                    //   关闭总开关则浮窗一并隐藏（可见态 = enabled && float_enabled）。
+                    // - emit status-bar-config-changed → 设置页即时刷新，勾选态与页面一致。
+                    "toggle_status_bar" => {
                         let state = app.state::<Arc<AppState>>();
                         let mut cfg = *state
                             .status_bar_config
                             .lock()
                             .unwrap_or_else(|e| e.into_inner());
-                        cfg.float_enabled = !cfg.float_enabled;
-                        // 2026-09-10：总开关统管后，托盘菜单勾浮窗时若「启用状态栏」还关着
-                        // → 顺手打开总开关（否则会出现「勾了浮窗却什么都不显示」的死开关体验；
-                        // emit 的 status-bar-config-changed 会把设置页一并刷成 enabled=true）
-                        if cfg.float_enabled && !cfg.enabled {
-                            cfg.enabled = true;
+                        cfg.enabled = !cfg.enabled;
+                        if cfg.enabled && !cfg.float_enabled {
+                            cfg.float_enabled = true;
                         }
                         match cfg.save(&state.db) {
                             Ok(()) => {
@@ -412,20 +415,21 @@ pub fn run() {
                                     .status_bar_config
                                     .lock()
                                     .unwrap_or_else(|e| e.into_inner()) = cfg;
-                                // 菜单勾选态不自动翻转，手动同步
-                                let _ = float_toggle.set_checked(cfg.float_enabled);
+                                // 菜单勾选态不自动翻转，手动同步（勾选 = enabled）
+                                let _ = status_toggle.set_checked(cfg.enabled);
                                 // 通知前端设置页刷新（托盘 ↔ 页面双向一致）
                                 let _ =
                                     app.emit_to("main", "status-bar-config-changed", cfg);
                                 // 同步显隐浮窗（不存在则幂等创建）
+                                let want = cfg.enabled && cfg.float_enabled;
                                 if let Err(e) =
-                                    float_window::set_float_visible(app, cfg.float_enabled)
+                                    float_window::set_float_visible(app, want)
                                 {
                                     tracing::error!(error = %e, "切换悬浮指标条失败");
                                 }
                             }
                             Err(e) => {
-                                tracing::error!(error = %e, "悬浮指标条开关持久化失败");
+                                tracing::error!(error = %e, "状态栏开关持久化失败");
                             }
                         }
                     }
@@ -475,43 +479,34 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
-            // ===== 后台线程：浮窗显隐管理 + macOS 菜单栏指标 =====
-            // v0.7.8（2026-09-11）按产品决策收敛（Ryan 反馈）：
-            // - **只有 macOS** 把指标写进原生菜单栏（`tray.set_title`，系统原生支持完整文字）；
-            // - **Windows / Linux 的托盘恒为品牌图标**——不再把文字画进 32x32 图标。
-            //   原 `system_load/tray_icon.rs`（5x7 位图字体手绘）已整体删除。
-            //   这两个平台的指标只在「悬浮指标条」里显示。
-            // 于是本线程只剩两件事：① 浮窗显隐（含全屏自动隐藏，全平台）；
-            // ② macOS 菜单栏文字刷新。非 macOS 完全不采样，零额外开销。
-            //
-            // 旧约定失效：v0.7.6 的「非 mac 必须 set_icon 画字 + set_title 当 tooltip」作废。
+            // ===== 后台线程：悬浮指标条显隐管理（三端统一）=====
+            // v0.7.11（2026-09-13）按产品决策收敛（Ryan 反馈）：
+            // - macOS 原「菜单栏文字指标」（`tray.set_title` 那一整套：TrayTitleConfig /
+            //   tray_title_with / tray_title / should_update / cache_snapshot）**整体移除**；
+            // - 三端现在完全一致：系统指标只由「悬浮指标条」（float 窗口）显示，托盘恒为品牌图标。
+            // - 旧约定失效：v0.7.8 的「仅 macOS 用原生菜单栏显示指标」作废——不再有任何平台
+            //   把指标写进托盘/菜单栏文字。
+            // 本线程只剩一件事：按 enabled && float_enabled 管理浮窗显隐（含全屏自动隐藏）。
             use std::time::Duration;
             let tray_clone = tray_icon.clone();
-            let sampler = app_state.metrics_sampler.clone();
             let state_clone = app_state.clone();
             std::thread::Builder::new()
-                .name("metrics-sampler".into())
+                .name("float-visibility".into())
                 .spawn(move || {
                     const POLL_INTERVAL_MS: u64 = 1000;
-                    // 非 macOS 不采样：托盘恒为品牌图标，指标由浮窗前端自己 1Hz 拉取
-                    #[cfg(not(target_os = "macos"))]
-                    let _ = &sampler;
-                    // v0.7.6：浮窗显隐状态缓存（只在翻转时调 show/hide，避免每秒无效调用）
+                    const IDLE_INTERVAL_MS: u64 = 5000;
+                    // 浮窗显隐状态缓存（只在翻转时调 show/hide，避免每秒无效调用）
                     let mut float_shown = false;
-                    // macOS：记录菜单栏当前是否已写入指标文字，翻转时置空一次
-                    #[cfg(target_os = "macos")]
-                    let mut tray_shown_metrics = false;
-                    #[cfg(target_os = "macos")]
-                    let mut slow_tick: u64 = 0;
                     loop {
                         let cfg = *state_clone
                             .status_bar_config
                             .lock()
                             .unwrap_or_else(|e| e.into_inner());
                         // 悬浮指标条显隐管理（全平台）。
-                        // 2026-09-10 语义修正：受「启用状态栏」总开关统管——enabled=false 时
-                        // 浮窗一并隐藏，消除「总开关关了浮窗还显示」的死开关困惑。
-                        // Windows 上前台全屏 → 自动隐藏，退出全屏恢复。
+                        // 受「启用状态栏」总开关统管——enabled=false 时浮窗一并隐藏，
+                        // 消除「总开关关了浮窗还显示」的死开关困惑。
+                        // 前台全屏 → 自动隐藏，退出全屏恢复
+                        // （fullscreen 检测 Windows 实装，macOS/Linux 为 false stub）。
                         if cfg.enabled && cfg.float_enabled {
                             let want_show =
                                 !system_load::fullscreen::foreground_is_fullscreen();
@@ -529,38 +524,12 @@ pub fn run() {
                             let handle = tray_clone.app_handle().clone();
                             let _ = float_window::set_float_visible(&handle, false);
                         }
-                        // macOS：唯一使用托盘文字的平台（菜单栏原生渲染完整指标）
-                        #[cfg(target_os = "macos")]
-                        {
-                            let visible = cfg.enabled && !cfg.float_enabled;
-                            if visible {
-                                slow_tick = slow_tick.wrapping_add(1);
-                                let title_cfg: system_load::TrayTitleConfig = cfg.into();
-                                let snap = sampler.sample_all();
-                                // 常规路径：数值有变化才写；每 60s 兜底强制写一次，
-                                // 防止休眠唤醒 / 菜单栏重排后 title 被系统丢掉、
-                                // 而 should_update 又判为「无变化」导致长时间不恢复。
-                                if sampler.should_update(&snap) || slow_tick % 60 == 0 {
-                                    let title = sampler.tray_title_with(&snap, &title_cfg);
-                                    let _ = tray_clone.set_title(Some(title));
-                                    sampler.cache_snapshot(snap);
-                                }
-                                tray_shown_metrics = true;
-                            } else if tray_shown_metrics {
-                                // 总开关关闭 / 切到浮窗模式 → 清空菜单栏文字
-                                let _ = tray_clone.set_title(Some(String::new()));
-                                tray_shown_metrics = false;
-                            }
-                        }
-                        // 轮询节奏：
-                        // - 浮窗可见 → 1s（前台全屏检测需要及时响应）
-                        // - macOS 状态栏可见 → 1s（菜单栏数值需要每秒刷新）
-                        // - 其余（Windows/Linux 关掉浮窗后）→ 5s 低频，几乎零开销
-                        let fast = cfg.enabled && (cfg.float_enabled || cfg!(target_os = "macos"));
+                        // 轮询节奏：浮窗可见 → 1s（前台全屏检测需要及时响应）；否则 5s 低频。
+                        let fast = cfg.enabled && cfg.float_enabled;
                         std::thread::sleep(Duration::from_millis(if fast {
                             POLL_INTERVAL_MS
                         } else {
-                            5000
+                            IDLE_INTERVAL_MS
                         }));
                     }
                 })

@@ -129,25 +129,22 @@ export default {
     autostartOn: "已开启",
     autostartOff: "已关闭",
     // v0.7.6：状态栏配置（总开关 + 子项；取代 v0.7.5 单字段 metricsTitle）
+    // v0.7.11（2026-09-13）：三端统一——指标只由「悬浮指标条」显示，托盘恒为品牌图标。
+    //   原「macOS 菜单栏文字 / Windows-Linux 浮窗」的平台差异说明文案（statusBarWinNote /
+    //   memMacOnly）已删除；statusBarDesc/Hint/FloatHint 改写为统一口径。
     statusBarTitle: "状态栏",
-    statusBarDesc: "macOS 在菜单栏实时显示系统指标；Windows / Linux 通过桌面悬浮指标条显示（托盘图标恒为品牌图标），1Hz 采样",
+    statusBarDesc: "在桌面悬浮指标条上实时显示系统指标（CPU / 内存 / 磁盘 / 网速），三端一致，1Hz 采样",
     statusBarEnabled: "启用状态栏",
     statusBarShowCpu: "显示 CPU 占用",
     statusBarShowMem: "显示内存占用",
-    // v0.7.7（2026-09-10）：磁盘占用（取系统盘）。此前磁盘仅有 macOS 采样且无开关
+    // v0.7.7（2026-09-10）：磁盘占用（取系统盘）
     statusBarShowDisk: "显示磁盘占用",
     statusBarShowNet: "显示网速",
     statusBarOn: "已开启",
     statusBarOff: "已关闭",
-    // v0.7.7：内存/磁盘已补齐三平台，原「仅 macOS 支持」说明作废
-    statusBarHint: "实时显示系统指标，CPU / 内存 / 磁盘 / 网速四项均为全平台支持（磁盘取系统盘）。",
-    // 已废弃（v0.7.7 起内存全平台可用）；保留以兼容旧版本缓存，勿删
-    memMacOnly: "仅 macOS 支持",
-    // v0.7.8（2026-09-11）：Windows / Linux 托盘不再显示任何指标（画字逻辑已整体删除），
-    // 托盘恒为品牌图标；这两个平台的指标只在悬浮指标条中展示；仅 macOS 用原生菜单栏显示。
-    statusBarWinNote: "Windows / Linux 的托盘图标恒为品牌图标、不显示任何数字。请通过下方「悬浮指标条」查看系统指标（需同时开启总开关与浮窗开关）；macOS 则显示在菜单栏。",
+    statusBarHint: "CPU / 内存 / 磁盘 / 网速四项三端均支持（磁盘取系统盘），勾选即时生效。",
     statusBarFloat: "悬浮指标条",
-    statusBarFloatHint: "桌面上常驻一块可拖拽的透明指标条，实时显示已勾选的指标（CPU / 内存 / 磁盘 / 网速），条宽随内容自动收缩，全屏时自动隐藏；受「启用状态栏」总开关控制。Windows / Linux 上这是唯一显示系统指标的地方。",
+    statusBarFloatHint: "桌面常驻一块可拖拽的透明指标条，实时显示已勾选的指标，宽度随内容自适应、全屏时自动隐藏；受「启用状态栏」总开关控制。",
     languageTitle: "语言",
     languageDesc: "选择界面显示语言，重启后保持",
     generalTitle: "通用",
@@ -167,7 +164,7 @@ export default {
     import: "导入合并",
     autoBackup: "自动备份（本地）",
     autoBackupDesc:
-      "每天自动把全量数据生成一份 JSON 备份到下方目录。把该目录里的文件复制到你自己的云盘 / 移动硬盘，即相当于「云备份」。卸载或换电脑后，再从云盘取回文件用上方「导入合并」恢复。",
+      "每天自动把全量数据备份为 JSON 到下方目录。把该目录的文件复制到你的云盘 / 移动硬盘即为「云备份」；换电脑后用上方「导入合并」恢复。",
     autoBackupOn: "启用每日自动备份",
     backupPath: "备份目录",
     backupPathPh: "未设置（默认存到应用数据目录下的 exports/）",
@@ -181,7 +178,7 @@ export default {
     backingUp: "备份中…",
     diag: "日志与诊断",
     diagHint:
-      "遇到问题需要反馈给开发者？导出应用日志到桌面，发给他即可。日志只包含错误摘要与应用切换统计，<strong>不包含窗口标题 / 聊天内容 / 密码等敏感信息</strong>。",
+      "需要反馈问题？导出日志到桌面发给开发者即可。日志仅含错误摘要与应用切换统计，<strong>不含窗口标题 / 聊天内容 / 密码等敏感信息</strong>。",
     logSize: "当前日志占用：<strong>{size}</strong>（生产环境默认 15MB 上限，3 天滚动）",
     exportLogs: "导出日志到桌面",
     openLogDir: "打开日志目录",
@@ -206,7 +203,7 @@ export default {
     logExportedMsg: "文件已保存到：\n{path}\n\n可发给开发者辅助排查问题。",
     pruneTitle: "按设备清理数据",
     pruneMsg:
-      "将删除下列选中设备【全部】sessions（不限 365 天）。\n\n系统会在删除前自动导出该设备的 JSON 备份到本机，便于误删时恢复。备份不会被自动删除，请记得手动复制到安全位置。",
+      "将删除选中设备【全部】记录（不限 365 天）。\n\n删除前会自动导出该设备的 JSON 备份到本机，便于误删恢复；备份不会自动删除，请手动复制到安全位置。",
     pruneAllConfirm: "清全部设备（> 365 天）",
     pruneNConfirm: "清理 {n} 台设备（全量）",
     loading: "加载中…",
@@ -258,7 +255,7 @@ export default {
     add: "＋ 新增规则",
     reclassify: "按规则重算历史",
     hint:
-      "采集到的应用会按「字段 + 匹配方式 + 匹配值」自动归入分类，无需导出后人工整理。优先级大的规则先匹配；窗口标题规则需 Windows 默认可取 / macOS 授予「屏幕录制」权限。v0.3.1 起，新增软件会自动加入清单（默认归入「其他」），可在弹窗里调整。",
+      "采集到的应用会按「字段 + 匹配方式 + 匹配值」自动归类，无需导出后人工整理。优先级大的规则先匹配；窗口标题规则需 Windows 默认可取 / macOS 授予「屏幕录制」权限。新增软件会自动加入清单（默认「其他」），可在弹窗调整。",
     colField: "字段",
     colMatch: "匹配方式",
     colPattern: "匹配值",

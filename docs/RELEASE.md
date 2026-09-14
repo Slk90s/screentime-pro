@@ -136,9 +136,9 @@ git add -A
 git commit -m "release: v0.7.10"
 
 # ⑤ 打 tag 并推送（这一步会触发 CI 三平台构建）
-git tag v0.7.10
+git tag v0.7.11
 git push origin main
-git push origin v0.7.10
+git push origin v0.7.11
 
 # ⑥ 观察 CI：https://github.com/Slk90s/screentime-pro/actions
 #    三平台全绿后，核对 Release 页面的 Notes 与产物

@@ -131,8 +131,11 @@ export default {
     autostartOn: "Enabled",
     autostartOff: "Disabled",
     // v0.7.6: Status bar config (master + sub-toggles; replaces v0.7.5 metricsTitle)
+    // v0.7.11 (2026-09-13): unified across all three platforms — metrics are shown only on the
+    // floating metrics bar; the tray is always the brand icon. The old macOS-menu-bar wording
+    // (statusBarWinNote / memMacOnly) was removed.
     statusBarTitle: "Status bar",
-    statusBarDesc: "Show system metrics in the macOS menu bar, or on a desktop float bar for Windows / Linux (the tray stays the brand icon), sampled at 1Hz",
+    statusBarDesc: "Show system metrics (CPU / memory / disk / network) on a desktop float bar, identical on all platforms, sampled at 1Hz",
     statusBarEnabled: "Enable status bar",
     statusBarShowCpu: "Show CPU usage",
     statusBarShowMem: "Show memory usage",
@@ -141,16 +144,9 @@ export default {
     statusBarShowNet: "Show network speed",
     statusBarOn: "Enabled",
     statusBarOff: "Disabled",
-    // v0.7.7: memory & disk are now supported on all three platforms
-    statusBarHint: "Real-time system metrics. CPU / memory / disk / network are supported on all platforms (disk = system volume).",
-    // Deprecated since v0.7.7 (memory now works everywhere); kept for old caches
-    memMacOnly: "macOS only",
-    // v0.7.8 (2026-09-11): Windows / Linux tray no longer shows any metrics (the icon-drawing
-    // code was removed); the tray is always the brand icon. Metrics on those platforms appear
-    // only in the floating bar; only macOS uses the native menu bar.
-    statusBarWinNote: "On Windows / Linux the tray icon is always the brand icon and shows no numbers. View system metrics via the Floating metrics bar below (enable both the master switch and the float toggle). On macOS they appear in the menu bar.",
+    statusBarHint: "CPU / memory / disk / network are supported on all three platforms (disk = system volume); changes apply instantly.",
     statusBarFloat: "Floating metrics bar",
-    statusBarFloatHint: "A draggable transparent metrics bar on your desktop showing the metrics you enable (CPU / memory / disk / network). It auto-sizes to its content and hides in fullscreen. Governed by the master switch. On Windows / Linux this is the only place metrics are shown.",
+    statusBarFloatHint: "A draggable transparent bar on your desktop showing the metrics you enable. It auto-sizes to its content and hides in fullscreen; governed by the master switch.",
     languageTitle: "Language",
     languageDesc: "Choose interface language, persists after restart",
     generalTitle: "General",
@@ -170,7 +166,7 @@ export default {
     import: "Import & merge",
     autoBackup: "Auto backup (local)",
     autoBackupDesc:
-      "Daily, a full JSON backup is written to the folder below. Copy those files to your own cloud drive / external disk — that is your \"cloud backup\". After reinstall or on a new computer, copy the file back and use \"Import & merge\" above to restore.",
+      "A full JSON backup is written daily to the folder below. Copy those files to your cloud drive / external disk — that is your \"cloud backup\"; restore via \"Import & merge\" above on a new machine.",
     autoBackupOn: "Enable daily auto-backup",
     backupPath: "Backup folder",
     backupPathPh: "Not set (defaults to exports/ under app data dir)",
@@ -184,7 +180,7 @@ export default {
     backingUp: "Backing up…",
     diag: "Logs & diagnostics",
     diagHint:
-      "Having issues? Export app logs to Desktop and send them to the developer. Logs include only error summaries and app-switch stats; <strong>no window titles / chat content / passwords</strong>.",
+      "Need to report an issue? Export logs to Desktop and send them to the developer. Logs contain only error summaries and app-switch stats; <strong>no window titles / chat content / passwords</strong>.",
     logSize: "Current log usage: <strong>{size}</strong> (default 15MB cap, 3-day rotation)",
     exportLogs: "Export logs to Desktop",
     openLogDir: "Open log folder",
@@ -211,7 +207,7 @@ export default {
       "File saved to:\n{path}\n\nSend to the developer to help diagnose issues.",
     pruneTitle: "Clean data by device",
     pruneMsg:
-      "This will delete ALL sessions of the selected devices (no 365-day limit).\n\nThe system auto-exports a JSON backup of each device before deletion for recovery. Backups are NOT auto-deleted; copy them to a safe place manually.",
+      "This deletes ALL records of the selected devices (no 365-day limit).\n\nA JSON backup of each device is auto-exported before deletion for recovery; backups are NOT auto-deleted, so copy them to a safe place manually.",
     pruneAllConfirm: "Clean all devices (> 365 days)",
     pruneNConfirm: "Clean {n} devices (full)",
     loading: "Loading…",
@@ -265,7 +261,7 @@ export default {
     add: "＋ Add rule",
     reclassify: "Recalculate by rules",
     hint:
-      "Collected apps are auto-assigned to a category by \"field + match type + match value\" — no manual editing after export. Higher priority matches first; window-title rules need Windows default access / macOS \"Screen Recording\" permission. Since v0.3.1, new apps auto-join the list (default \"Other\"), adjustable in the dialog.",
+      "Collected apps are auto-assigned by \"field + match type + match value\" — no manual editing after export. Higher priority matches first; window-title rules need Windows default access / macOS \"Screen Recording\" permission. New apps auto-join the list (default \"Other\"), adjustable in the dialog.",
     colField: "Field",
     colMatch: "Match type",
     colPattern: "Value",

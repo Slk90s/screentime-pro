@@ -23,7 +23,7 @@
 
 跨平台应用使用时长追踪（macOS / Windows / Linux），对标 iOS「屏幕使用时间」。**数据 100% 本地（SQLite bundled），零上传，隐私优先**。
 
-栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v0.7.10**（已发布，详见 [`RELEASE.md`](RELEASE.md)）。
+栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v0.7.11**（已发布，详见 [`RELEASE.md`](RELEASE.md)）。
 
 > ⚠️ 本节版本号在 v0.7.0 → v0.7.5 期间**长期未更新**（曾停留在 v0.7.0），与 `tauri.conf.json` 脱节。
 > 版本号唯一真实来源是 **`src-tauri/tauri.conf.json` 的 `version`**，改版本时务必回来同步本节。
@@ -72,7 +72,7 @@
 | `db/models.rs` | 所有 DTO（前后端对接处） | `src/types.ts` |
 | **`classifier.rs`** (~181 行) | **分类规则引擎（纯逻辑，不依赖 DB）**：给定 `classification_rules` 规则 + 应用 → 分类 id。规则由上层内存缓存后传入 | 规则匹配语义。**`pattern` 与 `value` 两侧都必须小写化**，否则 `equals` 永不命中（v0.6.2-beta.17 踩坑） |
 | `categorizer.rs` (~347 行) | 兜底自动归类：本地字典（60+ 软件）+ Wikipedia API + LRU 缓存 → `other`。**同步实现！** | 采样循环性能 |
-| **`system_load/`** (~472 行) | **v0.7.5 新增**：`MetricsSampler` 统一指标采样器，macOS 托盘显示 CPU / 内存 / 磁盘占用率（1s 采样、磁盘 30s 缓存、变化 <1% 不重绘托盘）。Win/Linux 默认隐藏 | 仅 macOS 托盘，不影响采样主流程 |
+| **`system_load/`** | **v0.7.5 新增**：`MetricsSampler` 统一指标采样器，产原始系统指标（CPU / 内存 / 磁盘 / 网速，1s 采样、磁盘 30s 缓存）。**三端统一**只由「悬浮指标条」展示（v0.7.11 起；原 macOS 菜单栏文字指标 `set_title` 已整体移除） | 只影响悬浮指标条，不影响采样主流程 |
 | `logging.rs` | 统一日志订阅器 | 日志路径 / 级别 |
 
 > **`classifier.rs` 与 `categorizer.rs` 是两个不同东西**，勿混淆：
@@ -214,7 +214,7 @@ Rust 端在 `commands.rs` / `pet/` 定义，**在 `lib.rs` 的 `generate_handler
 | 数据管理 | `export_all` / `export_data` / `import_data` / `prune_data` / `backup_and_prune_device` / `get_backup_config` / `save_backup_config` / `run_backup_now` | 导出导入、清理、本地自动备份 |
 | 多设备 | `get_devices` / `list_devices_with_stats` | 多设备合并 |
 | 桌宠（`pet::`） | `create_pet_window` / `show_pet_window` / `hide_pet_window` / `move_pet_window` / `set_pet_cursor_passthrough` / `create_pet_menu_window` / `show_pet_menu_window` / `hide_pet_menu_window` / `move_pet_menu_window` | 桌宠窗口 + 右键菜单窗口（共 9 个） |
-| 系统指标 | `get_system_metrics` / `get_system_metrics_enabled` / `set_system_metrics_enabled` | v0.7.5 新增，macOS 托盘 CPU/内存/磁盘 |
+| 系统指标 | `get_system_metrics` / `get_system_metrics_enabled` / `set_system_metrics_enabled` / `get_status_bar_config` / `set_status_bar_config` | CPU/内存/磁盘/网速，三端统一由悬浮指标条展示（v0.7.11 起） |
 | 权限 | `check_permissions` / `open_privacy_settings` | macOS 辅助功能 |
 | 环境 | `check_webview2` / `open_webview2_download` / `reveal_path` | Windows WebView2 检测等 |
 | 元 | `check_for_update` / `open_url` / `export_logs` / `get_log_size` / `get_log_dir` | 升级、日志导出 |
@@ -406,7 +406,7 @@ src-tauri/
     ├── db/              ← SQLite（mod 1148 行 / models）
     ├── classifier.rs    ← 分类规则引擎（纯逻辑，不依赖 DB）
     ├── categorizer.rs   ← 兜底归类：字典 + Wikipedia + LRU（必须同步实现）
-    ├── system_load/     ← v0.7.5 macOS 托盘系统指标（mod / macos / linux / windows / metrics）
+    ├── system_load/     ← 系统指标采样（mod / macos / linux / windows / metrics / network / fullscreen），三端统一由悬浮指标条展示
     ├── logging.rs
     └── error.rs
 

@@ -1080,8 +1080,8 @@ pub fn set_status_bar_config(
     config.save(&state.db).map_err(|e| e.to_string())?;
     *state.status_bar_config.lock().unwrap_or_else(|e| e.into_inner()) = config;
     // v0.7.6：设置页改动 → 托盘菜单勾选态即时同步（防「页面改了、菜单还挂旧勾」）。
-    // 2026-09-10 精简：托盘菜单只剩悬浮指标条一个勾选项，sync 只刷它
-    if let Some(toggles) = app.try_state::<crate::TrayFloatToggle>() {
+    // v0.7.11（2026-09-14）：托盘菜单唯一勾选项已改为「启用状态栏」总开关，sync 刷 enabled
+    if let Some(toggles) = app.try_state::<crate::TrayStatusBarToggle>() {
         toggles.sync(&config);
     }
     // v0.7.6：浮窗可见态翻转 → 显隐浮窗（幂等创建；透明空窗 show 不可见，无白闪）
@@ -1129,8 +1129,9 @@ pub fn set_system_metrics_enabled(
     cfg.enabled = enabled;
     cfg.save(&state.db).map_err(|e| e.to_string())?;
     *state.status_bar_config.lock().unwrap_or_else(|e| e.into_inner()) = cfg;
-    // v0.7.6：旧兼容命令同样同步托盘菜单勾选态（2026-09-10 精简后仅悬浮指标条）
-    if let Some(toggles) = app.try_state::<crate::TrayFloatToggle>() {
+    // v0.7.6：旧兼容命令同样同步托盘菜单勾选态
+    // v0.7.11（2026-09-14）：勾选项已改为「启用状态栏」（enabled），sync 随之刷新
+    if let Some(toggles) = app.try_state::<crate::TrayStatusBarToggle>() {
         toggles.sync(&cfg);
     }
     let old_shown = old_enabled && old_float;

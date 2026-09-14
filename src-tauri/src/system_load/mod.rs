@@ -15,13 +15,18 @@
 //!   - 复用 CpuMonitor 的 CPU 采样
 //!   - 复用 NetworkSampler 的网络采样（v0.7.6）
 //!   - 内存 / 磁盘：三平台各自实现（详见 metrics.rs 的平台矩阵）
-//!   - 单线程 1Hz 采样，结果驱动 macOS 菜单栏 title
+//!   - 单线程 1Hz 采样，结果驱动「悬浮指标条」（三端统一，v0.7.11 起）
 //!
 //! ⚠️ v0.7.8（2026-09-11）删除 `tray_icon` 模块：
 //!   它曾在 Windows / Linux 把指标文字**手绘进 32x32 托盘图标**（5x7 位图字体），
 //!   用以弥补 `tray.set_title` 在非 mac 平台不可见的缺口。现按产品决策移除——
 //!   **Windows / Linux 的托盘恒为品牌图标**，系统指标只在「悬浮指标条」里显示；
 //!   仅 macOS 使用原生菜单栏文字（`set_title`）。旧约定（非 mac 必须 set_icon 画字）作废。
+//!
+//! ⚠️ v0.7.11（2026-09-13）进一步统一三端：
+//!   macOS 原「菜单栏文字指标」（`tray.set_title` + `TrayTitleConfig`）**整体移除**，
+//!   三端现在完全一致——指标只由「悬浮指标条」显示，托盘恒为品牌图标。
+//!   故本模块不再 re-export `TrayTitleConfig`。
 
 use std::sync::Mutex;
 
@@ -43,10 +48,7 @@ mod metrics;
 pub mod fullscreen;
 
 pub use metrics::MetricsSampler;
-// TrayTitleConfig 只有 macOS 菜单栏（set_title）路径在用；非 mac 平台不再拼托盘文字
-// （v0.7.8 起），因此该 re-export 必须同样加 cfg 门，否则 Windows 侧报 unused import。
-#[cfg(target_os = "macos")]
-pub use metrics::TrayTitleConfig;
+// TrayTitleConfig 已随 macOS 菜单栏文字指标一并删除（v0.7.11），此处不再 re-export。
 // NetworkSampler / NetworkSnapshot / MetricsSnapshot 仅在 system_load 内部使用，
 // 不在 crate 外部 re-export（避免 unused_imports 警告；如需外部使用可在此添加）
 

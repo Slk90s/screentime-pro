@@ -5,7 +5,13 @@
 //! - 复用 CpuMonitor 的 CPU 采样（零重复代码）
 //! - 网络采样：v0.7.6 新增 NetworkSampler，跨平台
 //! - 单线程统一调度：1s 采 CPU/内存/网络，磁盘采后缓存避免频繁枚举
-//! - 采样结果直接驱动托盘 title / 托盘图标 / 悬浮指标条，绕开往返开销
+//! - 采样结果只驱动「悬浮指标条」——float 窗口前端（FloatBar.vue）1Hz 调
+//!   `get_system_metrics` 拉取原始 MetricsSnapshot 自行渲染；Rust 侧不再拼文字。
+//!
+//! ⚠️ v0.7.11（2026-09-13）：macOS「菜单栏文字指标」整套移除——原
+//! `TrayTitleConfig` / `tray_title_with` / `tray_title` / `should_update` /
+//! `cache_snapshot` / `format_bps` 及 `MetricsInner.last_snapshot` 已删除。
+//! 三端统一只用悬浮指标条。旧约定（macOS 用 `tray.set_title` 显示指标）作废。
 //!
 //! ## 内存口径（对齐各平台「活动监视器 / 任务管理器」）
 //! - macOS：available = (free + inactive + speculative) × page_size；used = total - available
@@ -99,7 +105,6 @@ struct MetricsInner {
     /// 磁盘容量缓存（30s 有效）——v0.7.7 起跨平台（Windows/Linux 同样需要缓存）
     last_disk: Option<(u64, u64)>,
     last_disk_secs: u64,
-    last_snapshot: Option<MetricsSnapshot>,
 }
 
 impl MetricsSampler {
@@ -114,7 +119,6 @@ impl MetricsSampler {
                 memory_total: 0,
                 last_disk: None,
                 last_disk_secs: 0,
-                last_snapshot: None,
             }),
         }
     }
@@ -153,75 +157,10 @@ impl MetricsSampler {
         }
     }
 
-    /// 拼装托盘 title；v0.7.6 起支持按 config 选择显示哪些项
-    ///
-    /// v0.7.7：内存段由「编译期平台常量」改为**运行时判据**（`memory_total_bytes > 0`），
-    /// 采样失败（系统调用被拒）时自动隐藏，不再出现无意义的 "M0"。
-    pub fn tray_title_with(&self, snap: &MetricsSnapshot, cfg: &TrayTitleConfig) -> String {
-        if !cfg.enabled {
-            return String::new();
-        }
-        let mut parts: Vec<String> = Vec::new();
-        if cfg.show_cpu {
-            let cpu = (snap.cpu_usage * 100.0).round() as u32;
-            parts.push(format!("C{}", cpu));
-        }
-        if cfg.show_mem && snap.memory_total_bytes > 0 {
-            let mem = (snap.memory_usage * 100.0).round() as u32;
-            parts.push(format!("M{}", mem));
-        }
-        if cfg.show_disk && snap.disk_total_bytes > 0 {
-            let disk = (snap.disk_usage * 100.0).round() as u32;
-            parts.push(format!("D{}", disk));
-        }
-        if cfg.show_net {
-            // 方向语义：rx=下行/接收(in)，tx=上行/发送(out)。通用惯例 下载↓ 上传↑。
-            parts.push(format!(
-                "↓{} ↑{}",
-                format_bps(snap.net_rx_bps),
-                format_bps(snap.net_tx_bps)
-            ));
-        }
-        parts.join(" ")
-    }
-
-    /// 兼容旧调用（v0.7.5 形式）：三项全显示
-    pub fn tray_title(&self, snap: &MetricsSnapshot) -> String {
-        self.tray_title_with(
-            snap,
-            &TrayTitleConfig {
-                enabled: true,
-                show_cpu: true,
-                show_mem: true,
-                show_disk: false,
-                show_net: true,
-            },
-        )
-    }
-
-    pub fn should_update(&self, snap: &MetricsSnapshot) -> bool {
-        let inner = match self.inner.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        if let Some(ref last) = inner.last_snapshot {
-            let d_cpu = ((snap.cpu_usage - last.cpu_usage).abs() * 100.0).round() as u32;
-            let d_mem = ((snap.memory_usage - last.memory_usage).abs() * 100.0).round() as u32;
-            // 网速差 > 2KB/s 才视为变化（避免空闲态 0.1K 抖动引发频繁重绘）
-            let d_net_rx = (snap.net_rx_bps - last.net_rx_bps).abs() as u64;
-            let d_net_tx = (snap.net_tx_bps - last.net_tx_bps).abs() as u64;
-            if d_cpu < 1 && d_mem < 1 && d_net_rx < 2048 && d_net_tx < 2048 {
-                return false;
-            }
-        }
-        true
-    }
-
-    pub fn cache_snapshot(&self, snap: MetricsSnapshot) {
-        if let Ok(mut inner) = self.inner.lock() {
-            inner.last_snapshot = Some(snap);
-        }
-    }
+    // v0.7.11（2026-09-13）：原 tray_title_with / tray_title / should_update / cache_snapshot
+    // 四个方法随 macOS 菜单栏文字指标（tray.set_title）**整体移除**——三端已统一只用
+    // 「悬浮指标条」展示系统指标，不再有任何平台把指标拼成文字写进托盘/菜单栏。
+    // ⚠️ 不要在此重新引入「拼文字给托盘/菜单栏」的逻辑；指标展示只走 float_window。
 
     // ============================================================
     // 内存采样（v0.7.7 起三平台齐备）
@@ -312,50 +251,11 @@ impl MetricsSampler {
 }
 
 // ============================================================
-// 托盘 title 配置（v0.7.6 引入；与 StatusBarConfig 解耦，sampler 不依赖 settings 表）
+// v0.7.11（2026-09-13）：原 `TrayTitleConfig` 结构体与
+// `impl From<StatusBarConfig> for TrayTitleConfig` 已随托盘文字指标一并删除。
+// 采样器不再需要「显示哪些项」的配置——指标展示完全交给前端 FloatBar.vue
+// （它直接读 StatusBarConfig 的 show_* 开关），Rust 侧只产原始 MetricsSnapshot。
 // ============================================================
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct TrayTitleConfig {
-    pub enabled: bool,
-    pub show_cpu: bool,
-    pub show_mem: bool,
-    /// v0.7.7 新增：磁盘占用
-    pub show_disk: bool,
-    pub show_net: bool,
-}
-
-impl From<crate::commands::StatusBarConfig> for TrayTitleConfig {
-    fn from(c: crate::commands::StatusBarConfig) -> Self {
-        Self {
-            enabled: c.enabled,
-            show_cpu: c.show_cpu,
-            show_mem: c.show_mem,
-            show_disk: c.show_disk,
-            show_net: c.show_net,
-        }
-    }
-}
-
-// ============================================================
-// 字节/秒格式化（K / M / G）
-// ============================================================
-
-fn format_bps(bps: f64) -> String {
-    if !bps.is_finite() || bps < 0.0 {
-        return "0B".to_string();
-    }
-    if bps < 1024.0 {
-        return format!("{}B", bps.round() as u64);
-    }
-    if bps < 1024.0 * 1024.0 {
-        return format!("{:.1}K", bps / 1024.0);
-    }
-    if bps < 1024.0 * 1024.0 * 1024.0 {
-        return format!("{:.1}M", bps / 1024.0 / 1024.0);
-    }
-    format!("{:.1}G", bps / 1024.0 / 1024.0 / 1024.0)
-}
 
 // ============================================================
 // macOS 专属 FFI（v0.7.5 原有代码迁移至 impl 外部，加 cfg 门）
@@ -698,15 +598,6 @@ struct VmStats64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn format_bps_scales_and_clamps() {
-        assert_eq!(format_bps(0.0), "0B");
-        assert_eq!(format_bps(-5.0), "0B");
-        assert_eq!(format_bps(512.0), "512B");
-        assert_eq!(format_bps(2048.0), "2.0K");
-        assert_eq!(format_bps(3.0 * 1024.0 * 1024.0), "3.0M");
-    }
 
     #[test]
     fn cpu_usage_is_a_fraction() {

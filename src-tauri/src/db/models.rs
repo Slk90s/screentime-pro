@@ -1,3 +1,15 @@
+//! db/models.rs
+//! IPC 与导出用的数据传输对象（DTO）集合——后端返回给前端 / 写入备份 JSON 的结构体定义。
+//!
+//! 约定：
+//! - 这些结构体**只做序列化**（`#[derive(Serialize)]`），不参与数据库表映射；
+//!   数据库实体与 SQL 在 `db/mod.rs`，命令层在 `commands.rs`。
+//! - 字段命名沿用 DB/API 的 `snake_case`（见 CONVENTIONS-screentime-pro.md 四层命名），
+//!   由全局拦截器约定透传，**勿改成 camelCase**。
+//! - `ExportBundle` 三件套（`ExportApp` / `ExportSession` / `ExportBundle`）是备份 JSON 的
+//!   对外契约，字段增删需同步 `commands::import_data` 的解析逻辑与 `docs/`。
+//! - `MetricsOut` 的百分比字段是 **0.0~1.0 分数**，前端展示须 ×100（见 metrics.rs 教训）。
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize)]

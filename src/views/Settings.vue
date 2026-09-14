@@ -190,8 +190,6 @@
             />
           </div>
           <p class="field-hint">{{ t("settings.statusBarHint") }}</p>
-          <!-- v0.7.8（2026-09-11）：非 mac 平台托盘恒为品牌图标（不再画指标），此提示改为引导用户走悬浮指标条 -->
-          <p v-if="!isMac" class="field-hint platform-note">{{ t("settings.statusBarWinNote") }}</p>
 
           <!-- v0.7.6：悬浮指标条（2026-09-10 起受「启用状态栏」总开关统管，随子项一并置灰；
                可拖拽，全屏自动隐藏。旧设计「独立于总开关」作废——死开关体验，见 CHANGELOG） -->
@@ -851,10 +849,8 @@ const exportDialogOpen = ref(false);
 // ============ v0.7.6：状态栏配置（总开关 + 子项）============
 // v0.7.7（2026-09-10）：内存与磁盘采样已补齐三平台，不再按平台禁用子项
 //（旧版用于禁用内存项的 isMac 判据与后端 MEMORY_SUPPORTED 编译期常量一并作废）。
-// v0.7.8（2026-09-11）：Windows / Linux 托盘改为恒显示品牌图标（画字逻辑已从
-// Rust 侧整体剔除），因此 isMac 只用来切换「指标显示在哪里」的说明文案：
-// 非 mac → 提示走悬浮指标条；mac → 提示显示在菜单栏。
-const isMac = /Mac|iPhone|iPod|iPad/i.test(navigator.platform || navigator.userAgent || "");
+// v0.7.11（2026-09-13）：三端统一只用「悬浮指标条」——macOS 原菜单栏文字指标已从
+// Rust 侧整体移除，故不再需要 isMac 判据来切换平台说明文案（原 isMac 常量已删除）。
 const statusBarConfig = ref<StatusBarConfig>({
   enabled: false,
   show_cpu: true,
