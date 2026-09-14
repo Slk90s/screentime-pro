@@ -5,7 +5,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](https://github.com/)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-0.7.10-blue)](./release)
+[![Version](https://img.shields.io/badge/version-0.7.11-blue)](./release)
 
 ---
 
