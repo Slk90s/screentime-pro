@@ -70,3 +70,4 @@ CHANGELOG.md
 
 # WorkBuddy / agent 记忆（不随仓库开源）
 .workbuddy/
+.tmp-ocr/

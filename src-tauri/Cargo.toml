@@ -53,6 +53,8 @@ arboard = "3"
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png"] }
 tauri-plugin-global-shortcut = "2"
+ort = { version = "2.0.0-rc.13", features = ["load-dynamic"] }
+ndarray = "0.17.2"
 
 # ---- macOS 专属依赖（对齐 Tauri 2.x 引入的 objc2 0.6，避免重复编译）----
 [target.'cfg(target_os = "macos")'.dependencies]

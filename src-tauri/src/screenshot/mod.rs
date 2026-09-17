@@ -27,6 +27,7 @@
 //!
 
 mod ocr;
+mod ocr_onnx;
 
 use crate::AppState;
 use base64::Engine as _;
