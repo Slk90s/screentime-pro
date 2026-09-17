@@ -63,3 +63,17 @@ CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT
 );
+
+-- ===== v0.8.0（2026-09-16）：屏幕截图索引 =====
+-- 只存元信息，图片本体落在 <app_data_dir>/screenshots/ 下（保持 DB 轻量、可 VACUUM）。
+-- rel_path 为相对 screenshots/ 目录的文件名，换机器/换目录时只需移动目录即可。
+CREATE TABLE IF NOT EXISTS screenshots (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  file_name  TEXT NOT NULL,
+  width      INTEGER NOT NULL,
+  height     INTEGER NOT NULL,
+  bytes      INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  device     TEXT NOT NULL DEFAULT 'default'
+);
+CREATE INDEX IF NOT EXISTS idx_screenshots_created ON screenshots(created_at);

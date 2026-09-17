@@ -13,7 +13,6 @@ use crate::error::TrackerError;
 use crate::tracker::platform::{PlatformTracker, RawApp};
 use std::path::Path;
 use std::os::raw::{c_uint, c_void};
-use windows::Win32::Foundation::*;
 use windows::Win32::System::Threading::{
     OpenProcess, PROCESS_QUERY_INFORMATION,
     PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
@@ -109,7 +108,9 @@ extern "system" {
 ///   分类规则的「pid-N」假路径入库）；process_name 始终有值（fallback 用 pid-N 形式）
 unsafe fn get_process_path(pid: u32) -> (Option<String>, String) {
     // 策略1：标准权限 + PSAPI GetModuleFileNameExW
-    if let Ok(handle) = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid) {
+    // v0.8.0（2026-09-16）：windows crate 0.58 → 0.62 后 OpenProcess 的 bInheritHandle
+    // 形参类型由 windows_core::BOOL 改为原生 bool，故 `FALSE` 常量改传 `false`。
+    if let Ok(handle) = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid) {
         let mut buf = [0u16; 1024];
         let hproc = handle.0 as *mut c_void; // HANDLE → 原始指针
         let n = GetModuleFileNameExW(hproc, std::ptr::null_mut(), buf.as_mut_ptr(), buf.len() as u32);
@@ -124,7 +125,8 @@ unsafe fn get_process_path(pid: u32) -> (Option<String>, String) {
     }
 
     // 策略2：受限权限 + Kernel32 QueryFullProcessImageNameW
-    if let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) {
+    // v0.8.0：同上，bInheritHandle 传 bool
+    if let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
         let mut buf = [0u16; 1024];
         let mut size: u32 = buf.len() as u32;
         let ok = QueryFullProcessImageNameW(

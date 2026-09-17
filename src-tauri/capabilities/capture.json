@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "capture",
+  "description": "截图遮罩窗权限：前端 show/hide + 事件监听（Rust 自定义命令本身无需逐条放行）",
+  "windows": ["capture"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-close",
+    "core:event:allow-listen"
+  ]
+}

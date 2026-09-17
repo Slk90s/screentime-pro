@@ -222,3 +222,17 @@ pub struct MetricsOut {
     pub net_rx_bps: f64,
     pub net_tx_bps: f64,
 }
+
+/// v0.8.0（2026-09-16）：截图历史条目。
+///
+/// 图片本体落在 `<app_data_dir>/screenshots/`，本表只存索引（保持 DB 轻量）。
+/// 字段名即 IPC 返回值（Tauri v2 不转换返回值），前端按 snake_case 读取。
+#[derive(Debug, Clone, Serialize)]
+pub struct ScreenshotOut {
+    pub id: i64,
+    pub file_name: String,
+    pub width: u32,
+    pub height: u32,
+    pub bytes: i64,
+    pub created_at: String,
+}

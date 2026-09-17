@@ -9,11 +9,16 @@
     否则写了也会被 git 忽略（这是本文件"消失了还被引用"的直接原因）。
   - 2026-09-04 @v0.7.5: 修正 - ARCHITECTURE §5 与 README 中"完整列表见 RELEASE.md"一类
     交叉引用，统一指向本文件；本文件与 README 版本历史表保持一致。
+  - 2026-09-14 @v0.7.11: 修正 - 头部「最后更新」推进至 v0.7.11；示例版本号（0.7.5 / 0.7.10）
+    统一为当前版；§3.1 删除已失效的「三份 releaseBody 仍是 v0.7.0 旧文案」表述（现为 v0.7.11 文案）；
+    产物文件名由连字符更正确为点号（`ScreenTime.Pro_*`）；§7 版本历史表由止于 v0.7.5 补齐到 v0.7.11。
+  - 2026-09-16 @v0.8.0: 修正 - 头部「最后更新」推进至 v0.8.0；示例版本号统一为 0.8.0；
+    §3.1 现值说明更新为「v0.8.0 文案」；§7 版本历史表补 v0.8.0 行（截图 + 桌宠点击穿透）。
 -->
 
 > 目的：定义 **版本号从哪来、发版前改哪些地方、CI 怎么跑、出问题怎么回滚**。
 > 与 README 区别：README 是用户面（去哪下载、每个版本有什么），本文件是维护者面（怎么发出去）。
-> 最后更新：2026-09-13（对账 v0.7.10 实际状态）
+> 最后更新：2026-09-16（对账 v0.8.0 实际状态）
 
 ---
 
@@ -28,7 +33,7 @@
 ```json
 // src-tauri/tauri.conf.json
 {
-  "version": "0.7.5"   // ← 改这里，其他都是同步
+  "version": "0.8.0"   // ← 改这里，其他都是同步
 }
 ```
 
@@ -38,21 +43,23 @@
 |---|------|--------------|------|
 | 1 | `src-tauri/tauri.conf.json` → `version` | ✅ **决定 tag / 产物名** | 唯一真实来源 |
 | 2 | `package.json` → `version` | ❌ 不影响 | 需与 #1 一致，否则前端 `getVersion()` 与安装包名对不上 |
-| 3 | `README.md` → 顶部 Version 徽章 | ❌ | 用户第一眼看到的版本号 |
-| 4 | `README.md` → 版本历史表新增一行 | ❌ | 用户判断要不要升级的依据 |
-| 5 | `docs/ARCHITECTURE.md` → 头部版本声明 | ❌ | 维护者面，易遗漏 |
-| 6 | `CHANGELOG.md`（本地，不入库）→ 追加 | ❌ | 详细变更留底 |
+| 3 | `package-lock.json` → `version`（根节点 + `packages[""].version` 两处） | ❌ | 与 package.json 保持一致 |
+| 4 | `README.md` → 顶部 Version 徽章 | ❌ | 用户第一眼看到的版本号 |
+| 5 | `README.md` → 版本历史表新增一行 | ❌ | 用户判断要不要升级的依据 |
+| 6 | `docs/ARCHITECTURE.md` → 头部版本声明 | ❌ | 维护者面，易遗漏 |
+| 7 | `CHANGELOG.md`（本地，不入库）→ 追加 | ❌ | 详细变更留底 |
 
 一键核对（应只剩「预期版本」一种输出）：
 
 ```bash
 grep -rn '"version"' src-tauri/tauri.conf.json package.json
+grep -n '"version"' package-lock.json | head -3
 grep -n 'badge/version' README.md
 ```
 
 ### 1.2 ⚠️ `src-tauri/Cargo.toml` 的 `version` **不在**同步范围内
 
-当前 `Cargo.toml` 是 `version = "0.1.0"`，与 `tauri.conf.json` 的 `0.7.5` 长期脱节。
+当前 `Cargo.toml` 是 `version = "0.1.0"`，与 `tauri.conf.json` 的 `0.8.0` 长期脱节。
 **这是已知且无害的**：Tauri 2 的打包版本、DMG/NSIS 文件名、Git tag 全部取自
 `tauri.conf.json`，Cargo 版本号不参与。
 
@@ -97,10 +104,11 @@ grep -n 'badge/version' README.md
 `.github/workflows/build.yml` 中三个 job（windows / linux / macos）**各写了一份**
 `releaseBody`，内容是**硬编码的字符串**，不会自动跟着版本变。
 
-**当前仓库里的三份 `releaseBody` 仍是 v0.7.0 的旧文案**（"整合 0.6.2 全部 Beta 修复"、
-日历月视图、喂食系统修复等），与 v0.7.5 的 macOS 状态栏指标毫无关系。
+**当前仓库的三份 `releaseBody` 已是 v0.8.0 的文案**（v0.7.6 起每版发版时同步改写）。
+历史教训：v0.7.5 及以前长期停留在 v0.7.0 的旧文案（"整合 0.6.2 全部 Beta 修复"、
+日历月视图、喂食系统修复等），与当版内容完全无关。
 
-> 后果：若直接打 `v0.7.6` 的 tag 而不改这里，线上 Release Notes 会显示 v0.7.0 的内容，
+> 后果：若打新版 tag 却忘了改这里，线上 Release Notes 会显示**上一版**的内容，
 > 用户看到的更新说明完全错误。
 
 **发版前必须**：把三处 `releaseBody` 全部替换为 §5 的 NOTES 模板内容。建议三份保持一致
@@ -112,7 +120,7 @@ grep -n 'badge/version' README.md
 |------|------|
 | macOS job 里 `release: false` | Release 由 **Windows / Linux** job 创建；macOS job 先注入门禁修复脚本，再用 `gh release upload --clobber` 覆盖上传 DMG |
 | macOS job 会等待 Release 就绪 | 轮询 `gh release view`，最多等 30 × 10s ≈ 5 分钟，超时则该步失败（DMG 不会更新） |
-| 产物文件名 | `ScreenTime-Pro_{ver}_aarch64.dmg` / `_x64-setup.exe` / `_amd64.AppImage` / `.deb` |
+| 产物文件名 | `ScreenTime.Pro_{ver}_aarch64.dmg` / `ScreenTime.Pro_{ver}_x64-setup.exe` / `ScreenTime.Pro_{ver}_amd64.AppImage` / `ScreenTime.Pro_{ver}_amd64.deb` / `ScreenTime.Pro-{ver}-1.x86_64.rpm` |
 | DMG 内被额外注入了文件 | `修复门禁.command` + `首次打开必读.txt`（无 Apple 公证，靠 `xattr -dr com.apple.quarantine` 绕过 Gatekeeper） |
 | 触发方式 | push `v*` tag，或 `workflow_dispatch` 手动触发 |
 
@@ -122,8 +130,8 @@ grep -n 'badge/version' README.md
 
 ```bash
 # ① 改版本号（唯一真实来源）
-#    src-tauri/tauri.conf.json → version: "0.7.10"
-#    同步 package.json / README 徽章 / README 版本历史表 / ARCHITECTURE 头部
+#    src-tauri/tauri.conf.json → version: "0.8.0"
+#    同步 package.json / package-lock.json / README 徽章 / README 版本历史表 / ARCHITECTURE 头部
 
 # ② 改写 build.yml 三处 releaseBody（§3.1，最容易漏）
 
@@ -133,12 +141,12 @@ npm run tauri build
 
 # ④ 提交
 git add -A
-git commit -m "release: v0.7.10"
+git commit -m "release: v0.8.0"
 
 # ⑤ 打 tag 并推送（这一步会触发 CI 三平台构建）
-git tag v0.7.11
+git tag v0.8.0
 git push origin main
-git push origin v0.7.11
+git push origin v0.8.0
 
 # ⑥ 观察 CI：https://github.com/Slk90s/screentime-pro/actions
 #    三平台全绿后，核对 Release 页面的 Notes 与产物
@@ -165,9 +173,9 @@ git push origin v0.7.11
 **📦 下载**
 | 平台 | 文件 |
 |------|------|
-| macOS (Apple Silicon) | `ScreenTime-Pro_X.Y.Z_aarch64.dmg` |
-| Windows (x64) | `ScreenTime-Pro_X.Y.Z_x64-setup.exe` |
-| Linux (x64) | `ScreenTime-Pro_X.Y.Z_amd64.AppImage` / `.deb` |
+| macOS (Apple Silicon) | `ScreenTime.Pro_X.Y.Z_aarch64.dmg` |
+| Windows (x64) | `ScreenTime.Pro_X.Y.Z_x64-setup.exe` |
+| Linux (x64) | `ScreenTime.Pro_X.Y.Z_amd64.AppImage` / `ScreenTime.Pro_X.Y.Z_amd64.deb` |
 
 > macOS 首次打开若提示「已损坏」，请先拖入「应用程序」，再右键打开 DMG 内的
 > 「修复门禁.command」。完整版本历史见仓库 README。
@@ -233,7 +241,15 @@ echo "   git push origin main && git push origin v$NEW"
 
 | 版本 | 发布时间 | 状态 | 关键说明 |
 |------|----------|------|----------|
+| **v0.8.0** | 2026-09-16 | ✨ 功能版 | **屏幕截图（新功能）**：全局快捷键 `CmdOrCtrl+Shift+A` 唤起遮罩式全屏选区，仿 QQ 浮动工具栏（保存 / 全屏 / 圆角 / 阴影 / 确认 / 取消），**截图默认进剪贴板**，本地历史 FIFO（超限移入回收站）；新增 `screenshot/` 模块、`capture` 窗口、`screenshots` 表、10 个 IPC 命令。**桌宠点击穿透修复（P0）**：整窗开关改为 32×32 alpha 命中网格 + 全局光标轮询（`pet/hit_mask.rs`）。**macOS 前台全屏真识别**（`CGWindowListCopyWindowInfo` + `CGDisplayBounds`）。依赖 `windows` 0.58→0.62，新增 `xcap` / `arboard` / `image` / `tauri-plugin-global-shortcut` |
+| **v0.7.11** | 2026-09-14 | 🚀 正式版 | 三端统一悬浮指标条（macOS 菜单栏文字指标整体移除）+ 托盘快捷项改「启用状态栏」总开关并与设置页双向同步 + 死代码清理（约 140 行 + 单测） |
+| **v0.7.10** | 2026-09-13 | 🩹 修复版 | 首屏竞态重试（P1，`invoke` 层对「state not managed」瞬态错误指数退避最多 6 次）+ 设备名稳定显示 |
+| **v0.7.9** | 2026-09-13 | 🩹 修复版 | macOS 托盘左键单击「只闪一下」修复（P0）+ 深色模式分段控件选中项可见修复（P1）+ Windows 设备名诊断加固 |
+| **v0.7.8** | 2026-09-11 | 🩹 修复版 | macOS CPU / 内存恒 0% 连环修复（P0，改用 Mach `host_statistics` / `sysctlbyname`）+ Windows / Linux 托盘回归纯品牌图 + Windows 安装「写入错误」NSIS 钩子修复（P0） |
+| **v0.7.7** | 2026-09-10 | 🩹 修复版 | macOS 闪退修复（P0，`statfs` 栈越界写）+ Windows 首启闪命令框修复 + Win/Linux 补齐内存与磁盘指标 + 浮窗数值漏乘 100 修正 + panic 兜底钩子 |
+| **v0.7.6** | 2026-09-10 | 🚀 正式版 | 状态栏指标体系跨平台落地：悬浮指标条 + 托盘画字 + 托盘右键快捷菜单 + 设置页状态栏卡片；新增 `float_window` / `fullscreen` / `tray_icon` / `network` 模块与 `get/set_status_bar_config` |
 | **v0.7.5** | 2026-08-23 | 🚀 正式版 | macOS 状态栏系统指标（CPU / 内存 / 磁盘），`MetricsSampler` 1s 采样、磁盘 30s 缓存，变化 <1% 不重绘托盘；新增 `get/set_system_metrics_enabled`、`get_system_metrics`。Win/Linux 隐藏该功能 |
+| **v0.7.4** | 2026-08-18 | 🚀 正式版 | 日历月视图 + 本月统计概括；桌宠喂食系统修复（饱食度随喂食 / 衰减变化 + 反馈动画）；桌面频繁抖动修复；中英双语同步 |
 | **v0.7.3** | 2026-08-13 | 🚀 正式版 | macOS 日志/导出修复 + 桌宠开关同步 + macOS 拖拽跟手 + DMG 门禁脚本正式生效 |
 | **v0.7.2** | 2026-08-09 | 旧版 | 本地自动备份 + macOS 门禁修复 + 设备 ID 稳定化 |
 | **v0.7.1** | 2026-08-08 | 旧版 | v0.7.0 的修复重发：补齐缺失入库的桌宠皮肤源码资产 |

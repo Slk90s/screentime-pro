@@ -115,6 +115,39 @@ export default {
     game: "Games",
     other: "Other",
   },
+  // ===== v0.8.0 (2026-09-16): screenshots =====
+  shot: {
+    confirm: "Confirm and copy to clipboard",
+    cancel: "Cancel",
+    save: "Save to history",
+    copy: "Copy to clipboard only",
+    fullscreen: "Full screen",
+    undo: "Undo",
+    toolRect: "Rectangle",
+    toolArrow: "Arrow",
+    toolPen: "Pen",
+    toolMosaic: "Mosaic (redact)",
+    toolText: "Text",
+    ocr: "Extract text (offline)",
+    ocrBusy: "Recognizing…",
+    ocrEmpty: "No text found — try shrinking the selection around the text",
+    ocrCopy: "Copy text",
+    ocrCopied: "Copied",
+    ocrStale: "Selection changed",
+    close: "Close",
+    radiusShadow: "Corner radius & shadow",
+    radius: "Radius",
+    shadow: "Shadow",
+    strength: "Redact strength",
+    strengthWeak: "Low",
+    strengthMedium: "Medium",
+    strengthStrong: "High",
+    textPlaceholder: "Type text, Enter to confirm",
+    hint: "Drag to select · Click = full screen · Enter to copy · Esc to cancel",
+    toastCopied: "Copied to clipboard — paste with Ctrl+V",
+    toastSaved: "Saved to screenshot history",
+    toastBoth: "Copied to clipboard and saved to history",
+  },
   settings: {
     deviceData: "Device & data",
     deviceName: "Device name",
@@ -130,6 +163,38 @@ export default {
     autostart: "Launch at startup",
     autostartOn: "Enabled",
     autostartOff: "Disabled",
+    // v0.8.0 (2026-09-16): screenshots
+    shotTitle: "Screenshots",
+    shotDesc:
+      "Take a screenshot with a global shortcut; the selection goes to your clipboard by default. Images stay on this machine (never uploaded).",
+    shotEnabled: "Enable screenshots",
+    shotShortcut: "Screenshot shortcut",
+    shotShortcutHint:
+      "Click the button, then just press the key combination you want (at least one of Ctrl / Alt / Shift / Win). Win+Shift+S is deliberately avoided (reserved by the built-in Windows Snipping Tool); pick another combo if it reports a conflict.",
+    shotShortcutRecording: "Press a key combination…",
+    shotShortcutNeedModifier:
+      "A shortcut needs at least one modifier (Ctrl / Alt / Shift / Win / ⌘), otherwise it would swallow a plain key.",
+    shotShortcutConflict:
+      "That combination is taken by the system or another app; registration failed and the previous shortcut was kept. Reason:",
+    shotAutoSave: "Also save to history on confirm",
+    shotAutoSaveHint:
+      "Off by default: confirm (✓ / Enter) only copies. When on, every confirm also writes a file into the screenshots folder.",
+    shotExportStyle: "Default export style",
+    shotRadius: "Default corner radius",
+    shotShadow: "Default drop shadow",
+    shotRadiusHint:
+      "Only the initial value for new captures; you can change radius and shadow anytime from the toolbar while capturing.",
+    shotMaxCount: "History limit",
+    shotMaxCountHint:
+      "Older screenshots move to the system trash (not permanently deleted).",
+    shotDir: "Screenshots folder",
+    shotOpenDir: "Open folder",
+    shotNow: "Capture now",
+    shotHistory: "Screenshot history",
+    shotHistoryEmpty: "No screenshots yet",
+    shotDelete: "Delete",
+    shotReveal: "Show file",
+    shotShortcutReset: "Reset shortcut",
     // v0.7.6: Status bar config (master + sub-toggles; replaces v0.7.5 metricsTitle)
     // v0.7.11 (2026-09-13): unified across all three platforms — metrics are shown only on the
     // floating metrics bar; the tray is always the brand icon. The old macOS-menu-bar wording

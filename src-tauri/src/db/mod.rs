@@ -1031,6 +1031,94 @@ pub fn prune_old(
         )?;
         Ok(())
     }
+
+    // ===== v0.8.0（2026-09-16）：截图索引 CRUD =====
+    // 设计：DB 只存元信息，PNG 本体落在 <app_data_dir>/screenshots/。
+    // 删除走「先查文件名 → 调用方移入回收站 → 再删行」，避免文件删了行还在（或反之）。
+
+    /// 新增一条截图索引，返回自增 id
+    pub fn insert_screenshot(
+        &self,
+        file_name: &str,
+        width: u32,
+        height: u32,
+        bytes: i64,
+        created_at: &str,
+        device: &str,
+    ) -> rusqlite::Result<i64> {
+        let conn = self.0.lock().unwrap();
+        conn.execute(
+            "INSERT INTO screenshots (file_name, width, height, bytes, created_at, device)
+             VALUES (?1,?2,?3,?4,?5,?6)",
+            params![file_name, width, height, bytes, created_at, device],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// 截图历史（按时间倒序，限量）
+    pub fn list_screenshots(&self, limit: u32) -> rusqlite::Result<Vec<ScreenshotOut>> {
+        let conn = self.0.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, file_name, width, height, bytes, created_at
+             FROM screenshots ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], |r| {
+            Ok(ScreenshotOut {
+                id: r.get(0)?,
+                file_name: r.get(1)?,
+                width: r.get(2)?,
+                height: r.get(3)?,
+                bytes: r.get(4)?,
+                created_at: r.get(5)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// 取单条截图的文件名（缩略图 / 定位文件用）
+    pub fn screenshot_file_name(&self, id: i64) -> rusqlite::Result<Option<String>> {
+        let conn = self.0.lock().unwrap();
+        conn.query_row(
+            "SELECT file_name FROM screenshots WHERE id=?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()
+    }
+
+    /// 删除一条截图索引，返回其文件名（调用方负责把文件移入回收站）
+    pub fn delete_screenshot(&self, id: i64) -> rusqlite::Result<Option<String>> {
+        let conn = self.0.lock().unwrap();
+        let name: Option<String> = conn
+            .query_row(
+                "SELECT file_name FROM screenshots WHERE id=?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if name.is_some() {
+            conn.execute("DELETE FROM screenshots WHERE id=?1", params![id])?;
+        }
+        Ok(name)
+    }
+
+    /// FIFO 清理：保留最新 keep 条，返回超出需删除的 (id, file_name) 列表
+    pub fn screenshots_exceeding(&self, keep: u32) -> rusqlite::Result<Vec<(i64, String)>> {
+        let conn = self.0.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, file_name FROM screenshots
+             WHERE id NOT IN (SELECT id FROM screenshots ORDER BY id DESC LIMIT ?1)",
+        )?;
+        let rows = stmt.query_map(params![keep], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect()
+    }
+
+    /// 删除指定 id（FIFO 清理用，不返回文件名）
+    pub fn delete_screenshot_by_id(&self, id: i64) -> rusqlite::Result<()> {
+        let conn = self.0.lock().unwrap();
+        conn.execute("DELETE FROM screenshots WHERE id=?1", params![id])?;
+        Ok(())
+    }
 }
 
 /// CSV 字段转义（含逗号/引号/换行时用双引号包裹并转义内部引号）

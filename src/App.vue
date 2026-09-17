@@ -23,6 +23,8 @@
   <PetMenuWindow v-else-if="isPetMenuWindow" />
   <!-- v0.7.6 悬浮指标条独立 webview 分支：透明置顶指标条（label='float'） -->
   <FloatBar v-else-if="isFloatWindow" />
+  <!-- v0.8.0 截图遮罩独立 webview 分支：全屏透明遮罩 + QQ 式工具栏（label='capture'） -->
+  <CaptureOverlay v-else-if="isCaptureWindow" />
   <div v-else class="app">
     <!-- 顶部栏：品牌 + 实时记录指示（启动即自动追踪，无需手动开关） -->
     <header class="topbar">
@@ -67,6 +69,12 @@
     <main>
       <Dashboard />
     </main>
+
+    <!-- v0.8.0：截图完成提示（剪贴板优先，故文案强调「直接粘贴」；落盘则补一句已保存） -->
+    <div v-if="shotToast" class="shot-toast">
+      <span class="shot-toast-icon">✓</span>
+      <span>{{ shotToast }}</span>
+    </div>
   </div>
 </template>
 
@@ -91,6 +99,8 @@ const isPetWindow = currentLabel === "pet";
 const isPetMenuWindow = currentLabel === "pet-menu";
 // v0.7.6 悬浮指标条窗口检测：label 是 'float' 时只渲染 FloatBar
 const isFloatWindow = currentLabel === "float";
+// v0.8.0 截图遮罩窗口检测：label 是 'capture' 时只渲染 CaptureOverlay
+const isCaptureWindow = currentLabel === "capture";
 
 // 仅在桌宠窗口引入 PetWindow 组件，避免主窗口打包
 import PetWindow from "./pet/PetWindow.vue";
@@ -98,10 +108,12 @@ import PetWindow from "./pet/PetWindow.vue";
 import PetMenuWindow from "./pet/PetMenuWindow.vue";
 // v0.7.6：悬浮指标条分支
 import FloatBar from "./float/FloatBar.vue";
+// v0.8.0：截图遮罩分支
+import CaptureOverlay from "./screenshot/CaptureOverlay.vue";
 import Dashboard from "./views/Dashboard.vue";
 import { tracker } from "./api/tracker";
 import { formatDuration } from "./utils/format";
-import type { CurrentForegroundOut, PermissionStatus } from "./types";
+import type { CurrentForegroundOut, PermissionStatus, ScreenshotResult } from "./types";
 
 const { t } = useI18n();
 
@@ -126,6 +138,9 @@ const permDismissed = ref(false);
 const webview2 = ref<{ os: string; available: boolean; version: string; hint: string } | null>(null);
 // 用户手动关闭了 WebView2 横幅
 const webview2Dismissed = ref(false);
+// v0.8.0：截图完成 toast 文案（空 = 不显示）
+const shotToast = ref("");
+let toastTimer: number | undefined;
 let timer: number | undefined;
 // Tauri focus 事件监听器 unlisten 函数
 let unlistenFocus: (() => void) | null = null;
@@ -213,6 +228,19 @@ onMounted(async () => {
     // 唤起后立即拉取一次最新前台应用/已记录时长，避免看到 stale 数据
     await listen("tray-shown", () => {
       refreshLive();
+    });
+    // v0.8.0：截图完成（复制 / 落盘 / 两者）→ 主窗口右下角轻提示，
+    // 遮罩窗此刻已收起，用户需要在这里看到「已经进剪贴板了」的确认。
+    await listen<ScreenshotResult>("screenshot-done", (ev) => {
+      const r = ev.payload;
+      shotToast.value =
+        r.copied && r.saved
+          ? t("shot.toastBoth")
+          : r.saved
+            ? t("shot.toastSaved")
+            : t("shot.toastCopied");
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = window.setTimeout(() => (shotToast.value = ""), 2600);
     });
   } catch { /* 非 Tauri 环境 */ }
 

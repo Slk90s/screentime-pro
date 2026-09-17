@@ -11,6 +11,8 @@
 //! 修改历史：
 //!   - 2026-07-17 @v0.6.0-beta.1: 初始创建 - 创建/显示/隐藏/移动/鼠标穿透 5 个命令
 //!   - 2026-07-17 @v0.6.0-beta.1: 修复 - 创建时默认 set_ignore_cursor_events(false)，桌宠可交互
+//!   - 2026-09-16 @v0.8.0: hide_pet_window 补发 pet-hidden 事件（前端据此暂停气泡计时）；
+//!     鼠标穿透改由 pet/hit_mask.rs 按身体 alpha 网格动态管理（本文件只保留创建时默认值与手动开关）
 //!
 
 use tauri::{AppHandle, Emitter, LogicalPosition, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -72,6 +74,10 @@ pub async fn hide_pet_window(app: AppHandle) -> Result<(), String> {
         .get_webview_window(PET_WINDOW_LABEL)
         .ok_or_else(|| "pet 窗口尚未创建".to_string())?;
     window.hide().map_err(|e| format!("隐藏 pet 窗口失败: {e}"))?;
+    // v0.8.0：与 show 对称地广播 pet-hidden。
+    // 用途：前端据此暂停随机气泡计时（旧实现隐藏后计时仍在跑，纯空耗），
+    // 以及让「全屏隐藏」逻辑知道当前是否已隐藏（避免重复 show/hide）。
+    let _ = app.emit_to(PET_WINDOW_LABEL, "pet-hidden", ());
     Ok(())
 }
 

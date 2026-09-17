@@ -208,6 +208,145 @@
       </div>
     </div>
 
+    <!-- ============ 屏幕截图（v0.8.0）============ -->
+    <div class="setting-card">
+      <div class="card-head">
+        <div class="head-icon icon-pink">
+          <AppIcon name="crop" :size="20" />
+        </div>
+        <div class="head-text">
+          <h3>{{ t("settings.shotTitle") }}</h3>
+          <p>{{ t("settings.shotDesc") }}</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="form-row row between">
+          <label>{{ t("settings.shotEnabled") }}</label>
+          <label class="toggle-switch" :class="{ on: shotConfig.enabled }">
+            <input type="checkbox" :checked="shotConfig.enabled" @change="onShotEnabled($event)" />
+            <span class="toggle-slider" />
+            <span class="toggle-state">
+              {{ shotConfig.enabled ? t("settings.statusBarOn") : t("settings.statusBarOff") }}
+            </span>
+          </label>
+        </div>
+
+        <div class="sub-zone" :class="{ disabled: !shotConfig.enabled }">
+          <!-- 快捷键：点击后**直接按下组合键**即录入。
+               v0.8.0 初版是个纯文本框，用户按组合键时修饰键不产生字符 → 看起来"设置不了"；
+               而且当时 Rust 无论注册成败都返回成功，填了被占用的组合也显示"已设置"，
+               实际快捷键是死的 → 这就是「快捷键无法设置」的两条根因。 -->
+          <div class="form-row row between">
+            <label>{{ t("settings.shotShortcut") }}</label>
+            <div class="hotkey-row">
+              <button
+                ref="hotkeyBtnEl"
+                class="hotkey-btn"
+                :class="{ recording: hotkeyRecording, invalid: !!hotkeyError }"
+                :disabled="!shotConfig.enabled"
+                @click="startHotkeyRecording"
+                @blur="stopHotkeyRecording"
+                @keydown="onHotkeyKeydown"
+              >
+                <template v-if="hotkeyRecording">{{ hotkeyPreview || t("settings.shotShortcutRecording") }}</template>
+                <template v-else>{{ formatHotkey(shotConfig.shortcut) }}</template>
+              </button>
+              <button class="ghost-btn" :disabled="!shotConfig.enabled" @click="resetHotkey">
+                {{ t("settings.shotShortcutReset") }}
+              </button>
+            </div>
+          </div>
+          <p v-if="hotkeyError" class="field-hint field-hint--error">{{ hotkeyError }}</p>
+          <p class="field-hint">{{ t("settings.shotShortcutHint") }}</p>
+
+          <div class="form-row row between">
+            <label>{{ t("settings.shotAutoSave") }}</label>
+            <input
+              type="checkbox"
+              class="check-input"
+              :checked="shotConfig.auto_save"
+              :disabled="!shotConfig.enabled"
+              @change="onShotToggle($event, 'auto_save')"
+            />
+          </div>
+          <p class="field-hint">{{ t("settings.shotAutoSaveHint") }}</p>
+
+          <p class="zone-title">{{ t("settings.shotExportStyle") }}</p>
+          <div class="form-row row between">
+            <label>{{ t("settings.shotRadius") }} · {{ shotConfig.corner_radius }}px</label>
+            <input
+              v-model.number="shotConfig.corner_radius"
+              class="range-input"
+              type="range"
+              min="0"
+              max="40"
+              step="2"
+              :disabled="!shotConfig.enabled"
+              @change="persistShotConfig"
+            />
+          </div>
+          <div class="form-row row between">
+            <label>{{ t("settings.shotShadow") }}</label>
+            <input
+              type="checkbox"
+              class="check-input"
+              :checked="shotConfig.shadow"
+              :disabled="!shotConfig.enabled"
+              @change="onShotToggle($event, 'shadow')"
+            />
+          </div>
+          <p class="field-hint">{{ t("settings.shotRadiusHint") }}</p>
+
+          <div class="form-row row between">
+            <label>{{ t("settings.shotMaxCount") }}</label>
+            <input
+              v-model.number="shotConfig.max_count"
+              class="text-input narrow"
+              type="number"
+              min="10"
+              max="5000"
+              :disabled="!shotConfig.enabled"
+              @change="persistShotConfig"
+            />
+          </div>
+          <p class="field-hint">{{ t("settings.shotMaxCountHint") }}</p>
+
+          <div class="form-row row between">
+            <label>{{ t("settings.shotDir") }}</label>
+            <div class="dir-row">
+              <span class="path-text" :title="shotDir">{{ shotDir || "—" }}</span>
+              <button class="ghost-btn" @click="openShotDir">{{ t("settings.shotOpenDir") }}</button>
+            </div>
+          </div>
+
+          <div class="form-row row between">
+            <label>{{ t("settings.shotNow") }}</label>
+            <button class="primary-btn" :disabled="!shotConfig.enabled" @click="onShotNow">
+              {{ t("settings.shotNow") }}
+            </button>
+          </div>
+        </div>
+
+        <!-- 截图历史（缩略图按需拉取，避免一次把 200 张全读进内存） -->
+        <p class="zone-title">{{ t("settings.shotHistory") }}</p>
+        <p v-if="shotHistory.length === 0" class="field-hint">{{ t("settings.shotHistoryEmpty") }}</p>
+        <div v-else class="shot-grid">
+          <figure v-for="s in shotHistory" :key="s.id" class="shot-item">
+            <img v-if="shotThumbs[s.id]" class="shot-img" :src="shotThumbs[s.id]" :alt="s.file_name" />
+            <div v-else class="shot-img shot-img--empty"></div>
+            <figcaption class="shot-cap">
+              <span class="shot-meta">{{ s.width }}×{{ s.height }} · {{ formatBytes(s.bytes) }}</span>
+              <span class="shot-meta shot-date">{{ s.created_at.slice(0, 16).replace("T", " ") }}</span>
+              <span class="shot-actions">
+                <button class="ghost-btn" @click="revealShot(s.id)">{{ t("settings.shotReveal") }}</button>
+                <button class="danger-btn" @click="deleteShot(s.id)">{{ t("settings.shotDelete") }}</button>
+              </span>
+            </figcaption>
+          </figure>
+        </div>
+      </div>
+    </div>
+
     <!-- ============ 设备 ID ============ -->
     <div class="setting-card">
       <div class="card-head">
@@ -613,7 +752,7 @@
 //   4. 桌宠卡含 开关 / 操作按钮 / 皮肤 / 编辑器入口
 //   5. 危险区改为独立卡片，警示色
 
-import { ref, onMounted, onBeforeUnmount, computed } from "vue";
+import { ref, onMounted, onBeforeUnmount, computed, nextTick } from "vue";
 import { useI18n } from "vue-i18n";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
@@ -622,6 +761,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import Modal from "../components/Modal.vue";
 import AppIcon from "../components/AppIcon.vue";
 import { tracker } from "../api/tracker";
+import { screenshot, DEFAULT_SCREENSHOT_CONFIG } from "../api/screenshot";
 import { i18n, setLocale, type Locale } from "../i18n";
 import type {
   BackupConfig,
@@ -629,6 +769,8 @@ import type {
   SettingsOut,
   StatusBarConfig,
   UpdateInfo,
+  ScreenshotConfig,
+  ScreenshotOut,
 } from "../types";
 import { formatDuration } from "../utils/format";
 import { petStore } from "../pet/stores/petStore";
@@ -901,6 +1043,256 @@ async function onStatusBarItem(
   }
 }
 const exportPath = ref("");
+
+// ============ v0.8.0：屏幕截图（配置 + 历史）============
+// 设计：所有改动即时持久化（与状态栏卡片同款「乐观更新 + 失败回滚」），
+// 不设「保存」按钮——截图是轻量高频操作，用户不希望改个圆角还要点保存。
+const shotConfig = ref<ScreenshotConfig>({ ...DEFAULT_SCREENSHOT_CONFIG });
+const shotDir = ref("");
+const shotHistory = ref<ScreenshotOut[]>([]);
+/** id → 缩略图 data URL（按需拉取；文件缺失的条目不会进这张表） */
+const shotThumbs = ref<Record<number, string>>({});
+
+async function loadShotConfig() {
+  try {
+    shotConfig.value = await screenshot.getConfig();
+    shotDir.value = await screenshot.dir();
+  } catch (err) {
+    console.warn("[Settings] 加载截图配置失败", err);
+  }
+}
+
+/** 数值类改动：先乐观写 ref，再 await IPC，失败则回读真实配置纠偏 */
+async function persistShotConfig() {
+  const snapshot = { ...shotConfig.value };
+  try {
+    const res = await screenshot.setConfig(snapshot);
+    if (!res.applied && snapshot.enabled) {
+      // 快捷键没注册上（被系统/其他软件占用）——其余配置已保存，只是热键没生效
+      hotkeyError.value = t("settings.shotShortcutConflict") + " " + (res.error ?? "");
+      await loadShotConfig();
+    }
+  } catch (err) {
+    showAlert("warn", t("settings.shotTitle"), err instanceof Error ? err.message : String(err));
+    await loadShotConfig();
+  }
+}
+
+// ===== v0.8.0 修订：快捷键「按键录制」控件 =====
+// 交互：点一下按钮进入录制态 → 直接按下想要的组合键 → 自动归一化成 global-hotkey 语法并保存；
+// 保存后 Rust 会把**真实注册结果**带回来，被占用则红字提示并回滚到原组合（不用让用户猜）。
+const hotkeyRecording = ref(false);
+const hotkeyError = ref("");
+/** 录制中只按了修饰键时的实时预览（如 "Ctrl + Shift + …"） */
+const hotkeyPreview = ref("");
+const hotkeyBtnEl = ref<HTMLButtonElement | null>(null);
+
+const IS_MAC =
+  typeof navigator !== "undefined" &&
+  /mac/i.test(`${navigator.platform} ${navigator.userAgent}`);
+
+/** 把存储语法（CmdOrCtrl+Shift+A）渲染成用户看得懂的按键标签 */
+function formatHotkey(s: string): string {
+  if (!s) return "—";
+  const parts = s.split("+").map((p) => p.trim()).filter(Boolean);
+  const out: string[] = [];
+  for (const p of parts) {
+    const u = p.toUpperCase();
+    if (["CMDORCTRL", "CMDORCONTROL", "COMMANDORCTRL", "COMMANDORCONTROL"].includes(u)) {
+      out.push(IS_MAC ? "⌘" : "Ctrl");
+    } else if (["SUPER", "CMD", "COMMAND", "META"].includes(u)) {
+      out.push(IS_MAC ? "⌘" : "Win");
+    } else if (u === "CTRL" || u === "CONTROL") {
+      out.push(IS_MAC ? "⌃" : "Ctrl");
+    } else if (u === "ALT" || u === "OPTION") {
+      out.push(IS_MAC ? "⌥" : "Alt");
+    } else if (u === "SHIFT") {
+      out.push(IS_MAC ? "⇧" : "Shift");
+    } else {
+      out.push(p.length === 1 ? p.toUpperCase() : p);
+    }
+  }
+  return out.join(IS_MAC ? "" : " + ");
+}
+
+function startHotkeyRecording() {
+  hotkeyRecording.value = true;
+  hotkeyPreview.value = "";
+  hotkeyError.value = "";
+  // macOS 上点击按钮不会自动获得焦点（Safari/WKWebView 行为），
+  // 不主动 focus 的话 keydown 会派发到 document，录制看起来"没反应"。
+  void nextTick(() => hotkeyBtnEl.value?.focus());
+}
+
+function stopHotkeyRecording() {
+  hotkeyRecording.value = false;
+  hotkeyPreview.value = "";
+}
+
+/** 修饰键 → global-hotkey 记号。Ctrl 统一记成 CmdOrCtrl，让配置能跨平台复用 */
+function modifierTokens(e: KeyboardEvent): string[] {
+  const out: string[] = [];
+  if (e.ctrlKey) out.push("CmdOrCtrl");
+  if (e.metaKey) out.push("Super");
+  if (e.altKey) out.push("Alt");
+  if (e.shiftKey) out.push("Shift");
+  return out;
+}
+
+/** 主键 → global-hotkey 记号；返回 null 表示「只是按了修饰键」或该键无法表达 */
+function mainToken(e: KeyboardEvent): string | null {
+  const k = e.key;
+  if (["Control", "Shift", "Alt", "Meta", "AltGraph", "CapsLock"].includes(k)) return null;
+  if (k === " ") return "Space";
+  // '+' 是语法分隔符，无法表达；让用户换一个键而不是静默写入一个永远解析失败的字符串
+  if (k === "+") return null;
+  if (/^Arrow(Up|Down|Left|Right)$/.test(k)) return k.slice(5);
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(k)) return k.toUpperCase();
+  if (k.length === 1) return k.toUpperCase();
+  if (["Enter", "Tab", "Backspace", "Delete", "Home", "End", "PageUp", "PageDown", "Insert", "PrintScreen"].includes(k)) {
+    return k;
+  }
+  return null;
+}
+
+async function onHotkeyKeydown(e: KeyboardEvent) {
+  if (!hotkeyRecording.value) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.key === "Escape") {
+    stopHotkeyRecording();
+    return;
+  }
+  const mods = modifierTokens(e);
+  const main = mainToken(e);
+  if (!main) {
+    hotkeyPreview.value = mods.length ? `${formatHotkey(mods.join("+"))}${IS_MAC ? "" : " + …"}` : "";
+    return;
+  }
+  if (mods.length === 0) {
+    hotkeyError.value = t("settings.shotShortcutNeedModifier");
+    return;
+  }
+  stopHotkeyRecording();
+  await applyHotkey([...mods, main].join("+"));
+}
+
+/** 写入并保存；Rust 报注册失败则回滚到上一个可用组合 */
+async function applyHotkey(combo: string) {
+  const prev = shotConfig.value.shortcut;
+  if (combo === prev) {
+    hotkeyError.value = "";
+    return;
+  }
+  shotConfig.value = { ...shotConfig.value, shortcut: combo };
+  try {
+    const res = await screenshot.setConfig(shotConfig.value);
+    if (res.applied) {
+      hotkeyError.value = "";
+      return;
+    }
+    hotkeyError.value = `${t("settings.shotShortcutConflict")} ${res.error ?? ""}`;
+    shotConfig.value = { ...shotConfig.value, shortcut: prev };
+    await screenshot.setConfig(shotConfig.value);
+  } catch (err) {
+    hotkeyError.value = err instanceof Error ? err.message : String(err);
+    shotConfig.value = { ...shotConfig.value, shortcut: prev };
+  }
+}
+
+async function resetHotkey() {
+  await applyHotkey(DEFAULT_SCREENSHOT_CONFIG.shortcut);
+}
+
+
+async function onShotEnabled(e: Event) {
+  const next = (e.target as HTMLInputElement).checked;
+  const prev = shotConfig.value.enabled;
+  shotConfig.value = { ...shotConfig.value, enabled: next };
+  try {
+    await screenshot.setConfig(shotConfig.value);
+  } catch (err) {
+    shotConfig.value = { ...shotConfig.value, enabled: prev };
+    showAlert("warn", t("settings.shotTitle"), err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function onShotToggle(e: Event, key: "auto_save" | "shadow") {
+  const next = (e.target as HTMLInputElement).checked;
+  const prev = shotConfig.value[key];
+  shotConfig.value = { ...shotConfig.value, [key]: next };
+  try {
+    await screenshot.setConfig(shotConfig.value);
+  } catch (err) {
+    shotConfig.value = { ...shotConfig.value, [key]: prev };
+    showAlert("warn", t("settings.shotTitle"), err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function onShotNow() {
+  try {
+    await screenshot.trigger();
+  } catch (err) {
+    showAlert("warn", t("settings.shotTitle"), err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function openShotDir() {
+  if (!shotDir.value) return;
+  try {
+    await tracker.revealPath(shotDir.value);
+  } catch {
+    /* 打不开目录不影响主流程 */
+  }
+}
+
+async function loadShotHistory() {
+  try {
+    shotHistory.value = await screenshot.list(60);
+    // 缩略图并发拉取（单张 ~30–80KB，走 data URL 避免额外协议/config 改动）
+    const pairs = await Promise.all(
+      shotHistory.value.map(async (s) => [s.id, await screenshot.thumbnail(s.id, 320)] as const),
+    );
+    const map: Record<number, string> = {};
+    for (const [id, url] of pairs) {
+      if (url) map[id] = url;
+    }
+    shotThumbs.value = map;
+  } catch (err) {
+    console.warn("[Settings] 加载截图历史失败", err);
+  }
+}
+
+async function revealShot(id: number) {
+  try {
+    await screenshot.reveal(id);
+  } catch {
+    /* ignore */
+  }
+}
+
+async function deleteShot(id: number) {
+  try {
+    await screenshot.remove(id);
+    shotHistory.value = shotHistory.value.filter((s) => s.id !== id);
+    delete shotThumbs.value[id];
+  } catch (err) {
+    showAlert("warn", t("settings.shotTitle"), err instanceof Error ? err.message : String(err));
+  }
+}
+
+// 截图完成 → 刷新历史（主窗口收到 Rust 的 screenshot-done 事件）
+onMounted(async () => {
+  await loadShotConfig();
+  await loadShotHistory();
+  try {
+    await listen("screenshot-done", () => {
+      void loadShotHistory();
+    });
+  } catch {
+    /* 非 Tauri 环境 */
+  }
+});
 
 const pruneDialogOpen = ref(false);
 const deviceStats = ref<DeviceStats[]>([]);
@@ -1254,6 +1646,46 @@ async function onCheckUpdate() {
   color: var(--text-dim, #86868b);
   margin: 6px 0 0;
   line-height: 1.5;
+}
+
+/* 快捷键录制控件（v0.8.0 修订） */
+.hotkey-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.hotkey-btn {
+  min-width: 148px;
+  padding: 8px 14px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--bg, #f5f5f7);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.hotkey-btn:hover:not(:disabled) {
+  border-color: #2f6bff;
+}
+.hotkey-btn.recording {
+  border-style: solid;
+  border-color: #2f6bff;
+  background: rgba(47, 107, 255, 0.12);
+  color: #2f6bff;
+}
+.hotkey-btn.invalid {
+  border-color: #ef4444;
+  color: #ef4444;
+}
+.hotkey-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.field-hint--error {
+  color: #ef4444;
 }
 
 /* 文本输入 */
@@ -1699,5 +2131,85 @@ async function onCheckUpdate() {
   text-align: center;
   color: var(--text-dim);
   padding: 24px 0;
+}
+
+/* ===== v0.8.0：屏幕截图卡片 ===== */
+.zone-title {
+  margin: 14px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.dir-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+  justify-content: flex-end;
+}
+.path-text {
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+.range-input {
+  width: 180px;
+  accent-color: var(--accent);
+}
+.shot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+  margin-top: 8px;
+}
+.shot-item {
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--card);
+}
+.shot-img {
+  display: block;
+  width: 100%;
+  height: 108px;
+  object-fit: cover;
+  background: var(--seg-bg);
+}
+.shot-img--empty {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--seg-bg),
+    var(--seg-bg) 8px,
+    var(--border) 8px,
+    var(--border) 16px
+  );
+}
+.shot-cap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+}
+.shot-meta {
+  font-size: 11px;
+  color: var(--muted);
+}
+.shot-date {
+  color: var(--text-dim);
+}
+.shot-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+.shot-actions .ghost-btn,
+.shot-actions .danger-btn {
+  padding: 2px 8px;
+  font-size: 11px;
 }
 </style>

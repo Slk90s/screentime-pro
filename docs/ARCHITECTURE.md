@@ -11,11 +11,27 @@
     get_today_summary→get_overview、get_app_summaries→get_app_ranking）
   - 2026-09-04 @v0.7.5: 新增 - §3.1 补 classifier.rs 与 system_load/ 两个模块地图条目
   - 2026-09-04 @v0.7.5: 修正 - §3.3 桌宠文件树与 §11 文件清单同步至当前实际结构
+  - 2026-09-14 @v0.7.11: 修正 - 头部「最后更新」推进至 v0.7.11；§12 的 releaseBody 现值说明
+    由「仍是 v0.7.0 旧文案」更正为「当前为 v0.7.11 文案，但发版前仍须逐版改写」
+  - 2026-09-16 @v0.8.0: 新增 - 「屏幕截图」子系统（`screenshot/` 模块、`capture` 窗口、
+    `screenshots` 表、10 个 IPC 命令）；桌宠点击穿透重写（`pet/hit_mask.rs` 32×32 alpha 命中网格
+    + 全局光标轮询）；macOS 前台全屏真识别（CGWindowList / CGDisplayBounds）；依赖 windows 0.58→0.62
+  - 2026-09-16 @v0.8.0: 修订 - 截图遮罩窗由「透明透桌面」改为「**冻结帧 + 标注画布**」：
+    新增 IPC `screenshot_frame`（截图上交 11 个、总数 77→78）；`screenshot_commit` 改收前端合成 PNG；
+    `screenshot_set_config` 改返 `ApplyResult`（快捷键注册失败可回传）；删除 `compose_export` /
+    `sd_rounded_box`（合成职责移交前端 canvas）。§3.1 / §5 / §11 计数同步。
+  - 2026-09-17 @v0.8.1: 新增 - 「取字」子模块 `screenshot/ocr.rs`（Windows WinRT `Windows.Media.Ocr`，
+    离线；COM 与 WinRT 调用必须同线程 → `spawn_blocking` + `CoInitializeEx(COINIT_MULTITHREADED)`）；
+    新增 IPC `screenshot_ocr` / `screenshot_copy_text`（截图上交 13 个、总数 78→**80**）；
+    依赖 windows crate 增特性 `Media_Ocr` / `Graphics_Imaging` / `Storage_Streams` /
+    `Globalization` / `Foundation` / `Win32_System_Com`。§3.1 / §5 / §11 计数同步。
+  - 2026-09-17 @v0.8.1: 修正 - 标注工具去重（删「模糊（打码）」，与「马赛克」功能重复）；
+    工具栏按钮仍 13 个（删 1 加 1）。
 -->
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-09-04（同步至 v0.7.5；补齐 RELEASE.md / CONVENTIONS 死链）
+> 最后更新：2026-09-17（同步至 v0.8.1；新增截图取字 OCR 子系统 + 打码工具去重）
 
 ---
 
@@ -23,7 +39,7 @@
 
 跨平台应用使用时长追踪（macOS / Windows / Linux），对标 iOS「屏幕使用时间」。**数据 100% 本地（SQLite bundled），零上传，隐私优先**。
 
-栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v0.7.11**（已发布，详见 [`RELEASE.md`](RELEASE.md)）。
+栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v0.8.0**（已发布，详见 [`RELEASE.md`](RELEASE.md)）。
 
 > ⚠️ 本节版本号在 v0.7.0 → v0.7.5 期间**长期未更新**（曾停留在 v0.7.0），与 `tauri.conf.json` 脱节。
 > 版本号唯一真实来源是 **`src-tauri/tauri.conf.json` 的 `version`**，改版本时务必回来同步本节。
@@ -37,7 +53,8 @@
 │  Renderer (Tauri WebView, Vue 3 frontend)                       │
 │  - 主窗口 Dashboard / Trends / Rules / Settings                 │
 │  - 桌宠独立 webview: PetWindow → PetSkinRenderer → PetSkin      │
-│  - API 抽象: src/api/*（tracker / config / db 等的 invoke 包装） │
+│  - 截图独立 webview: CaptureOverlay（冻结帧 + 选区 + 标注 + 工具栏）│
+│  - API 抽象: src/api/*（tracker / config / db / screenshot 包装）│
 └────────────────────┬────────────────────────────────────────────┘
                      │ Tauri IPC (snake_case 入参 → camelCase 参数 / 原样返回值)
 ┌────────────────────┴────────────────────────────────────────────┐
@@ -63,16 +80,18 @@
 ### 3.1 Rust 后端（src-tauri/src/）
 | 模块 | 职责 | 改我会影响 |
 |------|------|------------|
-| `commands.rs` (~968 行) | 主 IPC 命令路由（48 个 `#[tauri::command]`；桌宠窗口/菜单命令 9 个在 `pet/` 子模块，合计 **57** 个） | 前端 `api/*` 必须对齐字段名 |
-| `lib.rs` (~478 行) | Tauri Builder、插件注册、`generate_handler!` 命令注册、系统托盘 | **新命令必须在此注册**，否则 invoke 报不存在 |
+| `commands.rs` (~1148 行) | 主 IPC 命令路由（50 个 `#[tauri::command]`；桌宠窗口/菜单命令 9 + 命中 3 个在 `pet/`，截图 13 个在 `screenshot/`，悬浮窗 5 个在 `float_window.rs`，合计 **80** 个已注册） | 前端 `api/*` 必须对齐字段名 |
+| `lib.rs` (~700 行) | Tauri Builder、插件注册（含 `tauri-plugin-global-shortcut`）、`generate_handler!` 命令注册、系统托盘（含「截图」菜单项） | **新命令必须在此注册**，否则 invoke 报不存在 |
 | `tracker/{macos,windows,linux}.rs` | 平台采样器（10s tick） | 跨平台数据一致性 |
 | `tracker/mod.rs` | trait 抽象 + 后台循环 | — |
 | `tracker/platform.rs` | `RawApp` 跨平台原始数据结构 | `classifier.rs` 入参 |
-| `db/mod.rs` (~1148 行) | SQLite 连接池 + schema 管理 + 迁移队列 | 数据库迁移 |
-| `db/models.rs` | 所有 DTO（前后端对接处） | `src/types.ts` |
+| `db/mod.rs` (~1236 行) | SQLite 连接池 + schema 管理 + 迁移队列 | 数据库迁移 |
+| `db/models.rs` | 所有 DTO（前后端对接处，含 `ScreenshotOut`） | `src/types.ts` |
 | **`classifier.rs`** (~181 行) | **分类规则引擎（纯逻辑，不依赖 DB）**：给定 `classification_rules` 规则 + 应用 → 分类 id。规则由上层内存缓存后传入 | 规则匹配语义。**`pattern` 与 `value` 两侧都必须小写化**，否则 `equals` 永不命中（v0.6.2-beta.17 踩坑） |
 | `categorizer.rs` (~347 行) | 兜底自动归类：本地字典（60+ 软件）+ Wikipedia API + LRU 缓存 → `other`。**同步实现！** | 采样循环性能 |
-| **`system_load/`** | **v0.7.5 新增**：`MetricsSampler` 统一指标采样器，产原始系统指标（CPU / 内存 / 磁盘 / 网速，1s 采样、磁盘 30s 缓存）。**三端统一**只由「悬浮指标条」展示（v0.7.11 起；原 macOS 菜单栏文字指标 `set_title` 已整体移除） | 只影响悬浮指标条，不影响采样主流程 |
+| **`screenshot/`** | **v0.8.0 新增**：`ScreenshotState`（缓存帧 / 隐藏窗口记录 / 配置）+ `begin_capture`（隐自身→延时→`xcap` 抓主屏→显示 capture 窗）+ `screenshot_frame`（下发整屏 PNG 给遮罩窗）+ `screenshot_commit`（解码前端合成 PNG→剪贴板/保存→FIFO 清理→恢复窗口）+ `shortcut::apply`（`screenshot/mod.rs`）。**v0.8.1**：+`ocr.rs` 取字（Windows WinRT `Windows.Media.Ocr`，离线；`tidy_text()` 去中文单字间空格） | 截图主流程。**合成（裁剪/标注/圆角/阴影）已移交遮罩窗 canvas**，本模块只做编解码与落地；改这里不影响导出画质。**OCR 必须在 `spawn_blocking` 里跑**：COM 初始化与 WinRT 调用要求同线程 |
+| **`pet/hit_mask.rs`** | **v0.8.0 新增**：桌宠点击穿透。持 32×32 alpha 命中网格，55ms 轮询全局光标（Win `GetCursorPos` / macOS `CGEventGetLocation` / Linux `x11rb query_pointer`），仅命中状态翻转时切换 `set_ignore_cursor_events` | 桌宠点击可交互性；误改会导致「点不到 / 挡路」 |
+| **`system_load/`** | **v0.7.5 新增**：`MetricsSampler` 统一指标采样器，产原始系统指标（CPU / 内存 / 磁盘 / 网速，1s 采样、磁盘 30s 缓存）。**三端统一**只由「悬浮指标条」展示（v0.7.11 起；原 macOS 菜单栏文字指标 `set_title` 已整体移除）。**v0.8.0**：`fullscreen.rs` 补 macOS 真全屏识别（`CGWindowListCopyWindowInfo` + `CGDisplayBounds`） | 只影响悬浮指标条与桌宠全屏隐藏，不影响采样主流程 |
 | `logging.rs` | 统一日志订阅器 | 日志路径 / 级别 |
 
 > **`classifier.rs` 与 `categorizer.rs` 是两个不同东西**，勿混淆：
@@ -82,19 +101,20 @@
 ### 3.2 前端结构（src/）
 | 目录 | 职责 |
 |------|------|
-| `src/api/` | Tauri invoke 的薄封装（tracker / config / db） |
+| `src/api/` | Tauri invoke 的薄封装（tracker / config / db / screenshot） |
 | `src/views/` | 主窗口 4 个页面（Dashboard/Trends/Rules/Settings） |
 | `src/components/` | 共用组件（Chart 系、AppIcon、DailyBarChart 等） |
 | `src/pet/` | **桌宠子系统**（独立 webview） |
+| `src/screenshot/` | **截图子系统**（独立 `capture` webview，`CaptureOverlay.vue`） |
 | `src/lib/` | 通用工具（logger、format 等） |
 | `src/types.ts` | **前后端对接**类型（snake_case 镜像 Rust struct） |
 
 ### 3.3 桌宠子系统（src/pet/）
 
-桌宠是独立透明置顶 webview，与 `main` 主窗口经 Tauri 全局事件 + `localStorage` 跨窗口同步（见 §7.4）。当前共 3 个窗口：`main`（设置）、`pet`（桌宠本体）、`pet-menu`（右键菜单，v0.6.2-beta.17 起独立窗口）。
+桌宠是独立透明置顶 webview，与 `main` 主窗口经 Tauri 全局事件 + `localStorage` 跨窗口同步（见 §7.4）。当前共 4 个窗口：`main`（设置）、`pet`（桌宠本体）、`pet-menu`（右键菜单，v0.6.2-beta.17 起独立窗口）、`capture`（截图遮罩，v0.8.0 新增）。
 ```
 src/pet/
-├── PetWindow.vue          ← 桌宠 webview 根：拖拽 / 交互 / 监听 / 路由（381 行）
+├── PetWindow.vue          ← 桌宠 webview 根：拖拽 / 交互 / 监听 / 路由（381 行；v0.8.0 接入命中网格）
 ├── PetMenuWindow.vue      ← 右键菜单**独立窗口**根（v0.6.2-beta.17 起独立成窗，119 行）
 ├── components/
 │   ├── PetSkinRenderer.vue      （皮肤路由器：:is 动态组件 + :key 强制重建）
@@ -106,9 +126,10 @@ src/pet/
 │   └── PetPreviewStage.vue       （编辑器预览，63 行）
 ├── composables/
 │   ├── usePetDrag.ts             （拖拽：越 4px 阈值才交 OS startDragging）
-│   ├── usePetCursorPassthrough.ts（鼠标穿透）
+│   ├── usePetCursorPassthrough.ts（透明背景 + 屏蔽原生右键 + 初始 passthrough；整窗穿透开关部分 v0.8.0 起由 usePetHitMask 接管）
+│   ├── usePetHitMask.ts          （v0.8.0 新增：合成 32×32 alpha 命中网格上报 Rust，透明区自动穿透）
 │   ├── usePetInteractions.ts     （点击：跳跃 / 压扁 / 抖动）
-│   ├── useForegroundWatcher.ts   （每 2s 轮询 tracker.current()）
+│   ├── useForegroundWatcher.ts   （每 1s 轮询 tracker.current()，v0.8.0 由 2s 提速）
 │   ├── usePetSprites.ts          （自定义部件合成）
 │   ├── usePetBadges.ts           （徽章状态）
 │   ├── usePetBubble.ts           （气泡文案 / 随机弹出）
@@ -197,7 +218,7 @@ PetSkinRenderer.watchEffect → skinTick++
 
 ---
 
-## 5. IPC 契约（当前 57 个命令）
+## 5. IPC 契约（当前 80 个命令）
 
 Rust 端在 `commands.rs` / `pet/` 定义，**在 `lib.rs` 的 `generate_handler!` 注册**；前端通过 `src/api/*` 调用。**改 IPC 必须同时改两端，并记得注册。**
 
@@ -214,7 +235,10 @@ Rust 端在 `commands.rs` / `pet/` 定义，**在 `lib.rs` 的 `generate_handler
 | 数据管理 | `export_all` / `export_data` / `import_data` / `prune_data` / `backup_and_prune_device` / `get_backup_config` / `save_backup_config` / `run_backup_now` | 导出导入、清理、本地自动备份 |
 | 多设备 | `get_devices` / `list_devices_with_stats` | 多设备合并 |
 | 桌宠（`pet::`） | `create_pet_window` / `show_pet_window` / `hide_pet_window` / `move_pet_window` / `set_pet_cursor_passthrough` / `create_pet_menu_window` / `show_pet_menu_window` / `hide_pet_menu_window` / `move_pet_menu_window` | 桌宠窗口 + 右键菜单窗口（共 9 个） |
+| 桌宠命中（`pet::hit_mask`） | `set_pet_hit_mask` / `set_pet_drag_lock` / `clear_pet_hit_mask` | **v0.8.0**：32×32 alpha 命中网格上报 / 拖拽期锁定穿透 / 清空（共 3 个） |
+| 截图（`screenshot::`） | `screenshot_get_config` / `screenshot_set_config` / `screenshot_trigger` / `screenshot_frame` / `screenshot_commit` / `screenshot_cancel` / `screenshot_list` / `screenshot_delete` / `screenshot_reveal` / `screenshot_thumbnail` / `screenshot_dir` / `screenshot_ocr` / `screenshot_copy_text` | **v0.8.0**：配置 / 触发 / 取整屏帧（标注背景）/ 提交（收前端合成 PNG）/ 取消 / 历史增删查 + 缩略图 + 目录（共 11 个）。`set_config` 返回 `ApplyResult`（快捷键真实注册结果）。<br>**v0.8.1**：+`screenshot_ocr`（对缓存帧的指定**物理像素**矩形做本地离线 OCR，入参 `x/y/width/height`，返回 `OcrOut{text,width,height,language}`）/ `screenshot_copy_text`（走 `arboard` 写系统剪贴板，避开 WebView 剪贴板权限），合计 **13** 个 |
 | 系统指标 | `get_system_metrics` / `get_system_metrics_enabled` / `set_system_metrics_enabled` / `get_status_bar_config` / `set_status_bar_config` | CPU/内存/磁盘/网速，三端统一由悬浮指标条展示（v0.7.11 起） |
+| 悬浮指标条（`float_window::`） | `create_float_window` / `show_float_window` / `hide_float_window` / `move_float_window` / `resize_float_window` | 悬浮窗生命周期与位置尺寸（共 5 个） |
 | 权限 | `check_permissions` / `open_privacy_settings` | macOS 辅助功能 |
 | 环境 | `check_webview2` / `open_webview2_download` / `reveal_path` | Windows WebView2 检测等 |
 | 元 | `check_for_update` / `open_url` / `export_logs` / `get_log_size` / `get_log_dir` | 升级、日志导出 |
@@ -239,7 +263,8 @@ Rust 端在 `commands.rs` / `pet/` 定义，**在 `lib.rs` 的 `generate_handler
 | `daily_summaries` | id, date, app_id, total_seconds, session_count(UNIQUE date+app_id) | 日聚合缓存（Dashboard/Trends 用） |
 | `categories` | id(TEXT PK), name, color | 归类字典（social/productivity/...） |
 | `classification_rules` | id, field(process_name/window_title/exe_path/bundle_id/name), match_type(contains/equals/prefix/suffix/regex), pattern, category_id, priority, enabled | 自动归类规则（约 40 条种子） |
-| `settings` | key(TEXT PK), value | 简单键值配置（如 autostart 用户偏好） |
+| `settings` | key(TEXT PK), value | 简单键值配置（如 autostart 用户偏好、截图配置 `screenshot_config`） |
+| **`screenshots`** | id, file_name, width, height, bytes, created_at, device | **v0.8.0 新增**：截图历史元数据（文件实体在 `<app_data_dir>/screenshots/`，FIFO 超限移入系统回收站；索引 `idx_screenshots_created`） |
 
 **注意**：桌宠状态（开关/位置/喂食/好感度）**不落 SQL**，由前端 `petStore` 经 Pinia persist 写入 `localStorage`，跨窗口通过 `localStorage` 共享。**新功能若需持久化表，先在 `sql/` 加迁移文件，db/mod.rs 注册到迁移队列。**
 
@@ -399,24 +424,29 @@ src-tauri/
 ├── tauri.conf.json      ← VERSION IS HERE（唯一真实来源，决定 CI tag 与产物名）
 └── src/
     ├── main.rs          ← App 入口（仅转调 lib）
-    ├── lib.rs           ← Tauri Builder / 插件 / generate_handler! 命令注册 / 托盘
-    ├── commands.rs      ← 主 IPC 命令路由（48 个）+ pet/ 子模块桌宠命令（9 个）
-    ├── pet/             ← 桌宠 Rust 端（window / menu_window）
+    ├── lib.rs           ← Tauri Builder / 插件（含 global-shortcut）/ generate_handler! 命令注册 / 托盘
+    ├── commands.rs      ← 主 IPC 命令路由（50 个）+ float_window（5）+ pet/（12：窗口/菜单 9 + hit_mask 3）+ screenshot/（13）= 80
+    ├── pet/             ← 桌宠 Rust 端（window / menu_window / hit_mask）
+    ├── screenshot/      ← v0.8.0 截图 Rust 端（mod：捕获 / 下发整屏帧 / 解码落库 / 快捷键；合成在前端 canvas）
     ├── tracker/         ← 平台采样（mod / platform / macos / windows / linux）
-    ├── db/              ← SQLite（mod 1148 行 / models）
+    ├── db/              ← SQLite（mod 1236 行 / models）
     ├── classifier.rs    ← 分类规则引擎（纯逻辑，不依赖 DB）
     ├── categorizer.rs   ← 兜底归类：字典 + Wikipedia + LRU（必须同步实现）
     ├── system_load/     ← 系统指标采样（mod / macos / linux / windows / metrics / network / fullscreen），三端统一由悬浮指标条展示
     ├── logging.rs
     └── error.rs
 
+src-tauri/capabilities/
+└── capture.json         ← v0.8.0 截图窗口（capture）权限集
+
 src/
-├── App.vue              ← 主窗口/桌宠分支根
+├── App.vue              ← 主窗口 / 桌宠 / 截图 分支根
 ├── types.ts             ← DTO 镜像（snake_case，Rust struct 原样）
-├── api/                 ← invoke 包装 + mock（无 Tauri 环境调试用）
-├── views/               ← 主窗口 4 页（Settings 1506 行最重）
+├── api/                 ← invoke 包装 + mock（无 Tauri 环境调试用；含 screenshot.ts）
+├── views/               ← 主窗口 4 页（Settings 最重）
 ├── components/          ← 通用组件 + 图表
 ├── pet/                 ← 桌宠子系统（含 skins/ 两套皮肤）
+├── screenshot/          ← v0.8.0 截图子系统（CaptureOverlay.vue）
 ├── i18n/                ← vue-i18n 词条（zh-CN / en-US，必须双语同步）
 ├── utils/               ← 格式化
 └── lib/                 ← logger
@@ -449,8 +479,8 @@ sql/                     ← SQLite 迁移（已恢复入库，为数据库唯�
 | 各版本 `NOTES.md` | 发布说明草稿（**需人工**回填到 `build.yml` 的 `releaseBody`，见下） |
 
 > ⚠️ `build.yml` 的 `releaseBody` 是**硬编码死文本**，不会自动跟随版本。
-> 当前仓库三份（windows / linux / macos job）仍是 **v0.7.0 的旧文案**。
-> 发版前必须手动替换，否则线上 Release Notes 显示错误版本的内容。
+> 当前仓库三份（windows / linux / macos job）为 **v0.8.0 的文案**（发版时已同步）。
+> 每次发版前必须手动替换为本版内容，否则线上 Release Notes 显示旧版本的内容。
 > 模板与完整流程见 [`RELEASE.md`](RELEASE.md) §3.1 / §5。
 
 ---

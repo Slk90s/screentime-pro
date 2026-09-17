@@ -28,6 +28,9 @@
   - 2026-08-08 @v0.6.2-34: 气泡按皮肤配置 - pickBubble 传入当前 skinId，
     监听 pet-custom-updated 同步自定义短语。
   - 2026-08-13 @v0.7.3: 修复 - 监听 pet-enabled-changed 同步桌宠开关状态（跨窗口）
+  - 2026-09-16 @v0.8.0: 修复 - 接入 usePetHitMask（按身体 alpha 动态切鼠标穿透，
+    修「150×330 竖窗透明区吃掉下层点击」的 P0 死区）；气泡隐藏时暂停（pet-hidden）；
+    监听 pet-fullscreen-enter/exit 自动隐藏；过热角标上边距修正（不再被 overflow 裁切）
 -->
 <template>
   <div
@@ -62,6 +65,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { petStore } from './stores/petStore';
 import { usePetDrag } from './composables/usePetDrag';
 import { usePetCursorPassthrough } from './composables/usePetCursorPassthrough';
+import { usePetHitMask } from './composables/usePetHitMask';
 import { useForegroundWatcher } from './composables/useForegroundWatcher';
 import { usePetInteractions } from './composables/usePetInteractions';
 import PetSkinRenderer from './components/PetSkinRenderer.vue';
@@ -80,6 +84,10 @@ const { t } = useI18n();
 
 const rootEl = ref<HTMLElement | null>(null);
 const effectiveState = computed(() => petStore.effectiveState.value);
+
+// v0.8.0：按身体 alpha 命中（修「透明区吃掉下层点击」的 P0 死区）。
+// 把渲染结果压成 32×32 网格交给 Rust，Rust 侧按全局光标位置动态切穿透。
+const { setDragLock } = usePetHitMask(() => rootEl.value);
 
 // v0.6.2-beta.15：随机中文气泡
 const bubbleMessage = ref('');
@@ -104,6 +112,8 @@ function showFeedReaction(): void {
 }
 
 function scheduleNextBubble(): void {
+  // v0.8.0：窗口隐藏 / 全屏隐藏期间不再调度，避免「看不见还在说话」的空耗
+  if (bubblePaused) return;
   if (bubbleTimer !== null) clearTimeout(bubbleTimer);
   // 首次出现延迟 3s 让用户先看到桌宠，再开始说话；之后 8~22s 一次
   const gap = bubbleMessage.value === '' ? 3000 : nextGapMs();
@@ -116,6 +126,46 @@ function scheduleNextBubble(): void {
       scheduleNextBubble();
     }, 2500);
   }, gap);
+}
+
+// v0.8.0：气泡暂停/恢复（挂到 pet-hidden / pet-shown，见下方事件监听）
+let bubblePaused = false;
+function pauseBubble(): void {
+  bubblePaused = true;
+  if (bubbleTimer !== null) {
+    clearTimeout(bubbleTimer);
+    bubbleTimer = null;
+  }
+  bubbleVisible.value = false;
+}
+function resumeBubble(): void {
+  if (!bubblePaused) return;
+  bubblePaused = false;
+  scheduleNextBubble();
+}
+
+// v0.8.0：前台全屏（看视频/游戏）时自动隐藏桌宠。
+// Rust 端只知道「有没有全屏」，不知道用户是否开了桌宠 → 由这里决定；
+// 且只在「本来可见」时才恢复，绝不复活用户主动关掉的桌宠。
+let hiddenByFullscreen = false;
+async function onFullscreenEnter(): Promise<void> {
+  if (hiddenByFullscreen || !petStore.enabled) return;
+  hiddenByFullscreen = true;
+  try {
+    await invoke('hide_pet_window');
+  } catch (e) {
+    console.warn('[pet] 全屏隐藏失败', e);
+  }
+}
+async function onFullscreenExit(): Promise<void> {
+  if (!hiddenByFullscreen) return;
+  hiddenByFullscreen = false;
+  if (!petStore.enabled) return;
+  try {
+    await invoke('show_pet_window');
+  } catch (e) {
+    console.warn('[pet] 退出全屏恢复失败', e);
+  }
 }
 
 // v0.6.2：皮肤自描述窗口尺寸；2D 默认 140×140，Pop Mart 声明更高窗
@@ -161,9 +211,11 @@ function onWheel(e: WheelEvent): void {
     () => petStore.position,
     (x, y) => petStore.setPosition(x, y),
     // 拖拽开始：暂停持久化 + 清除可能残留的点击动画 class（避免动画与窗口移动叠加的卡顿观感）
-    () => { petStore.setPersistSuspended(true); clearAnim(); },
+    // v0.8.0：同时锁住「按 alpha 命中」的穿透轮询——否则光标拖出身体边缘会被切成穿透，
+    // 原生拖拽/手动拖拽都会中途断掉。
+    () => { petStore.setPersistSuspended(true); clearAnim(); setDragLock(true); },
     // 拖拽结束：恢复持久化；若确实发生了拖拽，抑制尾随 pointerup 的点击反应（避免抖动）
-    (didDrag: boolean) => { petStore.setPersistSuspended(false); if (didDrag) suppressNextClick(); },
+    (didDrag: boolean) => { petStore.setPersistSuspended(false); setDragLock(false); if (didDrag) suppressNextClick(); },
   );
 
   // 鼠标穿透（默认 false，桌宠可交互）
@@ -215,6 +267,10 @@ let unlistenSkin: (() => void) | null = null;
 let unlistenStore: (() => void) | null = null;
 let unlistenFed: (() => void) | null = null;
 let unlistenEnabled: (() => void) | null = null;
+// v0.8.0：气泡暂停 + 全屏隐藏
+let unlistenHidden: (() => void) | null = null;
+let unlistenFsEnter: (() => void) | null = null;
+let unlistenFsExit: (() => void) | null = null;
 // v0.7.0：饱食度随时间自然衰减（之前 tickFullness 从未被调用，导致「饿度值不变」）
 const FULLNESS_DECAY_MS = 120_000; // 每 2 分钟 -1
 let decayTimer: number | null = null;
@@ -223,6 +279,12 @@ onMounted(async () => {
     unlistenShown = await listen('pet-shown', () => {
       // pet 重新显示时重读 localStorage，反映编辑器保存的自定义素材/组合
       reloadConfig();
+      // v0.8.0：显示时恢复气泡调度（与下方 pet-hidden 对称）
+      resumeBubble();
+    });
+    // v0.8.0：窗口被隐藏（全屏 / 手动隐藏）→ 暂停气泡计时，避免「看不见还在说话」的空耗
+    unlistenHidden = await listen('pet-hidden', () => {
+      pauseBubble();
     });
     // 编辑器保存/重置/导入自定义后即时同步到实时桌宠（无需重开关窗口）
     unlistenCustom = await listen('pet-custom-updated', () => {
@@ -248,6 +310,14 @@ onMounted(async () => {
     unlistenEnabled = await listen('pet-enabled-changed', () => {
       petStore.reload();
     });
+    // v0.8.0：前台全屏（看视频 / 游戏）时自动隐藏，退出全屏恢复。
+    // Rust 端只探测「有没有全屏」，是否隐藏由前端按「用户是否开了桌宠」决定（见 onFullscreenEnter/Exit）
+    unlistenFsEnter = await listen('pet-fullscreen-enter', () => {
+      void onFullscreenEnter();
+    });
+    unlistenFsExit = await listen('pet-fullscreen-exit', () => {
+      void onFullscreenExit();
+    });
     reloadConfig(); // 初次创建窗口时也读一次（保险）
   } catch (e) {
     console.error('[pet] 监听 pet 事件失败', e);
@@ -272,6 +342,9 @@ onBeforeUnmount(() => {
   if (unlistenStore) unlistenStore();
   if (unlistenFed) unlistenFed();
   if (unlistenEnabled) unlistenEnabled();
+  if (unlistenHidden) unlistenHidden();
+  if (unlistenFsEnter) unlistenFsEnter();
+  if (unlistenFsExit) unlistenFsExit();
   if (unsubSkinSize) unsubSkinSize(); // v0.6.2-33 (BUG-8): 取消皮肤尺寸订阅
   if (bubbleTimer !== null) clearTimeout(bubbleTimer);
   if (feedTimer !== null) clearTimeout(feedTimer);

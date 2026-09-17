@@ -11,6 +11,8 @@ import {
   ShoppingCart, Utensils, Moon, Coffee, Smile, Frown, Angry, SmilePlus,
   Sparkles, Globe, Settings as Cog, Info, Power, Database, Cpu, HardDrive,
   Clock, Copy, PowerOff, KeyRound,
+  // v0.8.0：屏幕截图卡片图标
+  Crop,
 } from 'lucide-vue-next';
 
 const props = withDefaults(
@@ -36,6 +38,8 @@ const ICONS: Record<string, any> = {
   language: Globe, settings: Cog, info: Info, power: Power, database: Database,
   cpu: Cpu, hardDrive: HardDrive, clock: Clock, copy: Copy, powerOff: PowerOff,
   keyRound: KeyRound,
+  // v0.8.0：屏幕截图
+  crop: Crop,
 };
 
 // 未知 name 回退到 tool 图标，避免渲染空白

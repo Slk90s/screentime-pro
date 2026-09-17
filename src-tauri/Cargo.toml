@@ -48,6 +48,11 @@ tauri-plugin-dialog = "2"
 trash = "5"
 # v0.7.6：跨平台网络采样（macOS getifaddrs 需要；Windows/Linux 暂不直接用，但保留以便统一跨平台 FFI 调用）
 libc = "0.2"
+xcap = "0.9"
+arboard = "3"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png"] }
+tauri-plugin-global-shortcut = "2"
 
 # ---- macOS 专属依赖（对齐 Tauri 2.x 引入的 objc2 0.6，避免重复编译）----
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -62,7 +67,10 @@ core-graphics = "0.24"
 
 # ---- Windows 专属依赖 ----
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.58", features = [
+# v0.8.0（2026-09-16）：0.58 → 0.62。截图引擎 xcap 0.9.8 已拉 windows 0.62，
+# 继续锁 0.58 会让依赖树同时编译两份 windows crate（体积与编译时间双损）。
+# 升到 0.62 后与 xcap 共用同一份，且 Media_Ocr（v0.8.x 本地 OCR）也在此版本内。
+windows = { version = "0.62", features = [
   "Win32_UI_WindowsAndMessaging",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_System_ProcessStatus",
@@ -76,6 +84,19 @@ windows = { version = "0.58", features = [
   # v0.7.7：磁盘采样（GetDiskFreeSpaceExW）；内存的 GlobalMemoryStatusEx 属
   # Win32_System_SystemInformation，该特性上方已启用
   "Win32_Storage_FileSystem",
+  # v0.8.1：截图取字（本地 OCR，全部离线、不走任何外部接口）
+  # - Media_Ocr：OcrEngine / OcrResult
+  # - Graphics_Imaging：SoftwareBitmap / BitmapPixelFormat（OCR 只吃 Bgra8）
+  # - Storage_Streams：DataWriter 造 IBuffer（SoftwareBitmap 要从内存造，没有别的路）
+  # - Globalization：Language（用户语言包不含 OCR 时的降级语言）
+  # - Win32_System_Com：CoInitializeEx —— WinRT 激活要求本线程已初始化 COM，
+  #   而 async 命令跑在 tokio 线程池上，默认没有 → 必须自己初始化
+  "Media_Ocr",
+  "Graphics_Imaging",
+  "Storage_Streams",
+  "Globalization",
+  "Foundation",
+  "Win32_System_Com",
 ] }
 # 跨平台调用系统默认浏览器（用于打开 WebView2 下载页）
 open = "5"

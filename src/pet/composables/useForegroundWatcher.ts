@@ -3,7 +3,7 @@
  * 前台应用轮询 + 自动状态推断（v0.6.0-beta 引入）。
  *
  * 设计思路：
- * - 每 2s 调用一次 get_current_foreground（Rust 端已有命令），
+ * - 每 1s 调用一次 get_current_foreground（Rust 端已有命令），
  *   把前台应用 → 状态映射推断结果写回 store.state
  * - 仅当 process 变化时重新推断（节流）
  * - 用户手动 override 时不覆盖（store.effectiveState 已实现优先级）
@@ -12,6 +12,8 @@
  *
  * 修改历史：
  *   - 2026-07-17 @v0.6.0-beta.1: 初始创建 - 2s 轮询 + 自动推断
+ *   - 2026-09-16 @v0.8.0: 轮询 2s → 1s（表情切换滞后从 ≤2s 收到 ≤1s；单次调用极轻，
+ *     且 Rust 侧 get_current_foreground 本身不做重活）
  */
 import { onMounted, onBeforeUnmount } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
@@ -19,7 +21,7 @@ import { petStore } from '../stores/petStore';
 import { inferStateFromApp, shouldReinfer } from '../engine/appToState';
 import type { ForegroundAppInfo } from '../types';
 
-const POLL_INTERVAL_MS = 2000;
+const POLL_INTERVAL_MS = 1000;
 
 interface ForegroundOut {
   name: string;

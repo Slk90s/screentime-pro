@@ -225,3 +225,74 @@ export interface MetricsOut {
   net_rx_bps: number;
   net_tx_bps: number;
 }
+
+// ===== v0.8.0（2026-09-16）：屏幕截图 =====
+
+/** 截图配置（字段名与 Rust `ScreenshotConfig` 一致，Tauri v2 不转换结构体字段名） */
+export interface ScreenshotConfig {
+  enabled: boolean;
+  /** 全局快捷键（global-hotkey 语法，如 CmdOrCtrl+Shift+A） */
+  shortcut: string;
+  /** 确认时默认动作 = 复制到剪贴板 */
+  auto_copy: boolean;
+  /** 确认时同时落盘归档 */
+  auto_save: boolean;
+  corner_radius: number;
+  shadow: boolean;
+  /** 历史 FIFO 上限 */
+  max_count: number;
+}
+
+/**
+ * 保存截图配置后的**快捷键真实注册结果**（Rust `screenshot::ApplyResult`）。
+ * 初版 setConfig 无论成败都返回 true，导致「填了被占用的组合 → 界面说成功、
+ * 快捷键其实是死的」；现在失败原因会带回来给设置页提示。
+ */
+export interface ShortcutApplyResult {
+  applied: boolean;
+  shortcut: string;
+  error: string | null;
+}
+
+/** 遮罩窗收到「本次截图就绪」时的元信息（整屏图另由 screenshot_frame 拉取） */
+export interface CaptureReadyPayload {
+  width: number;
+  height: number;
+  physical_width: number;
+  physical_height: number;
+  scale_factor: number;
+  default_radius: number;
+  default_shadow: boolean;
+}
+
+/** 截图历史条目（图片本体在 screenshots/ 目录，此处只有索引） */
+export interface ScreenshotOut {
+  id: number;
+  file_name: string;
+  width: number;
+  height: number;
+  bytes: number;
+  created_at: string;
+}
+
+/** 截图提交结果 */
+export interface ScreenshotResult {
+  id: number | null;
+  file_name: string | null;
+  path: string | null;
+  width: number;
+  height: number;
+  copied: boolean;
+  saved: boolean;
+}
+
+/** 取字（本地离线 OCR）结果 */
+export interface OcrOut {
+  /** 识别出的完整文本，多行以 \n 分隔 */
+  text: string;
+  /** 参与识别的图像尺寸（物理像素） */
+  width: number;
+  height: number;
+  /** 本次生效的识别语言标签（如 zh-Hans-CN）；非 Windows 端为 null */
+  language: string | null;
+}

@@ -16,6 +16,8 @@ mod logging;
 mod tracker;
 mod pet;
 mod system_load;
+// v0.8.0（2026-09-16）：屏幕截图（快捷键 → 遮罩框选 → 剪贴板/归档）
+mod screenshot;
 // v0.7.7：隐藏控制台窗口地创建子进程（修复 Windows 首次启动 reg 命令框闪烁）
 mod proc;
 
@@ -166,6 +168,17 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_log::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
+        // v0.8.0：全局快捷键（截图触发）。handler 只认「按下」态，
+        // 避免 macOS/Windows 一次按键派发 down+up 导致重复截图。
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        crate::screenshot::begin_capture(app);
+                    }
+                })
+                .build(),
+        )
         .setup(move |app| {
             let log_dir = app
                 .path()
@@ -260,6 +273,19 @@ pub fn run() {
                 status_bar_config: Mutex::new(status_bar_config),
             });
             app.manage(app_state.clone());
+            // ===== v0.8.0（2026-09-16）：截图 + 桌宠命中状态 =====
+            // 截图配置从 settings 表读（首启即默认值：快捷键 CmdOrCtrl+Shift+A、确认即复制剪贴板）
+            let screenshot_cfg = screenshot::ScreenshotConfig::load(&app_state.db);
+            app.manage(screenshot::ScreenshotState::new(screenshot_cfg.clone()));
+            app.manage(pet::PetHitState::default());
+            // 注册截图全局快捷键。失败不致命：可能被系统/其他软件占用，
+            // 用户仍可用托盘菜单「截图」或设置页按钮触发（此处只记日志；
+            // 用户在设置页改键时由 screenshot_set_config 把失败原因带回 UI）。
+            if let Err(e) = screenshot::shortcut::apply(app.handle(), &screenshot_cfg) {
+                tracing::warn!(error = %e, "启动期注册截图快捷键失败");
+            }
+            // 桌宠「按身体 alpha 命中」穿透轮询线程（修透明区点击死区）
+            pet::hit_mask::spawn_watcher(app.handle().clone());
             if let Some(g) = log_guard {
                 app.manage(LogGuardHolder(Some(g)));
             }
@@ -380,6 +406,10 @@ pub fn run() {
                 // macOS 左键沿用「点击切换主窗口显隐」（见下方 on_tray_icon_event）
                 .show_menu_on_left_click(false)
                 .on_menu_event(move |app, event| match event.id.as_ref() {
+                    "capture" => {
+                        // v0.8.0：托盘「截图」入口（与全局快捷键同一条 begin_capture 流程）
+                        crate::screenshot::begin_capture(app);
+                    }
                     "show" => {
                         if let Some(w) = app.get_webview_window("main") {
                             let _ = w.show();
@@ -497,6 +527,8 @@ pub fn run() {
                     const IDLE_INTERVAL_MS: u64 = 5000;
                     // 浮窗显隐状态缓存（只在翻转时调 show/hide，避免每秒无效调用）
                     let mut float_shown = false;
+                    // v0.8.0：全屏态缓存（只在翻转时通知 pet 窗口，避免每秒刷事件）
+                    let mut last_fullscreen = false;
                     loop {
                         let cfg = *state_clone
                             .status_bar_config
@@ -523,6 +555,21 @@ pub fn run() {
                             float_shown = false;
                             let handle = tray_clone.app_handle().clone();
                             let _ = float_window::set_float_visible(&handle, false);
+                        }
+                        // v0.8.0（2026-09-16）：前台全屏翻转 → 通知桌宠窗口。
+                        // 本线程只知道「有没有全屏」，不知道用户是否开了桌宠（那是前端
+                        // localStorage 的事），故只发事件；由 PetWindow 自己决定隐藏/恢复，
+                        // 且只在「本来就可见」时才恢复，绝不复活用户关掉的桌宠。
+                        let fs_now = system_load::fullscreen::foreground_is_fullscreen();
+                        if fs_now != last_fullscreen {
+                            last_fullscreen = fs_now;
+                            let handle = tray_clone.app_handle();
+                            let evt = if fs_now {
+                                "pet-fullscreen-enter"
+                            } else {
+                                "pet-fullscreen-exit"
+                            };
+                            let _ = handle.emit_to("pet", evt, ());
                         }
                         // 轮询节奏：浮窗可见 → 1s（前台全屏检测需要及时响应）；否则 5s 低频。
                         let fast = cfg.enabled && cfg.float_enabled;
@@ -609,11 +656,29 @@ pub fn run() {
             commands::export_logs,
             commands::get_log_size,
             commands::get_log_dir,
+            // ===== v0.8.0（2026-09-16）：屏幕截图 =====
+            screenshot::screenshot_get_config,
+            screenshot::screenshot_set_config,
+            screenshot::screenshot_trigger,
+            screenshot::screenshot_frame,
+            screenshot::screenshot_commit,
+            screenshot::screenshot_cancel,
+            screenshot::screenshot_list,
+            screenshot::screenshot_delete,
+            screenshot::screenshot_reveal,
+            screenshot::screenshot_thumbnail,
+            screenshot::screenshot_dir,
+            screenshot::screenshot_ocr,
+            screenshot::screenshot_copy_text,
             pet::create_pet_window,
             pet::show_pet_window,
             pet::hide_pet_window,
             pet::move_pet_window,
             pet::set_pet_cursor_passthrough,
+            // v0.8.0：按身体 alpha 命中的穿透控制（修透明区点击死区）
+            pet::set_pet_hit_mask,
+            pet::set_pet_drag_lock,
+            pet::clear_pet_hit_mask,
             pet::create_pet_menu_window,
             pet::show_pet_menu_window,
             pet::hide_pet_menu_window,
