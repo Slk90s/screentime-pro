@@ -1000,6 +1000,8 @@ const statusBarConfig = ref<StatusBarConfig>({
   show_disk: false,
   show_net: true,
   float_enabled: false,
+  // v0.8.2：截图总开关透传（只读视图，权威源在 screenshot 模块；此处仅占位满足类型）
+  screenshot_enabled: true,
 });
 async function loadStatusBarConfig() {
   try {

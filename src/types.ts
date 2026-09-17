@@ -207,6 +207,9 @@ export interface StatusBarConfig {
   show_net: boolean;
   // v0.7.6（2026-09-10）：悬浮指标条独立开关（与托盘状态栏总开关互不依赖）
   float_enabled: boolean;
+  // v0.8.2（2026-09-17）：截图总开关透传（浮窗尾部截图按钮的显隐依据；
+  // 权威源是 screenshot 模块配置，本字段只读不回写）
+  screenshot_enabled: boolean;
 }
 
 // ===== v0.7.5 / v0.7.6：状态栏系统指标 =====

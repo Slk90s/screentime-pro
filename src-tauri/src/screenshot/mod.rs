@@ -580,6 +580,15 @@ pub fn screenshot_set_config(
         .ok_or_else(|| "应用状态未初始化".to_string())?;
     config.save(&app_state.db).map_err(|e| e.to_string())?;
     *state.config.lock().unwrap_or_else(|e| e.into_inner()) = config.clone();
+    // v0.8.2：浮窗尾部「截图」按钮的可见性走 get_status_bar_config（读 AppState 缓存、
+    // 浮窗 1Hz 轮询）。截图开关变化必须同步这份缓存，否则浮窗按钮显隐与实际开关脱节。
+    if let Some(app_state) = app.try_state::<Arc<AppState>>() {
+        app_state
+            .status_bar_config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .screenshot_enabled = config.enabled;
+    }
     let outcome = crate::screenshot::shortcut::apply(&app, &config);
     Ok(ApplyResult {
         applied: outcome.is_ok(),

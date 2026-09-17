@@ -390,6 +390,10 @@ export default {
     hourUnit: "hours",
     hourShort: "h",
   },
+  // ===== v0.8.2 (2026-09-17): float bar =====
+  float: {
+    shot: "Screenshot",
+  },
   pet: {
     settings: {
       title: "Desktop Pet",

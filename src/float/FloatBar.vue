@@ -32,6 +32,12 @@
       c) 百分比与网速数值定宽 + 右对齐：位数变化（7%→100%、↓75K→↓12.7M）不再每秒
          改变内容宽度——旧实现整条会随数字「呼吸」，窗口跟着 resize 视觉上很毛躁。
          定宽后浮窗宽度稳定，数字也排成整齐的右对齐列；真超出时仍由 fitWidth 兜底跟随。
+  - 2026-09-17 @v0.8.2: 尾部新增「截图」按钮。可见 = 截图开启 && 浮窗开启（cfg 1Hz
+      轮询自动联动，设置页翻转开关 ≤1s 生效，无新增 IPC/事件）；pointerdown.stop
+      防止点按钮误触发整条拖拽；点击走 screenshot_trigger（与快捷键同路径），
+      begin_capture 会先隐藏 pet/float 再抓屏、结束后自动恢复。配置来源：StatusBarConfig
+      新增 screenshot_enabled 字段（权威源仍是 screenshot 模块的 screenshot_enabled 键，
+      set_status_bar_config 用 DB 权威值兜底，防设置页旧快照回写）。
 -->
 <template>
   <div ref="rootRef" class="float-bar" @pointerdown="onPointerDown" @contextmenu.prevent>
@@ -52,17 +58,39 @@
         <b class="up">↑{{ fmtRate(metrics?.net_tx_bps ?? 0) }}</b>
       </span>
     </template>
-    <span v-if="!hasAny" class="f-item"><b class="f-dim">ScreenTime Pro</b></span>
+    <!-- v0.8.2：尾部「截图」按钮。可见 = 截图开启 && 浮窗开启；pointerdown.stop
+         防止点按钮误触发整条拖拽；点击走 screenshot_trigger（与快捷键完全同路径） -->
+    <template v-if="shotEnabled">
+      <span v-if="hasAny" class="f-sep"></span>
+      <button
+        type="button"
+        class="f-shot"
+        :title="t('float.shot')"
+        @pointerdown.stop
+        @click="onShot"
+      >
+        <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+          <path d="M2 5.2V2h3.2M13.8 5.2V2h-3.2M2 10.8V14h3.2M13.8 10.8V14h-3.2" />
+          <circle cx="8" cy="8" r="2.4" />
+        </svg>
+      </button>
+    </template>
+    <span v-if="!hasAny && !shotEnabled" class="f-item"><b class="f-dim">ScreenTime Pro</b></span>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { useI18n } from "vue-i18n";
 // Tauri v2：monitor API 为模块级函数（Window 实例上没有 currentMonitor）
 import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 import { tracker } from "../api/tracker";
+import { screenshot } from "../api/screenshot";
 import type { MetricsOut, StatusBarConfig } from "../types";
+
+// v0.8.2：按钮 tooltip 文案（浮窗此前无任何用户可见文案，首次引入 useI18n）
+const { t } = useI18n();
 
 /** 与 float_window.rs FLOAT_INITIAL_WIDTH 一致（逻辑像素），默认位计算用 */
 const BAR_W = 340;
@@ -78,6 +106,7 @@ const cfg = ref<StatusBarConfig>({
   show_disk: false,
   show_net: true,
   float_enabled: true,
+  screenshot_enabled: true,
 });
 const metrics = ref<MetricsOut | null>(null);
 let timer: number | null = null;
@@ -99,6 +128,13 @@ const hasAny = computed(
 const hasAnyBefore = computed(
   () => cfg.value.show_cpu || cfg.value.show_mem || cfg.value.show_disk,
 );
+/**
+ * v0.8.2：截图按钮可见性 = 截图开启 && 浮窗开启。
+ * cfg 每秒轮询 get_status_bar_config，设置页翻转任一开关后 ≤1s 生效；
+ * float_enabled 关闭时窗口本身会被 Rust 隐藏，这里一并判断只为语义完整
+ * （防配置短暂脱节时按钮残留）。
+ */
+const shotEnabled = computed(() => cfg.value.screenshot_enabled && cfg.value.float_enabled);
 
 /** 0~1 分数 → 百分比整数串（后端 cpu_usage / memory_usage / disk_usage 均为分数） */
 function pct(v: number | undefined): string {
@@ -113,6 +149,19 @@ function fmtRate(bps: number): string {
   if (bps < 1024 * 1024) return `${(bps / 1024).toFixed(bps < 10240 ? 1 : 0)}K`;
   if (bps < 1024 * 1024 * 1024) return `${(bps / 1048576).toFixed(1)}M`;
   return `${(bps / 1073741824).toFixed(1)}G`;
+}
+
+/**
+ * v0.8.2：浮窗一键截图。与快捷键 / 设置页「立即截图」完全同路径（screenshot_trigger）：
+ * Rust 侧 enabled=false 时直接忽略（按钮此时本就隐藏，双保险）；
+ * begin_capture 会先隐藏 pet/float 再抓屏，提交/取消后自动恢复，无需本组件清理。
+ */
+async function onShot(): Promise<void> {
+  try {
+    await screenshot.trigger();
+  } catch {
+    /* 应用退出中偶发失败，忽略 */
+  }
 }
 
 /**
@@ -329,5 +378,38 @@ onBeforeUnmount(() => {
 .f-dim {
   opacity: 0.72;
   font-weight: 500;
+}
+/* v0.8.2：尾部截图按钮（幽灵按钮：默认弱化、悬停点亮，贴深色玻璃底） */
+.f-shot {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.72);
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    transform 0.1s ease;
+}
+.f-shot:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+.f-shot:active {
+  transform: scale(0.9);
+}
+.f-shot svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 </style>

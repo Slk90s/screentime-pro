@@ -377,6 +377,10 @@ export default {
     hourUnit: "小时",
     hourShort: "h",
   },
+  // ===== v0.8.2（2026-09-17）：悬浮指标条 =====
+  float: {
+    shot: "截图",
+  },
   pet: {
     settings: {
       title: "桌宠",

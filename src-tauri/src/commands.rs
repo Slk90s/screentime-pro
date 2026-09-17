@@ -987,6 +987,12 @@ pub struct StatusBarConfig {
     // v0.7.6（2026-09-10）：悬浮指标条独立开关（与托盘状态栏总开关互不依赖，
     // 全屏时由采样线程自动隐藏，见 system_load/fullscreen.rs）
     pub float_enabled: bool,
+    // v0.8.2（2026-09-17）：截图总开关透传给浮窗。浮窗尾部「截图」按钮的可见条件
+    // = screenshot_enabled && float_enabled；浮窗 1Hz 轮询本结构即可联动（≤1s 生效），
+    // 不新增 IPC / 事件通道（与 show_disk 等开关同机制）。
+    // 权威源仍是 screenshot 模块的 `screenshot_enabled` 设置键：本字段只读不存
+    // （save 不落库），缓存写入点见 screenshot_set_config / set_status_bar_config。
+    pub screenshot_enabled: bool,
 }
 
 impl Default for StatusBarConfig {
@@ -999,6 +1005,8 @@ impl Default for StatusBarConfig {
             show_disk: false,
             show_net: true,
             float_enabled: false,
+            // 与 ScreenshotConfig::default().enabled 一致（截图默认开启）
+            screenshot_enabled: true,
         }
     }
 }
@@ -1033,6 +1041,13 @@ impl StatusBarConfig {
             .get_setting("status_bar_float_enabled")
             .map(|s| s == "true")
             .unwrap_or(false);
+        // v0.8.2 新增：截图总开关（与 ScreenshotConfig::load 同 key 同默认值 true）。
+        // 注意：本函数只在启动时构造 AppState 缓存用；运行期变更由
+        // screenshot_set_config 同步缓存，get_status_bar_config 命令读的是缓存
+        let screenshot_enabled = db
+            .get_setting("screenshot_enabled")
+            .map(|s| s == "true")
+            .unwrap_or(true);
         Self {
             enabled,
             show_cpu,
@@ -1040,11 +1055,14 @@ impl StatusBarConfig {
             show_disk,
             show_net,
             float_enabled,
+            screenshot_enabled,
         }
     }
 
     pub fn save(&self, db: &crate::db::AppDb) -> rusqlite::Result<()> {
         let b = |v: bool| if v { "true" } else { "false" };
+        // 注意：screenshot_enabled 刻意不在这里持久化——权威源是 screenshot 模块的
+        // `screenshot_enabled` 键（ScreenshotConfig::save 写），本结构只是透传视图
         db.set_setting("statusbar_metrics_enabled", b(self.enabled))?;
         db.set_setting("status_bar_enabled", b(self.enabled))?;
         db.set_setting("status_bar_show_cpu", b(self.show_cpu))?;
@@ -1079,6 +1097,14 @@ pub fn set_status_bar_config(
     };
     config.save(&state.db).map_err(|e| e.to_string())?;
     *state.status_bar_config.lock().unwrap_or_else(|e| e.into_inner()) = config;
+    // v0.8.2：screenshot_enabled 的权威源在截图模块。设置页可能持有打开时的旧快照，
+    // 保存状态栏配置时会把旧值回写缓存，导致浮窗按钮显隐与截图实际开关脱节——
+    // 这里强制用 DB 权威值兜底覆盖。
+    state
+        .status_bar_config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .screenshot_enabled = crate::screenshot::ScreenshotConfig::load(&state.db).enabled;
     // v0.7.6：设置页改动 → 托盘菜单勾选态即时同步（防「页面改了、菜单还挂旧勾」）。
     // v0.7.11（2026-09-14）：托盘菜单唯一勾选项已改为「启用状态栏」总开关，sync 刷 enabled
     if let Some(toggles) = app.try_state::<crate::TrayStatusBarToggle>() {
