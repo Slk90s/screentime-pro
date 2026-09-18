@@ -31,8 +31,7 @@
 
 > 目的：定义 **版本号从哪来、发版前改哪些地方、CI 怎么跑、出问题怎么回滚**。
 > 与 README 区别：README 是用户面（去哪下载、每个版本有什么），本文件是维护者面（怎么发出去）。
-> 最后更新：2026-09-18（v0.9.0 **重切版已发布完成**：tag `39a7810`；GitHub Release `391264105`
-> 6 资产 / 240.5 MiB；Gitee Release `1151533` 5 附件 / 133.8 MiB）
+> 最后更新：2026-09-18（**v0.9.1 已发布**：macOS 屏幕录制权限闸门 + 截图历史多选；详见 §7 版本表末行）
 
 ---
 
@@ -118,11 +117,11 @@ grep -n 'badge/version' README.md
 `.github/workflows/build.yml` 中三个 job（windows / linux / macos）**各写了一份**
 `releaseBody`，内容是**硬编码的字符串**，不会自动跟着版本变。
 
-**当前仓库的三份 `releaseBody` 已是 v0.9.0 的文案**（v0.7.6 起每版发版时同步改写）。
-v0.9.0 **重切**时又并入两段内容：`#### ✨ 新增：macOS 系统 Vision 取字` 与
-`#### 🔧 修复` 里的 mac / Linux 取字 P0 三条，并在标题下补一行「⚠️ 本版为同名 tag 重切版」
-（三份 body 仍逐字相同；线上正文 **1714 字符**）。重切版实测资产体积与旧表一致（MiB 口径：
-exe 27.16 / dmg 26.82 / app.tar.gz 25.6 / deb 27.13 / rpm 27.13 / AppImage 106.72）。
+**当前仓库的三份 `releaseBody` 已是 v0.9.1 的文案**（v0.7.6 起每版发版时同步改写）。
+v0.9.1 的 body 为三段：标题下「#### 🔧 修复」写 **macOS 截图后应用全部消失、只剩桌面（P0）**
+（未预检「屏幕录制」TCC 权限 → 底层只拿得到桌面壁纸层；现已预检 + 主动请求 + 弹窗引导到系统设置）、
+「#### ✨ 新增：截图历史多选」写设置页「选择」模式（全选 / 取消 / 批量删除，一律进回收站）、
+以及「#### 📊 包体积」表（三份 body 仍逐字相同）。
 历史教训：v0.7.5 及以前长期停留在 v0.7.0 的旧文案（"整合 0.6.2 全部 Beta 修复"、
 日历月视图、喂食系统修复等），与当版内容完全无关。
 
@@ -328,6 +327,7 @@ echo "   git push origin main && git push origin v$NEW"
 
 | 版本 | 发布时间 | 状态 | 关键说明 |
 |------|----------|------|----------|
+| **v0.9.1** | 2026-09-18 | ✨ 功能版 | **截图历史多选 + macOS 截图权限闸门**。① **修复 macOS「截图后应用全部消失、只剩桌面」（P0）**：根因是截图前未预检系统「屏幕录制」TCC 权限 —— 无权限时 `CGWindowListCreateImage` 只返回桌面壁纸层，现象即「截完应用全不见」。现 `begin_capture` 先 `CGPreflightScreenCaptureAccess` 预检，未授权则 `CGRequestScreenCaptureAccess` 主动请求，仍未授权回**可读中文错误**（经 `screenshot-error` 事件）；设置页弹窗 + 「打开系统设置」直达「隐私与安全性 → 屏幕录制」，`open_privacy_settings` 跳转目标同步改为 `Privacy_ScreenCapture`。② **截图历史支持多选**：新增 `screenshot_delete_many(ids)` IPC（复用单删 + 回收站，返回实际删除条数），前端 `removeMany` + 设置页「选择」工具栏（全选 / 取消全选 / 批量删除），删除项一律进系统回收站。**IPC 总数 81→82**（screenshot/ 14→15）。**发布落点**：见本节末（发版后回填 tag / Release id / 资产数）。 |
 | **v0.9.0** | 2026-09-18 | ✨ 功能版 | **取字增强引擎（PaddleOCR-ONNX 本地两段式 OCR）**：det 把短边 <736px 图先放大再检测，小字/深色底 8/8 全对；设置页「取字引擎」标准/增强双选；新增 `ocr_engine_info` IPC（总数 80→**81**）。**macOS「标准」引擎 = 系统 Vision**（`VNRecognizeTextRequest`，Accurate + 语言校正，零下载、断网可用）。修复：桌宠拖拽期冻结皮肤动画（与悬浮窗同机制）、菜单↔设置页「隐藏桌宠」语义统一；**macOS / Linux 取字完全不可用（P0×3：运行库落盘路径返回目录而非文件名 → 永远落不了盘；下载超时 20s 过短；默认引擎/配置归一化不感知平台）**、macOS「取字引擎」两个选项都点不了的死锁（判据改为只看随包模型）。**资源分发分平台**：Windows 运行库+模型随包；macOS / Linux 模型随包、运行库首次使用时后台静默下载（源 GitHub Release `ocr-runtime` → Gitee 镜像，`SD_OCR_DOWNLOAD_BASE` 可覆盖，带 SHA256 校验）。⚠️ **本版为同名 tag 重切版**：首发版（`4b642ab`）对 macOS / Linux 取字不可用，修复后重切（见 §4.1）。**重切版落点**：tag / commit `39a7810`；GitHub Release `391264105`（6 资产 / 240.5 MiB）；Gitee Release `1151533`（5 附件 / 133.8 MiB，AppImage 111.9 MB 超 Gitee 单文件 100 MB 上限，仅 GitHub 提供） |
 | **v0.8.2** | 2026-09-17 | 🩹 修复版 | 浮窗截图按钮（可见条件 = 截图开启 && 浮窗开启，1Hz 配置轮询，**零新增 IPC**）；桌宠右键菜单 ↔ 设置页状态同步 |
 | **v0.8.0** | 2026-09-16 | ✨ 功能版 | **屏幕截图（新功能）**：全局快捷键 `CmdOrCtrl+Shift+A` 唤起遮罩式全屏选区，仿 QQ 浮动工具栏（保存 / 全屏 / 圆角 / 阴影 / 确认 / 取消），**截图默认进剪贴板**，本地历史 FIFO（超限移入回收站）；新增 `screenshot/` 模块、`capture` 窗口、`screenshots` 表、10 个 IPC 命令。**桌宠点击穿透修复（P0）**：整窗开关改为 32×32 alpha 命中网格 + 全局光标轮询（`pet/hit_mask.rs`）。**macOS 前台全屏真识别**（`CGWindowListCopyWindowInfo` + `CGDisplayBounds`）。依赖 `windows` 0.58→0.62，新增 `xcap` / `arboard` / `image` / `tauri-plugin-global-shortcut` |

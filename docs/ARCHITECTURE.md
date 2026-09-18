@@ -50,10 +50,12 @@
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-09-18（同步至 v0.9.0 **重切版**；取字新增「增强引擎」（PaddleOCR-ONNX 本地模型）+
-> 引擎调度层与设置页引擎切换；**macOS「标准」引擎 = 系统 Vision**（`ocr_vision.rs`，零下载）；
-> **Windows 运行库与模型随包；macOS / Linux 模型随包、运行库改为首次使用时后台静默下载**
-> （源 GitHub Release `ocr-runtime` → Gitee 镜像））
+> 最后更新：2026-09-18（同步至 **v0.9.1**；截图历史支持**多选批量删除**；新增 **macOS「屏幕录制」权限闸门**
+> —— `begin_capture` 预检 `CGPreflightScreenCaptureAccess`，未授权则 `CGRequestScreenCaptureAccess` 请求并由
+> 设置页弹窗引导到「隐私与安全性 → 屏幕录制」，修复「截完应用全消失只剩桌面」；上一版 v0.9.0 取字新增
+> 「增强引擎」（PaddleOCR-ONNX 本地模型）+ 引擎调度层与设置页引擎切换；**macOS「标准」引擎 = 系统 Vision**
+> （`ocr_vision.rs`，零下载）；**Windows 运行库与模型随包；macOS / Linux 模型随包、运行库改为首次使用时
+> 后台静默下载**（源 GitHub Release `ocr-runtime` → Gitee 镜像））
 
 ---
 
@@ -61,7 +63,7 @@
 
 跨平台应用使用时长追踪（macOS / Windows / Linux），对标 iOS「屏幕使用时间」。**数据 100% 本地（SQLite bundled），零上传，隐私优先**。
 
-栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v0.9.0**（已发布，详见 [`RELEASE.md`](RELEASE.md)）。
+栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v0.9.1**（已发布，详见 [`RELEASE.md`](RELEASE.md)）。
 
 > ⚠️ 本节版本号在 v0.7.0 → v0.7.5 期间**长期未更新**（曾停留在 v0.7.0），与 `tauri.conf.json` 脱节。
 > 版本号唯一真实来源是 **`src-tauri/tauri.conf.json` 的 `version`**，改版本时务必回来同步本节。
@@ -501,7 +503,7 @@ sql/                     ← SQLite 迁移（已恢复入库，为数据库唯�
 | 各版本 `NOTES.md` | 发布说明草稿（**需人工**回填到 `build.yml` 的 `releaseBody`，见下） |
 
 > ⚠️ `build.yml` 的 `releaseBody` 是**硬编码死文本**，不会自动跟随版本。
-> 当前仓库三份（windows / linux / macos job）为 **v0.9.0 的文案**（发版时已同步）。
+> 当前仓库三份（windows / linux / macos job）为 **v0.9.1 的文案**（发版时已同步）。
 > 每次发版前必须手动替换为本版内容，否则线上 Release Notes 显示旧版本的内容。
 > 模板与完整流程见 [`RELEASE.md`](RELEASE.md) §3.1 / §5。
 
