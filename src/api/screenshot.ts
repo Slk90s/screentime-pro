@@ -32,7 +32,9 @@ export const DEFAULT_SCREENSHOT_CONFIG: ScreenshotConfig = {
   corner_radius: 8,
   shadow: false,
   max_count: 200,
-  // v0.9.0：默认标准引擎（增强引擎要额外吃一次模型加载与 ~33MB 内存）
+  // v0.9.0：仅预览兜底。真实默认按平台定（Rust `default_engine()`：
+  // Windows = "system"；macOS / Linux 无系统引擎 → "enhanced"），
+  // 进入应用后立刻被 `screenshot.getConfig()` 的真值覆盖。
   ocr_engine: "system",
 };
 

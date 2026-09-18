@@ -288,7 +288,11 @@
                 @change="onOcrEngine('system')"
               />
               <b>{{ t("settings.shotOcrEngineSystem") }}</b>
-              <span>{{ t("settings.shotOcrEngineSystemDesc") }}</span>
+              <span>{{
+                ocrInfo && !ocrInfo.system_available
+                  ? t("settings.shotOcrEngineSystemUnsupported")
+                  : t("settings.shotOcrEngineSystemDesc")
+              }}</span>
             </label>
             <label
               class="engine-opt"
@@ -299,7 +303,7 @@
                 name="ocr-engine"
                 value="enhanced"
                 :checked="shotConfig.ocr_engine === 'enhanced'"
-                :disabled="!shotConfig.enabled || (!!ocrInfo && !ocrInfo.enhanced_ready)"
+                :disabled="!shotConfig.enabled || !enhancedSelectable"
                 @change="onOcrEngine('enhanced')"
               />
               <b>{{ t("settings.shotOcrEngineEnhanced") }}</b>
@@ -1119,11 +1123,31 @@ async function loadOcrEngineInfo() {
 }
 
 /** 引擎选择提示：资源缺失时说清「为什么不能选」，齐备时报体积（用户对体积有知情权） */
+/**
+ * 「增强」引擎可否被选中。
+ *
+ * ⚠️ 修复点（v0.9.0 补丁）：原先只要 `!enhanced_ready` 就禁用「增强」。
+ * 但 macOS / Linux 的运行库不随包，下载又**只在选中「增强」后才触发** ——
+ * 结果「标准」禁用（本平台没有）、「增强」也禁用（尚未下载）→ **两个都点不了**，
+ * 用户被永久卡死。故：本平台没有系统引擎时，即使运行库尚未就绪也允许选，
+ * 由后台下载补齐（提示文案会说清「首次使用自动下载」）。
+ */
+const enhancedSelectable = computed(() => {
+  const info = ocrInfo.value;
+  if (!info) return false;
+  return info.enhanced_ready || !info.system_available;
+});
+
 const ocrEngineHint = computed(() => {
   const info = ocrInfo.value;
   if (!info) return t("settings.shotOcrEngineChecking");
-  if (!info.enhanced_ready) return t("settings.shotOcrEngineMissing");
-  return t("settings.shotOcrEngineReady", { mb: String(info.enhanced_size_mb) });
+  if (info.enhanced_ready) {
+    return t("settings.shotOcrEngineReady", { mb: String(info.enhanced_size_mb) });
+  }
+  // 本平台没有系统引擎（macOS / Linux）→ 运行库靠后台自动下载补，
+  // 此时是「正在获取」而不是「缺失/请重装」，文案必须区分开。
+  if (!info.system_available) return t("settings.shotOcrEngineDownloading");
+  return t("settings.shotOcrEngineMissing");
 });
 
 /** 切换取字引擎：乐观更新 + 失败回滚（与卡片内其他开关同款约定） */

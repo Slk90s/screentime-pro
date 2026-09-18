@@ -182,6 +182,9 @@ export default {
     shotOcrEngineReady: "增强引擎已就绪（随包体积 {mb} MB）。首次取字会加载模型（约 2~3 秒），之后常驻内存、即时响应。",
     shotOcrEngineMissing: "增强引擎的运行库或模型缺失，当前版本无法启用——请重新安装完整版本。",
     shotOcrEngineChecking: "正在检测引擎资源…",
+    shotOcrEngineSystemUnsupported: "当前平台暂未提供系统识别（仅 Windows 有），请使用「增强」引擎。",
+    shotOcrEngineDownloading:
+      "本平台使用「增强」引擎：运行库（约 30~45MB，带 SHA256 校验）会在首次打开截图遮罩时自动后台下载，完成后即可取字。首次下载期间取字会提示稍后重试，无需手动操作。",
     shotExportStyle: "默认导出样式",
     shotRadius: "默认圆角",
     shotShadow: "默认投影",

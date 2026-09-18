@@ -103,8 +103,10 @@ pub struct ScreenshotConfig {
     /// 历史截图 FIFO 上限（超出后最旧的移入回收站）
     pub max_count: u32,
     /// 取字引擎（v0.9.0）：`system` = 系统内置 / `enhanced` = PaddleOCR-ONNX 本地模型。
-    /// 存字符串而非枚举，是为了让「旧配置没有这个键」与「用户手改脏值」都能安全回落
-    /// （解析在 `ocr_engine::EngineKind::parse`，未知值一律回 `system`）。
+    /// 存字符串而非枚举，是为了让「旧配置没有这个键」与「用户手改脏值」都能安全回落。
+    /// ⚠️ 内存/库里的值**恒为归一化后的结果**（见 [`Self::normalized_engine`]）：
+    /// 缺省值按平台定（Windows = `system`，macOS/Linux = `enhanced`），
+    /// 且在没有标准引擎的平台上「标准」会被自愈成「增强」。
     pub ocr_engine: String,
 }
 
@@ -121,9 +123,10 @@ impl Default for ScreenshotConfig {
             corner_radius: 8,
             shadow: false,
             max_count: 200,
-            // 默认标准引擎：增强引擎要额外吃 ~33MB 内存与一次模型加载，
-            // 用户显式选了才付这个代价（也保住「默认零额外依赖」的产品口径）。
-            ocr_engine: ocr_engine::EngineKind::System.as_str().into(),
+            // 默认引擎**按平台定**（v0.9.0 修复）：Windows 用标准（零体积零依赖、
+            // 无模型加载耗时）；macOS / Linux 没有标准引擎实现，默认必须直接给「增强」，
+            // 否则开箱取字必然报「仅支持 Windows」（v0.9.0 首发就是这个毛病）。
+            ocr_engine: ocr_engine::default_engine().as_str().into(),
         }
     }
 }
@@ -137,11 +140,20 @@ impl ScreenshotConfig {
         }
     }
 
-    /// 引擎值的**唯一**归一化口径（脏值 / 空值 / 旧版本未知值 → `system`）。
+    /// 引擎值的**唯一**归一化口径。
+    ///
+    /// 走 [`ocr_engine::effective_kind`]（而非裸 `EngineKind::parse`），因此不仅是
+    /// 「脏值 / 空值 → 标准」，还带**平台自愈**：本平台没有标准引擎（macOS / Linux）
+    /// 却配了标准时，归一化结果直接是「增强」。
+    ///
+    /// 为什么必须自愈：v0.9.0 的默认值是 `system`，macOS 用户只要改过任意一项截图
+    /// 设置（触发 `save()` 就会把 `system` 写进 `screenshot_ocr_engine`），
+    /// 升级后若只改默认值不治存量，取字仍会一直报「仅支持 Windows」。
+    ///
     /// `load` / `save` / `screenshot_set_config` 三处共用，避免「一处归一化、
     /// 另一处原样透传」的口径分裂。
     fn normalized_engine(&self) -> &'static str {
-        ocr_engine::EngineKind::parse(&self.ocr_engine).as_str()
+        ocr_engine::effective_kind(&self.ocr_engine).as_str()
     }
 
     /// 就地归一化全部「有规范形式」的字段（目前只有 `ocr_engine`）。
@@ -357,7 +369,7 @@ fn warm_ocr_engine(app: &AppHandle) {
     let Some(state) = app.try_state::<ScreenshotState>() else {
         return;
     };
-    let kind = ocr_engine::EngineKind::parse(
+    let kind = ocr_engine::effective_kind(
         &state
             .config
             .lock()
@@ -809,7 +821,7 @@ pub async fn screenshot_ocr(
 
     // ② 引擎选择与资源路径在此解析（读配置 + 探测文件系统），
     //    再连同裁剪图一起 move 进阻塞任务 —— 阻塞线程里不碰 Tauri 状态。
-    let kind = ocr_engine::EngineKind::parse(
+    let kind = ocr_engine::effective_kind(
         &state
             .config
             .lock()
@@ -831,7 +843,7 @@ pub fn ocr_engine_info(
     app: AppHandle,
     state: tauri::State<'_, ScreenshotState>,
 ) -> ocr_engine::EngineInfo {
-    let kind = ocr_engine::EngineKind::parse(
+    let kind = ocr_engine::effective_kind(
         &state
             .config
             .lock()
@@ -927,19 +939,28 @@ mod tests {
     /// 这个测试来自一次真机验证抓到的真实缺陷：`save()` 只归一化了写入 DB 的值，
     /// 而 `screenshot_set_config` 把**原始入参**放进内存缓存、`screenshot_get_config`
     /// 又读那份缓存 —— 于是写入 `garbage-engine` 后读回来还是 `garbage-engine`。
-    /// 取字功能本身没错（各调用点都会 `EngineKind::parse` 兜底），但接口报的值
-    /// 与实际生效的不一致，设置页会「两个引擎都不选中」。
+    /// 取字功能本身没错（各调用点都会兜底），但接口报的值与实际生效的不一致，
+    /// 设置页会「两个引擎都不选中」。
+    ///
+    /// ⚠️ 期望值**按平台**：归一化走 `effective_kind`，在没有标准引擎的平台
+    /// （macOS / Linux）一切「非增强」输入都会被自愈成 `enhanced`。
     #[test]
     fn normalize_canonicalizes_ocr_engine() {
         let mut cfg = ScreenshotConfig::default();
+        let fallback = if ocr_engine::system_engine_available() {
+            "system"
+        } else {
+            // 本平台没有标准引擎 → 脏值必须自愈成「增强」，否则取字不可用
+            "enhanced"
+        };
 
         cfg.ocr_engine = "garbage-engine".into();
         cfg.normalize();
-        assert_eq!(cfg.ocr_engine, "system", "未知值必须回落 system");
+        assert_eq!(cfg.ocr_engine, fallback, "未知值必须回落到本平台可用引擎");
 
         cfg.ocr_engine = "  ".into();
         cfg.normalize();
-        assert_eq!(cfg.ocr_engine, "system", "空白值必须回落 system");
+        assert_eq!(cfg.ocr_engine, fallback, "空白值必须回落到本平台可用引擎");
 
         cfg.ocr_engine = "ONNX".into();
         cfg.normalize();
@@ -948,5 +969,18 @@ mod tests {
         // 幂等：归一化过的值再归一化不变
         cfg.normalize();
         assert_eq!(cfg.ocr_engine, "enhanced", "归一化必须幂等");
+    }
+
+    /// 缺省配置的引擎必须是「本平台开箱可用」的那个 ——
+    /// macOS / Linux 若默认成 `system`，用户第一次取字就会看到「仅支持 Windows」。
+    #[test]
+    fn default_config_engine_is_usable_on_this_platform() {
+        let cfg = ScreenshotConfig::default();
+        let expected = if ocr_engine::system_engine_available() {
+            "system"
+        } else {
+            "enhanced"
+        };
+        assert_eq!(cfg.ocr_engine, expected);
     }
 }

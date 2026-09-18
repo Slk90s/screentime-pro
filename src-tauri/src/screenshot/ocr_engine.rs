@@ -64,11 +64,50 @@ impl EngineKind {
 
     /// 解析配置值。**未知值一律回落到 `System`** —— 旧配置里没有这个键、
     /// 或用户手改坏了配置，都不该让取字直接不可用。
+    /// ⚠️ 本函数是**纯字符串解析**，不带平台判断；「本平台到底能不能用标准引擎」
+    /// 由下面的 [`effective_kind`] 决定。两者刻意分开，避免污染这里的可测性。
     pub fn parse(s: &str) -> Self {
         match s.trim().to_ascii_lowercase().as_str() {
             "enhanced" | "onnx" => EngineKind::Enhanced,
             _ => EngineKind::System,
         }
+    }
+}
+
+/// 本平台是否内置「标准」取字引擎。
+///
+/// 标准引擎 = `ocr.rs` 的系统能力，**目前仅 Windows 实现**（WinRT `Media.Ocr`）；
+/// macOS / Linux 尚未落地（macOS 计划接系统 Vision、Linux 计划接 Tesseract，均未实现），
+/// 在这两个平台上 `ocr::recognize()` 只会返回「仅支持 Windows」的错误。
+pub const fn system_engine_available() -> bool {
+    cfg!(target_os = "windows")
+}
+
+/// 引擎**缺省值**（配置里没有这个键时使用）。
+///
+/// - 有标准引擎的平台（Windows）→ `system`：零额外体积、零依赖、零模型加载；
+/// - 没有标准引擎的平台（macOS / Linux）→ `enhanced`：若默认成 `system`，
+///   开箱取字必然报「仅支持 Windows」，等于功能不可用。
+pub const fn default_engine() -> EngineKind {
+    if system_engine_available() {
+        EngineKind::System
+    } else {
+        EngineKind::Enhanced
+    }
+}
+
+/// 把「配置里的引擎字符串」解析为**本平台真正可用**的引擎。
+///
+/// 唯一会改写用户选择的情形：**本平台没有标准引擎（macOS / Linux）却配了标准** ——
+/// 此时回落到增强，否则取字必然失败。这条同时也是**自愈路径**：
+/// v0.9.0 的默认值是 `system`，macOS 用户只要改过任意一项截图设置（触发 `save()`）
+/// 就会把 `system` 写进库；升级到修复版后靠这里自动改回 `enhanced`，无需用户手改配置。
+pub fn effective_kind(config_value: &str) -> EngineKind {
+    let k = EngineKind::parse(config_value);
+    if k == EngineKind::System && !system_engine_available() {
+        EngineKind::Enhanced
+    } else {
+        k
     }
 }
 
@@ -229,10 +268,17 @@ fn user_ort_dir() -> Option<PathBuf> {
     }
 }
 
-/// 下载落点（优先用户可写缓存，回退 exe 同级 `ort/`，再回退相对路径）
+/// 下载落点（**必须是「目录 + 文件名」，绝不能只返回目录**）。
+///
+/// 🐞 历史 bug（v0.9.0 首发即存在，本版修复）：首分支曾写成 `return u;` ——
+/// `user_ort_dir()` 返回的是**目录**（`.../ort`），于是 `fs::write(目录, bytes)`
+/// 必然失败（Windows 报「拒绝访问」/ POSIX 报 EISDIR），
+/// **macOS / Linux 的运行库永远落不了盘 → 增强引擎永远不可用**。
+/// 由于 Windows 运行库随包、`download_runtime_lib_if_missing` 会提前返回，
+/// 这个 bug 在 Windows 上永远暴露不出来，只打中真正需要下载的 mac / Linux。
 fn download_target_path(name: &str) -> PathBuf {
     if let Some(u) = user_ort_dir() {
-        return u;
+        return u.join(name);
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
@@ -242,53 +288,36 @@ fn download_target_path(name: &str) -> PathBuf {
     PathBuf::from("ort").join(name)
 }
 
-/// 增强引擎运行时库按需下载（macOS / Linux 走此通道；Windows 运行库随包天然就绪）。
-///
-/// **按序尝试**内置基址 [`MIRROR_OCR_DOWNLOAD_BASES`]（GitHub Release `ocr-runtime` → Gitee 镜像），
-/// 可用环境变量 `SD_OCR_DOWNLOAD_BASE` 覆盖（覆盖后只用该单一基址）。
-/// 基址下应存在 `<lib_name>`（文件名见 `ort_lib_name`），
-/// 可选 `<lib_name>.sha256`（单行十六进制摘要）做完整性校验。
-///
-/// ⚠️ **只在后台预热线程调用**（见 `mod.rs::warm_ocr_engine`），不要放进 `recognize()` 同步路径：
-/// 运行库 29~43MB，慢网下可能数分钟。超时策略为「连接 30s + 总上限 10 分钟 + 每源 3 次重试」。
-///
-/// 设计原则：**绝不阻断取字**。任何失败（网络 / 校验 / 写入）都只记 `tracing` 日志并返回
-/// `false`，调用方据此回落到「标准」引擎或向用户提示，不会让截图流程崩溃。
-///
-/// ⚠️ 仅在「本平台运行库未随包」时才有意义：Windows 运行库（`onnxruntime.dll`）随包，
-/// `resolve_ort_lib` 已命中 → 直接返回 `true`，不会发任何网络请求。
-pub fn download_runtime_lib_if_missing(resource_dir: Option<&Path>) -> bool {
-    if resolve_ort_lib(resource_dir).is_some() {
-        return true; // 已就绪，无需下载（Windows 常态）
-    }
-    // 候选下载基址：环境变量覆盖（只用一个）→ 否则按内置顺序尝试（GitHub 主源 → Gitee 国内镜像）。
-    let bases: Vec<String> = match std::env::var("SD_OCR_DOWNLOAD_BASE") {
+/// 组装实际要请求的下载基址：环境变量覆盖（只用一个）→ 否则内置顺序（GitHub 主源 → Gitee 镜像）。
+fn download_bases() -> Vec<String> {
+    match std::env::var("SD_OCR_DOWNLOAD_BASE") {
         Ok(v) if !v.trim().is_empty() => vec![v.trim().trim_end_matches('/').to_string()],
         _ => MIRROR_OCR_DOWNLOAD_BASES
             .iter()
             .map(|s| s.trim_end_matches('/').to_string())
             .collect(),
-    };
-    let name = ort_lib_name();
-    let target = download_target_path(name);
+    }
+}
 
-    // ⚠️ 超时策略是本函数的关键：运行库 29~43MB，**绝不能用短「总超时」**
-    // （最初写成 20s 总超时 → 慢网必然失败，等于 mac/Linux 取字永远不可用）。
-    // 改为「连接 30s + 总上限 10 分钟 + 每个基址 3 次重试」。
-    let client = match reqwest::blocking::Client::builder()
+/// 建下载用的 HTTP 客户端。
+///
+/// ⚠️ 超时策略是这条链路的关键：运行库 29~43MB，**绝不能用短「总超时」**
+/// （最初写成 20s 总超时 → 慢网必然失败，等于 mac/Linux 取字永远不可用）。
+/// 这里用「连接 30s + 总上限 10 分钟」，配合调用侧的「每源 3 次重试」。
+fn download_client() -> Result<reqwest::blocking::Client, reqwest::Error> {
+    reqwest::blocking::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(30))
         .timeout(std::time::Duration::from_secs(600))
         .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(error = %e, "增强引擎运行库下载客户端创建失败");
-            return false;
-        }
-    };
+}
 
-    let mut downloaded: Option<(String, Vec<u8>)> = None;
-    'outer: for base in &bases {
+/// 按序拉取运行库字节：逐个基址 × 每基址 3 次重试，命中即返回 `(命中的基址, 字节)`。
+fn fetch_runtime_lib_bytes(
+    client: &reqwest::blocking::Client,
+    name: &str,
+    bases: &[String],
+) -> Option<(String, Vec<u8>)> {
+    for base in bases {
         let url = format!("{}/{}", base, name);
         for attempt in 1..=3u32 {
             tracing::info!(url = %url, attempt, "增强引擎运行库未随包，尝试后台下载");
@@ -298,50 +327,98 @@ pub fn download_runtime_lib_if_missing(resource_dir: Option<&Path>) -> bool {
                 .and_then(|r| r.error_for_status())
                 .and_then(|r| r.bytes())
             {
-                Ok(b) => {
-                    downloaded = Some((base.clone(), b.to_vec()));
-                    break 'outer;
-                }
+                Ok(b) => return Some((base.clone(), b.to_vec())),
                 Err(e) => {
                     tracing::warn!(error = %e, url = %url, attempt, "增强引擎运行库下载失败，将重试 / 换源");
                 }
             }
         }
     }
-    let Some((base, bytes)) = downloaded else {
-        tracing::error!("增强引擎运行库所有下载源均失败");
-        return false;
+    None
+}
+
+/// 可选 SHA256 校验：仅当基址下存在 `<name>.sha256` 且内容确为 64 位十六进制摘要时才校验；
+/// 缺失 / 404 / 网络失败 / 内容不是摘要 → **一律放行**（仅记日志）。
+/// 绝不因为「校验文件本身不可用」而把一份完好的运行库误判为损坏。
+/// 返回 `true` = 通过（或无从校验）。
+fn verify_sha256(
+    client: &reqwest::blocking::Client,
+    base: &str,
+    name: &str,
+    bytes: &[u8],
+) -> bool {
+    let Ok(hr) = client.get(format!("{}/{}.sha256", base, name)).send() else {
+        return true;
     };
-
-    // 可选 SHA256 校验：基址下存在 `<name>.sha256`（单行十六进制摘要）才校验；
-    // 缺失 / 404 / 内容不是摘要 → 一律跳过（仅记日志）。绝不因为「校验文件本身不可用」而误判为损坏。
-    if let Ok(hr) = client.get(format!("{}/{}.sha256", base, name)).send() {
-        if hr.status().is_success() {
-            if let Ok(htext) = hr.text() {
-                let expected = htext.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
-                if expected.len() == 64 && expected.bytes().all(|c| c.is_ascii_hexdigit()) {
-                    let mut h = Sha256::new();
-                    h.update(&bytes);
-                    let got = format!("{:x}", h.finalize());
-                    if got != expected {
-                        tracing::error!(expected = %expected, got = %got, "增强引擎运行库 SHA256 校验失败，已丢弃");
-                        return false;
-                    }
-                } else {
-                    tracing::warn!("增强引擎运行库 .sha256 内容非摘要，跳过校验");
-                }
-            }
-        }
+    if !hr.status().is_success() {
+        return true;
     }
+    let Ok(htext) = hr.text() else { return true };
+    let expected = htext
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if expected.len() != 64 || !expected.bytes().all(|c| c.is_ascii_hexdigit()) {
+        tracing::warn!("增强引擎运行库 .sha256 内容非摘要，跳过校验");
+        return true;
+    }
+    let mut h = Sha256::new();
+    h.update(bytes);
+    let got = format!("{:x}", h.finalize());
+    if got != expected {
+        tracing::error!(expected = %expected, got = %got, "增强引擎运行库 SHA256 校验失败，已丢弃");
+        return false;
+    }
+    true
+}
 
+/// 下载 → 校验 → 落盘（生产路径与测试探针共用同一实现）。
+///
+/// ⚠️ **只在后台线程调用**：运行库 29~43MB，慢网下可能耗时数分钟。
+/// ⚠️ `target` 必须是**文件路径**（`<ort 目录>/<库文件名>`）—— 传目录必然写失败，
+/// 见 [`download_target_path`] 记录的历史 bug。
+fn fetch_and_store(name: &str, target: &Path, bases: &[String]) -> Result<(), String> {
+    let client = download_client().map_err(|e| format!("创建下载客户端失败: {e}"))?;
+    let Some((base, bytes)) = fetch_runtime_lib_bytes(&client, name, bases) else {
+        return Err("所有下载源均失败".to_string());
+    };
+    if !verify_sha256(&client, &base, name, &bytes) {
+        return Err("SHA256 校验失败".to_string());
+    }
     if let Some(parent) = target.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Err(e) = std::fs::write(&target, &bytes) {
-        tracing::warn!(error = %e, "增强引擎运行库写入失败");
+    std::fs::write(target, &bytes).map_err(|e| format!("写入 {} 失败: {e}", target.display()))?;
+    tracing::info!(path = %target.display(), bytes = bytes.len(), "增强引擎运行库下载完成");
+    Ok(())
+}
+
+/// 增强引擎运行时库按需下载（macOS / Linux 走此通道；Windows 运行库随包天然就绪）。
+///
+/// **按序尝试**内置基址 [`MIRROR_OCR_DOWNLOAD_BASES`]（GitHub Release `ocr-runtime` → Gitee 镜像），
+/// 可用环境变量 `SD_OCR_DOWNLOAD_BASE` 覆盖（覆盖后只用该单一基址）。
+/// 基址下应存在 `<lib_name>`（文件名见 [`ort_lib_name`]），
+/// 可选 `<lib_name>.sha256`（单行十六进制摘要）做完整性校验。
+///
+/// ⚠️ **只在后台预热线程调用**（见 `mod.rs::warm_ocr_engine`），不要放进 `recognize()` 同步路径：
+/// 运行库 29~43MB，慢网下可能数分钟。超时策略为「连接 30s + 总上限 10 分钟 + 每源 3 次重试」。
+///
+/// 设计原则：**绝不阻断取字**。任何失败（网络 / 校验 / 写入）都只记 `tracing` 日志并返回
+/// `false`，调用方据此向用户提示，不会让截图流程崩溃。
+///
+/// ⚠️ 仅在「本平台运行库未随包」时才有意义：Windows 运行库（`onnxruntime.dll`）随包，
+/// `resolve_ort_lib` 已命中 → 直接返回 `true`，不会发任何网络请求。
+pub fn download_runtime_lib_if_missing(resource_dir: Option<&Path>) -> bool {
+    if resolve_ort_lib(resource_dir).is_some() {
+        return true; // 已就绪，无需下载（Windows 常态）
+    }
+    let name = ort_lib_name();
+    let target = download_target_path(name);
+    if let Err(e) = fetch_and_store(name, &target, &download_bases()) {
+        tracing::error!(error = %e, "增强引擎运行库下载失败");
         return false;
     }
-    tracing::info!(path = %target.display(), "增强引擎运行库下载完成");
     resolve_ort_lib(resource_dir).is_some()
 }
 
@@ -442,7 +519,7 @@ impl EngineInfo {
         }
         Self {
             kind: kind.as_str().to_string(),
-            system_available: cfg!(target_os = "windows"),
+            system_available: system_engine_available(),
             enhanced_ready: paths.enhanced_ready(),
             ort_lib: paths.ort_lib.clone(),
             models_dir: paths.models_dir.clone(),
@@ -471,5 +548,114 @@ mod tests {
         for k in [EngineKind::System, EngineKind::Enhanced] {
             assert_eq!(EngineKind::parse(k.as_str()), k);
         }
+    }
+
+    /// 🐞 回归：下载落点必须是「`ort/` 目录下的**文件名**」，不能是目录本身。
+    /// v0.9.0 首发该函数首分支写成 `return u;`（返回目录）→
+    /// `fs::write(目录, bytes)` 必然失败 → mac/Linux 运行库永远落不了盘。
+    #[test]
+    fn download_target_is_a_file_named_after_the_lib() {
+        for name in [
+            "onnxruntime.dll",
+            "libonnxruntime.dylib",
+            "libonnxruntime.so",
+        ] {
+            let p = download_target_path(name);
+            assert_eq!(
+                p.file_name().and_then(|s| s.to_str()),
+                Some(name),
+                "下载落点必须是文件路径（目录 + 文件名），实际 = {}",
+                p.display()
+            );
+            assert_eq!(
+                p.parent()
+                    .and_then(|s| s.file_name())
+                    .and_then(|s| s.to_str()),
+                Some("ort"),
+                "下载落点必须位于 ort/ 目录下，实际 = {}",
+                p.display()
+            );
+        }
+    }
+
+    /// 平台差异：本平台没有标准引擎时（macOS / Linux），
+    /// 配置里的 `system` 与任何脏值都必须被抬成 `enhanced`，
+    /// 否则取字必然报「仅支持 Windows」（也涵盖旧配置自愈）。
+    #[test]
+    fn effective_kind_heals_on_platforms_without_system_engine() {
+        if system_engine_available() {
+            // Windows：如实尊重用户选择，脏值回标准
+            assert_eq!(effective_kind("system"), EngineKind::System);
+            assert_eq!(effective_kind("enhanced"), EngineKind::Enhanced);
+            assert_eq!(effective_kind("garbage"), EngineKind::System);
+        } else {
+            // macOS / Linux：一切「非增强」输入都落到增强
+            assert_eq!(effective_kind("system"), EngineKind::Enhanced);
+            assert_eq!(effective_kind("garbage"), EngineKind::Enhanced);
+            assert_eq!(effective_kind(""), EngineKind::Enhanced);
+            assert_eq!(effective_kind("  "), EngineKind::Enhanced);
+            assert_eq!(effective_kind("ONNX"), EngineKind::Enhanced);
+        }
+    }
+
+    /// 缺省引擎必须是本平台**开箱可用**的那个。
+    #[test]
+    fn default_engine_is_usable_on_this_platform() {
+        let expected = if system_engine_available() {
+            EngineKind::System
+        } else {
+            EngineKind::Enhanced
+        };
+        assert_eq!(default_engine(), expected);
+        // 缺省值经「平台自愈」后必须仍是它自己（不能出现「默认 system、自愈成 enhanced」的矛盾）
+        assert_eq!(effective_kind(default_engine().as_str()), default_engine());
+    }
+
+    /// 探针（默认忽略）：**真实**下载 macOS / Linux 运行库，验证
+    /// 「多源 + 重试 + SHA256 校验 + 落盘」整条链路。
+    ///
+    /// 为什么必须有这个探针：v0.9.0 首发时 `download_target_path` 把落点写成了**目录**，
+    /// 导致 mac/Linux 的运行库永远落不了盘；而 Windows 因运行库随包、函数提前返回，
+    /// **这个 bug 在开发机上完全暴露不出来**。此探针可在任意平台跑通整条下载链，
+    /// 是「macOS 到底能不能取字」唯一能在 Windows 上拿到的硬证据。
+    ///
+    /// 跑法（本机 `github.com` 直链不通，默认用 Gitee 镜像）：
+    /// ```text
+    /// SD_OCR_PROBE_LIB=libonnxruntime.dylib \
+    ///   cargo test --lib -- --ignored --nocapture probe_download_runtime_lib
+    /// ```
+    #[test]
+    #[ignore]
+    fn probe_download_runtime_lib() {
+        let name = std::env::var("SD_OCR_PROBE_LIB")
+            .unwrap_or_else(|_| "libonnxruntime.dylib".to_string());
+        let base = std::env::var("SD_OCR_PROBE_BASE")
+            .unwrap_or_else(|_| MIRROR_OCR_DOWNLOAD_BASES[1].to_string());
+        let dir = std::env::temp_dir().join("sd-ocr-probe");
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join(&name);
+        let _ = std::fs::remove_file(&target);
+
+        println!("== 下载 {name} ← {base}");
+        println!("== 落点 {}", target.display());
+        fetch_and_store(&name, &target, &[base]).expect("运行库下载失败");
+
+        assert!(
+            target.is_file(),
+            "落点必须是文件而不是目录: {}",
+            target.display()
+        );
+        let got = std::fs::read(&target).unwrap();
+        println!("== ✅ 落盘成功: {} 字节", got.len());
+        assert!(
+            got.len() > 1_000_000,
+            "运行库应 >1MB，实际 {} 字节",
+            got.len()
+        );
+        // 与官方 .sha256 对账（verify_sha256 已在 fetch_and_store 内执行，此处复核一次）
+        let mut h = Sha256::new();
+        h.update(&got);
+        println!("== sha256 {}", format!("{:x}", h.finalize()));
+        let _ = std::fs::remove_file(&target);
     }
 }

@@ -191,6 +191,10 @@ export default {
     shotOcrEngineMissing:
       "The enhanced engine runtime or models are missing, so it can't be enabled in this build — please reinstall the full version.",
     shotOcrEngineChecking: "Checking engine resources…",
+    shotOcrEngineSystemUnsupported:
+      "The OS engine isn't available on this platform (Windows only) — please use the Enhanced engine.",
+    shotOcrEngineDownloading:
+      "This platform uses the Enhanced engine: its runtime library (~30–45 MB, SHA256-verified) downloads automatically in the background the first time you open the capture overlay. Until it finishes, recognition asks you to retry shortly — no manual action needed.",
     shotExportStyle: "Default export style",
     shotRadius: "Default corner radius",
     shotShadow: "Default drop shadow",
