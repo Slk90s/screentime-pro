@@ -35,7 +35,7 @@
     Windows 运行库+模型随包；macOS / Linux 模型随包、运行库 `download_runtime_lib_if_missing()`
     首次使用时后台下载（默认源 GitHub Release `ocr-runtime`，`SD_OCR_DOWNLOAD_BASE` 可覆盖，
     带 SHA256 校验）。§12 的 releaseBody 现值说明更新为「v0.9.0 文案」。
-  - 2026-09-18 @v0.9.1: 新增 - macOS「标准」取字引擎落地：`screenshot/ocr_vision.rs`
+  - 2026-09-18 @v0.9.0: **重切补充** - macOS「标准」取字引擎落地：`screenshot/ocr_vision.rs`
     （系统 Vision `VNRecognizeTextRequest`；objc2 0.6 / objc2-vision 0.3 —— 与 Tauri 已引入的
     objc2 谱系**同代**，零新增版本谱系）。`ocr.rs` 降为「系统引擎的平台分发壳」
     （Win→WinRT / mac→Vision / Linux 明确降级）；`system_engine_available()` 在 macOS 为真，
@@ -43,13 +43,17 @@
     `EngineInfo` 增 `system_engine` / `enhanced_models_ready` / `enhanced_runtime_ready`：
     把「模型齐备」与「运行库就绪」**拆成两个字段**，修掉 macOS 上「增强」被永久锁死的死锁
     （前端判据由 `enhanced_ready` 改为 `enhanced_models_ready`）。**IPC 总数不变（仍 81）**。
+    同批合并进重切版：mac / Linux 取字**三重不可用**修复（运行库落盘路径曾返回目录而非文件名
+    → 运行库永远落不了盘；下载超时过短；平台感知默认引擎 + 存量配置自愈）。
+    **本版为同名 tag 重切**：v0.9.0 首发版对 macOS / Linux 的取字链路不可用，故修复后重切发布。
 -->
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-09-18（同步至 v0.9.0；取字新增「增强引擎」（PaddleOCR-ONNX 本地模型）+
-> 引擎调度层与设置页引擎切换；**Windows 运行库与模型随包；macOS / Linux 模型随包、运行库改为
-> 首次使用时后台静默下载**（源 GitHub Release `ocr-runtime`））
+> 最后更新：2026-09-18（同步至 v0.9.0 **重切版**；取字新增「增强引擎」（PaddleOCR-ONNX 本地模型）+
+> 引擎调度层与设置页引擎切换；**macOS「标准」引擎 = 系统 Vision**（`ocr_vision.rs`，零下载）；
+> **Windows 运行库与模型随包；macOS / Linux 模型随包、运行库改为首次使用时后台静默下载**
+> （源 GitHub Release `ocr-runtime` → Gitee 镜像））
 
 ---
 

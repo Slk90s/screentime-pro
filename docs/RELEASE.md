@@ -17,11 +17,15 @@
   - 2026-09-18 @v0.9.0: 修正 - v0.9.0 三端正式发布后对账；§3.1 现值说明由「v0.8.0 文案」更新为
     「v0.9.0 文案」；§7 版本表补 v0.8.2 行与 v0.9.0 行（取字增强引擎 + 桌宠拖拽/隐藏语义修复 +
     资源分发分平台）；记录 CI 三端全绿与 GitHub Release 6 资产。
+  - 2026-09-18 @v0.9.0（**重切**）: 修正 - 发现首发版对 macOS / Linux 的取字链路不可用（3 个 P0），
+    修复后**删除并重切同名 v0.9.0**（tag / Release 双端重建）；新增 §4.1「重切同名版本」操作步骤；
+    §3.1 现值说明补「三份 releaseBody 已并入 macOS 系统 Vision 与 mac / Linux 取字修复」；
+    §7 版本表 v0.9.0 行补重切说明。
 -->
 
 > 目的：定义 **版本号从哪来、发版前改哪些地方、CI 怎么跑、出问题怎么回滚**。
 > 与 README 区别：README 是用户面（去哪下载、每个版本有什么），本文件是维护者面（怎么发出去）。
-> 最后更新：2026-09-18（v0.9.0 已三端发布：CI 三端全绿、GitHub Release 6 资产、Gitee 镜像同步）
+> 最后更新：2026-09-18（v0.9.0 **重切版**已三端发布：修复 mac / Linux 取字不可用 + 接入 macOS 系统 Vision）
 
 ---
 
@@ -108,6 +112,8 @@ grep -n 'badge/version' README.md
 `releaseBody`，内容是**硬编码的字符串**，不会自动跟着版本变。
 
 **当前仓库的三份 `releaseBody` 已是 v0.9.0 的文案**（v0.7.6 起每版发版时同步改写）。
+v0.9.0 **重切**时又并入两段内容：`#### ✨ 新增：macOS 系统 Vision 取字` 与
+`#### 🔧 修复` 里的 mac / Linux 取字 P0 三条（重切后三份 body 均为 1562 字符）。
 历史教训：v0.7.5 及以前长期停留在 v0.7.0 的旧文案（"整合 0.6.2 全部 Beta 修复"、
 日历月视图、喂食系统修复等），与当版内容完全无关。
 
@@ -156,6 +162,44 @@ git push origin v0.8.0
 ```
 
 > 快捷脚本见 §6，可存为本地 `scripts/release.sh`（`scripts/` 已被 .gitignore 排除，不入库）。
+
+### 4.1 重切同名版本（已发布的版本修完 P0 后重发同版本号）
+
+用在「版本**已发布**、但随后发现该版有 P0、且该版几乎没有真实下载」的场合（v0.9.0 即为首例）。
+**不升版本号**，直接删掉旧的 tag / Release 后重切：好处是用户不必理解两个版本号，
+代价是同一版本号存在过两份二进制 —— **必须在 CHANGELOG 与 Release 正文里讲明**。
+
+```bash
+# ① 代码与文档改完，先跑完 §3 全部检查（P0 硬性）。版本号不用动。
+
+# ② 推 main（build.yml 有改动时 PAT 会被拒 → 一律走 SSH over 443）
+git push git@github.com:Slk90s/screentime-pro.git refs/heads/main:refs/heads/main
+
+# ③ ⚠️ 先删 Release，再删 tag —— 顺序反了会留下指向空 tag 的 Release
+TOKEN=$(gh auth token)
+#    release_id 取：GET https://api.github.com/repos/Slk90s/screentime-pro/releases/tags/vX.Y.Z
+curl -s -X DELETE -H "Authorization: token $TOKEN" \
+  "https://api.github.com/repos/Slk90s/screentime-pro/releases/<release_id>"
+git push git@github.com:Slk90s/screentime-pro.git :refs/tags/vX.Y.Z
+
+# ④ 本地重打 tag 指向新提交并重推（触发 CI 三平台）
+git tag -f vX.Y.Z <新 sha>
+git push git@github.com:Slk90s/screentime-pro.git refs/tags/vX.Y.Z:refs/tags/vX.Y.Z
+
+# ⑤ 盯 CI；出包后核对 target_commitish == 新 sha、6 资产 size
+curl -s -H "Authorization: token $TOKEN" \
+  "https://api.github.com/repos/Slk90s/screentime-pro/releases/tags/vX.Y.Z" \
+  | python -c "import sys,json;d=json.load(sys.stdin);print(d['target_commitish']);[print(a['name'],a['size']) for a in d['assets']]"
+
+# ⑥ Gitee 侧同法重建：先删 Release 再删 tag → 重推 tag → 重建 Release → 重传资产
+```
+
+- ⚠️ **不要只重推 tag 而不删 Release**：CI 的 release 步骤面对「已存在的同名 Release」
+  行为不确定（可能更新、也可能冲突失败）。**删掉重建是唯一稳定的做法**。
+- ⚠️ **Gitee 侧删 Release 会释放附件配额**，重传后总量不变，无需额外腾空间；但重建后要复核
+  `assets` 数 = 上传数 + 2（自动源码包）与逐文件字节数。
+- 记录要求：CHANGELOG 写清「首发版有什么问题 + 重切后指向哪个 commit」；
+  README 本版行标注「本版为重切版」。
 
 ---
 
@@ -244,7 +288,7 @@ echo "   git push origin main && git push origin v$NEW"
 
 | 版本 | 发布时间 | 状态 | 关键说明 |
 |------|----------|------|----------|
-| **v0.9.0** | 2026-09-18 | ✨ 功能版 | **取字增强引擎（PaddleOCR-ONNX 本地两段式 OCR）**：det 把短边 <736px 图先放大再检测，小字/深色底 8/8 全对；设置页「取字引擎」标准/增强双选；新增 `ocr_engine_info` IPC（总数 80→**81**）。修复：桌宠拖拽期冻结皮肤动画（与悬浮窗同机制）、菜单↔设置页「隐藏桌宠」语义统一。**资源分发分平台**：Windows 运行库+模型随包；macOS / Linux 模型随包、运行库首次使用时后台静默下载（源 GitHub Release `ocr-runtime`，`SD_OCR_DOWNLOAD_BASE` 可覆盖，带 SHA256 校验） |
+| **v0.9.0** | 2026-09-18 | ✨ 功能版 | **取字增强引擎（PaddleOCR-ONNX 本地两段式 OCR）**：det 把短边 <736px 图先放大再检测，小字/深色底 8/8 全对；设置页「取字引擎」标准/增强双选；新增 `ocr_engine_info` IPC（总数 80→**81**）。**macOS「标准」引擎 = 系统 Vision**（`VNRecognizeTextRequest`，Accurate + 语言校正，零下载、断网可用）。修复：桌宠拖拽期冻结皮肤动画（与悬浮窗同机制）、菜单↔设置页「隐藏桌宠」语义统一；**macOS / Linux 取字完全不可用（P0×3：运行库落盘路径返回目录而非文件名 → 永远落不了盘；下载超时 20s 过短；默认引擎/配置归一化不感知平台）**、macOS「取字引擎」两个选项都点不了的死锁（判据改为只看随包模型）。**资源分发分平台**：Windows 运行库+模型随包；macOS / Linux 模型随包、运行库首次使用时后台静默下载（源 GitHub Release `ocr-runtime` → Gitee 镜像，`SD_OCR_DOWNLOAD_BASE` 可覆盖，带 SHA256 校验）。⚠️ **本版为同名 tag 重切版**：首发版（`4b642ab`）对 macOS / Linux 取字不可用，修复后重切（见 §4.1） |
 | **v0.8.2** | 2026-09-17 | 🩹 修复版 | 浮窗截图按钮（可见条件 = 截图开启 && 浮窗开启，1Hz 配置轮询，**零新增 IPC**）；桌宠右键菜单 ↔ 设置页状态同步 |
 | **v0.8.0** | 2026-09-16 | ✨ 功能版 | **屏幕截图（新功能）**：全局快捷键 `CmdOrCtrl+Shift+A` 唤起遮罩式全屏选区，仿 QQ 浮动工具栏（保存 / 全屏 / 圆角 / 阴影 / 确认 / 取消），**截图默认进剪贴板**，本地历史 FIFO（超限移入回收站）；新增 `screenshot/` 模块、`capture` 窗口、`screenshots` 表、10 个 IPC 命令。**桌宠点击穿透修复（P0）**：整窗开关改为 32×32 alpha 命中网格 + 全局光标轮询（`pet/hit_mask.rs`）。**macOS 前台全屏真识别**（`CGWindowListCopyWindowInfo` + `CGDisplayBounds`）。依赖 `windows` 0.58→0.62，新增 `xcap` / `arboard` / `image` / `tauri-plugin-global-shortcut` |
 | **v0.7.11** | 2026-09-14 | 🚀 正式版 | 三端统一悬浮指标条（macOS 菜单栏文字指标整体移除）+ 托盘快捷项改「启用状态栏」总开关并与设置页双向同步 + 死代码清理（约 140 行 + 单测） |

@@ -1139,11 +1139,11 @@ const systemEngineDesc = computed(() => {
  * 而不是 `enhanced_ready`（= 运行库 + 模型）。
  *
  * ⚠️ 这条判据改过两次，别再改回去：
- * - v0.9.0 初版：只要 `!enhanced_ready` 就禁用。macOS 上运行库不随包、下载又
+ * - v0.9.0 首发：只要 `!enhanced_ready` 就禁用。macOS 上运行库不随包、下载又
  *   **只在选中「增强」后才触发** → 「标准」禁用（当时 mac 没有系统引擎）、
  *   「增强」也禁用 → **两个都点不了**，用户被永久卡死。
- * - 补丁版：`enhanced_ready || !system_available`（拿「本平台没有系统引擎」兜底）。
- *   v0.9.1 给 macOS 接上系统 Vision 后，这个兜底条件在 mac 上**不再成立**，
+ * - 中间态（未发布）：`enhanced_ready || !system_available`（拿「本平台没有系统引擎」兜底）。
+ *   一旦给 macOS 接上系统 Vision，这个兜底条件在 mac 上**不再成立**，
  *   死锁会原样复现（mac 默认走 system → 永远选不中 enhanced → 运行库永不下载）。
  * - 现在：只看 `enhanced_models_ready`。运行库缺失**不是**禁用理由 ——
  *   它由后台下载补齐，提示文案会说清「首次自动下载」。

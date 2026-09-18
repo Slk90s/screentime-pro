@@ -120,9 +120,9 @@ pub const fn default_engine() -> EngineKind {
 ///
 /// 唯一会改写用户选择的情形：**本平台没有标准引擎（Linux）却配了标准** ——
 /// 此时回落到增强，否则取字必然失败。这条同时也是**自愈路径**：
-/// v0.9.0 的默认值是 `system`，而当时 macOS 上没有标准引擎，用户只要改过任意一项
-/// 截图设置（触发 `save()`）就会被写成 `system`；v0.9.1 起 macOS 真的有了标准引擎
-/// （Vision），这个 `system` 不再需要被改写，直接生效。
+/// v0.9.0 **首发**那版在 macOS 上没有标准引擎（默认值却是 `system`），用户只要改过任意一项
+/// 截图设置（触发 `save()`）就会被写成 `system`；本版 macOS 真的有了标准引擎
+/// （Vision），这个 `system` 不再需要被改写，直接生效；Linux 上仍会被自愈成 `enhanced`。
 /// 反过来，若用户在修复版里被自愈成了 `enhanced`，那是有效选择，**不再改动**。
 pub fn effective_kind(config_value: &str) -> EngineKind {
     let k = EngineKind::parse(config_value);
