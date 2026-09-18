@@ -716,7 +716,34 @@
       :cancel-text="alertType === 'info' ? '' : t('common.cancel')"
       width="420px"
       @confirm="onAlertConfirm"
-    />
+    >
+      <!--
+        截图缺「屏幕录制」权限时，footer 多一个「重启应用」。
+        原因：macOS 的 TCC 授权**只对新启动的进程生效** —— 用户在系统设置里把开关打开后，
+        当前进程依然拿不到授权，现象就是「系统设置里明明是开着的，应用却一直说没权限」。
+        这里给一键重启，用户不必自己 Cmd+Q 再打开（多数人不会这么做，于是卡成死循环）。
+
+        ⚠️ 覆盖 footer 后，Modal 自带的按钮不再渲染 —— 下面 else 分支必须复刻它原本的
+        行为（confirm/warn 显示「取消 + 确定」，info 只显示「确定」），否则弹窗会没有按钮。
+      -->
+      <template #footer>
+        <template v-if="alertPermRestart">
+          <button class="modal-btn cancel" @click="alertOpen = false">{{ t("common.cancel") }}</button>
+          <button class="modal-btn cancel" @click="onAlertRestart">{{ t("settings.shotPermRestart") }}</button>
+          <button class="modal-btn primary" @click="onAlertConfirm">
+            {{ alertConfirmText || t("common.confirm") }}
+          </button>
+        </template>
+        <template v-else>
+          <button v-if="alertType !== 'info'" class="modal-btn cancel" @click="alertOpen = false">
+            {{ t("common.cancel") }}
+          </button>
+          <button class="modal-btn primary" @click="onAlertConfirm">
+            {{ alertConfirmText || t("common.confirm") }}
+          </button>
+        </template>
+      </template>
+    </Modal>
 
     <!-- ============ 导出成功后的弹窗 ============ -->
     <Modal
@@ -1041,20 +1068,44 @@ const alertMsg = ref("");
  * 用户知道点下去会发生什么（跳系统设置），而不是以为点完问题就解决了。
  */
 const alertConfirmText = ref("");
+/**
+ * 弹窗 footer 是否多给一个「重启应用」按钮。
+ * 只有「截图缺屏幕录制权限」这一种场景需要：TCC 新授权必须重启进程才生效。
+ */
+const alertPermRestart = ref(false);
 let pendingConfirm: (() => void | Promise<void>) | null = null;
 function showAlert(
   type: "info" | "confirm" | "warn",
   title: string,
   msg: string,
   onConfirm?: () => void | Promise<void>,
-  confirmText?: string
+  confirmText?: string,
+  /**
+   * 是否在 footer 追加「重启应用」（默认否，显式传 true 才出现）。
+   * 默认重置为 false，避免上一次带重启按钮的弹窗把状态残留给后续普通提示。
+   */
+  showRestart = false
 ) {
   alertType.value = type;
   alertTitle.value = title;
   alertMsg.value = msg;
   alertConfirmText.value = confirmText ?? "";
+  alertPermRestart.value = showRestart;
   pendingConfirm = onConfirm ?? null;
   alertOpen.value = true;
+}
+
+/**
+ * 一键重启应用（macOS「屏幕录制」新授权只对新进程生效，见 `restart_app` 命令注释）。
+ * 成功时进程会直接退出，这个 await 不会返回；catch 兜的是 IPC 本身失败的情况。
+ */
+async function onAlertRestart() {
+  alertOpen.value = false;
+  try {
+    await tracker.restartApp();
+  } catch (err) {
+    showAlert("warn", t("settings.shotTitle"), err instanceof Error ? err.message : String(err));
+  }
 }
 function onAlertConfirm() {
   if (pendingConfirm) {
@@ -1484,7 +1535,10 @@ onMounted(async () => {
         isPerm ? t("settings.shotPermTitle") : t("settings.shotTitle"),
         msg,
         isPerm ? () => void tracker.openPrivacySettings("screen_capture") : undefined,
-        isPerm ? t("settings.shotPermOpen") : undefined
+        isPerm ? t("settings.shotPermOpen") : undefined,
+        // 权限类错误多给一个「重启应用」：TCC 新授权要重启进程才生效，
+        // 否则用户会卡在「开关开着 → 一直报没权限」的循环里出不来。
+        isPerm
       );
     });
   } catch {

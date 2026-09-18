@@ -623,6 +623,7 @@ pub fn run() {
             commands::export_data,
             commands::check_permissions,
             commands::open_privacy_settings,
+            commands::restart_app,
             commands::get_rules,
             commands::add_rule,
             commands::update_rule,

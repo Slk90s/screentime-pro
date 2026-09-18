@@ -223,6 +223,10 @@ export default {
     // v0.9.1 (2026-09-18): macOS "Screen Recording" permission guidance (capture would be wallpaper-only)
     shotPermTitle: "Screen Recording permission required",
     shotPermOpen: "Open System Settings",
+    // Screen-recording permission dialog: TCC grants only apply to newly launched
+    // processes — offer a one-click restart so users don't get stuck on
+    // "the toggle is on but the app says no".
+    shotPermRestart: "Restart App",
     shotShortcutReset: "Reset shortcut",
     // v0.7.6: Status bar config (master + sub-toggles; replaces v0.7.5 metricsTitle)
     // v0.7.11 (2026-09-13): unified across all three platforms — metrics are shown only on the

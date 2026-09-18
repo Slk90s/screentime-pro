@@ -99,6 +99,14 @@ export const tracker = {
    */
   openPrivacySettings: (pane?: "accessibility" | "screen_capture") =>
     call<void>("open_privacy_settings", { pane: pane ?? null }),
+  /**
+   * 重启应用（退出并重新拉起进程）。
+   *
+   * 用途：macOS 的 TCC 授权只对**新启动**的进程生效 —— 用户在系统设置里打开「屏幕录制」
+   * 开关后，当前进程仍然拿不到授权，必须重启应用。权限提示弹窗里的一键重启就调它。
+   * ⚠️ 调用后进程会立刻退出，不要在其后写任何依赖返回值的代码。
+   */
+  restartApp: () => call<void>("restart_app"),
   checkWebview2: () => call<Webview2Status>("check_webview2"),
   openWebview2Download: () => call<void>("open_webview2_download"),
   checkUpdate: () => call<UpdateInfo>("check_for_update"),

@@ -572,6 +572,21 @@ pub fn open_privacy_settings(pane: Option<String>) {
     }
 }
 
+/// 重启本应用（退出并重新拉起进程）。
+///
+/// 为什么需要它：macOS 的 TCC 授权（屏幕录制 / 辅助功能）**只对本进程之后新启动的进程生效**。
+/// 用户在系统设置里把开关打开后，当前正在运行的进程拿不到新授权 —— 表现是
+/// 「系统设置里明明是开着的，应用却一直说没权限」，用户只能自己 Cmd+Q 再打开，很容易卡成死循环。
+/// 权限提示弹窗上放一个「重启应用」按钮，一键就把这个循环打通。
+///
+/// 实现走 Tauri 的 `AppHandle::restart()`（触发 ExitRequested / Exit 后重新拉起进程）。
+/// 它在非主线程调用时会先请求退出再重启，本命令由 IPC 线程进入，正好走这条分支。
+#[tauri::command]
+pub fn restart_app(app: tauri::AppHandle) {
+    tracing::info!("用户从界面触发应用重启（TCC 新授权需要新进程才生效）");
+    app.restart();
+}
+
 #[tauri::command]
 pub fn get_rules(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<RuleOut>, String> {
     state.db.get_rules_out().map_err(|e| e.to_string())

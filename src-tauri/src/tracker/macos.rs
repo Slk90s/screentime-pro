@@ -260,10 +260,18 @@ pub fn ensure_screen_capture_ready() -> Result<(), String> {
     if is_screen_capture_trusted() {
         return Ok(());
     }
-    Err("缺少「屏幕录制」权限：macOS 会拦截其他应用的窗口内容，截出来只剩桌面壁纸。\
-         请到「系统设置 → 隐私与安全性 → 屏幕录制」勾选本应用，然后重启应用再试。"
+    Err("缺少「屏幕录制」权限：macOS 会拦截其他应用的窗口内容，截出来只剩桌面壁纸。\n\
+① 到「系统设置 → 隐私与安全性 → 屏幕录制」勾选本应用；\n\
+② 然后**完全退出并重新打开**本应用 —— 授权只对新启动的进程生效，只开开关不重启没用。\n\
+若那里本来就是开着的：先关掉再打开（或选中本应用按左下角「−」移除后重试）。\
+安装新版本后旧授权会失效，需要重新勾选。"
         .into())
 }
+
+// ⚠️ 为什么「升级后授权会失效」：本应用目前**没有代码签名**（见 `tauri.macos.conf.json`
+// 未配置 `signingIdentity`），macOS 的 TCC 是按**二进制指纹**记录授权的 —— 每次换版本
+// 指纹就变，旧的「已授权」记录虽仍显示为开，实际已不匹配。要根治只能给 macOS 包做
+// 稳定签名（Developer ID + 公证），那需要 Apple Developer 账号。
 
 // 链接 CoreGraphics.framework，调用 C 接口获取用户空闲秒数
 #[link(name = "CoreGraphics", kind = "framework")]
