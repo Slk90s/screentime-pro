@@ -21,11 +21,18 @@
     修复后**删除并重切同名 v0.9.0**（tag / Release 双端重建）；新增 §4.1「重切同名版本」操作步骤；
     §3.1 现值说明补「三份 releaseBody 已并入 macOS 系统 Vision 与 mac / Linux 取字修复」；
     §7 版本表 v0.9.0 行补重切说明。
+  - 2026-09-18 @v0.9.0（**重切发布完成**）: 新增 - §4.2「CI 建 Release 会 403 —— 必须先建 Release
+    再让 CI 上传」（含 `Resource not accessible by integration` 根因、run 权限冻结、`POST /releases`
+    + `target_commitish` 自动建 tag 并触发 CI、以及误探测会把已发布版转草稿的危险）；
+    修正 §4.1 中「CI 面对已存在 Release 行为不确定 → 必须删掉重建」的旧判断（实测 CI 走
+    「找到既存 Release → 上传」且三次成功）；§3.1 补重切实测资产体积（MiB 口径）；
+    §7 v0.9.0 行补 tag/commit 与两端 Release id、资产数与体积。
 -->
 
 > 目的：定义 **版本号从哪来、发版前改哪些地方、CI 怎么跑、出问题怎么回滚**。
 > 与 README 区别：README 是用户面（去哪下载、每个版本有什么），本文件是维护者面（怎么发出去）。
-> 最后更新：2026-09-18（v0.9.0 **重切版**已三端发布：修复 mac / Linux 取字不可用 + 接入 macOS 系统 Vision）
+> 最后更新：2026-09-18（v0.9.0 **重切版已发布完成**：tag `39a7810`；GitHub Release `391264105`
+> 6 资产 / 240.5 MiB；Gitee Release `1151533` 5 附件 / 133.8 MiB）
 
 ---
 
@@ -113,7 +120,9 @@ grep -n 'badge/version' README.md
 
 **当前仓库的三份 `releaseBody` 已是 v0.9.0 的文案**（v0.7.6 起每版发版时同步改写）。
 v0.9.0 **重切**时又并入两段内容：`#### ✨ 新增：macOS 系统 Vision 取字` 与
-`#### 🔧 修复` 里的 mac / Linux 取字 P0 三条（重切后三份 body 均为 1562 字符）。
+`#### 🔧 修复` 里的 mac / Linux 取字 P0 三条，并在标题下补一行「⚠️ 本版为同名 tag 重切版」
+（三份 body 仍逐字相同；线上正文 **1714 字符**）。重切版实测资产体积与旧表一致（MiB 口径：
+exe 27.16 / dmg 26.82 / app.tar.gz 25.6 / deb 27.13 / rpm 27.13 / AppImage 106.72）。
 历史教训：v0.7.5 及以前长期停留在 v0.7.0 的旧文案（"整合 0.6.2 全部 Beta 修复"、
 日历月视图、喂食系统修复等），与当版内容完全无关。
 
@@ -194,12 +203,43 @@ curl -s -H "Authorization: token $TOKEN" \
 # ⑥ Gitee 侧同法重建：先删 Release 再删 tag → 重推 tag → 重建 Release → 重传资产
 ```
 
-- ⚠️ **不要只重推 tag 而不删 Release**：CI 的 release 步骤面对「已存在的同名 Release」
-  行为不确定（可能更新、也可能冲突失败）。**删掉重建是唯一稳定的做法**。
+- ✅ **只重推 tag 而不删 Release 是可行的**（v0.9.0 重切实测）：Release 已存在时，CI 的
+  release 步骤走的是**「找到既存 Release → 上传资产」**路径（日志先打
+  `Found release with tag vX.Y.Z.` 再 `Uploading ...`），三次运行均成功。
+  真正会失败的是**反向情形**：Release 不存在时 CI 会去 **create**，而它拿到的
+  `GITHUB_TOKEN` 建 Release 会 **403**（详见 §4.2）。
 - ⚠️ **Gitee 侧删 Release 会释放附件配额**，重传后总量不变，无需额外腾空间；但重建后要复核
   `assets` 数 = 上传数 + 2（自动源码包）与逐文件字节数。
 - 记录要求：CHANGELOG 写清「首发版有什么问题 + 重切后指向哪个 commit」；
-  README 本版行标注「本版为重切版」。
+  README 本版行标注「本版为重切版」；**三份 `releaseBody` 也要在标题下补一行重切提示**。
+
+### 4.2 ⚠️ CI 建 Release 会 403 —— 必须"先建 Release，再让 CI 上传"
+
+v0.9.0 重切时踩到（run `35313764939`）：CI 三平台都**构建成功**，但都在
+`Build Tauri (*)` 这一步的最后倒下：
+
+```
+Couldn't find release with tag v0.9.0. Creating one.
+##[error]Resource not accessible by integration -
+         https://docs.github.com/rest/releases/releases#create-a-release
+```
+
+排查结论与操作约定：
+
+- **不是代码/构建问题**，是 `GITHUB_TOKEN` 调 `POST /releases` 被拒。当时 workflow 里
+  **已显式写了 `permissions: contents: write`**，仓库 `default_workflow_permissions`
+  也已改成 `write`，仍然 403 → **不要再指望靠改权限让它能建 Release**。
+- 同一 token **上传资产是正常的**（`Uploading ...` 无报错）→ 说明写权限本身在，
+  只是 create 那一步过不去。因此**绕过方式**：发版前用 **PAT** 先把 Release 建好，
+  CI 就只走上传路径。
+- ⚠️ **权限在 workflow run 创建时冻结**：改完权限设置后 **rerun 同一个 run 无效**
+  （run_attempt=2 仍报同样 403），必须产生**全新 run**。
+- ✅ 顺手的技巧：用 `POST /releases`（PAT）+ `target_commitish=<sha>` 建**已发布** Release 时，
+  GitHub 会在该 commit **自动创建 tag**，并**触发 tag push 的 workflow run** ——
+  省掉一步 `git push` tag。v0.9.0 重切版就是这么发起的（run `35316034016`，三平台全绿）。
+- 🔴 **绝对不要拿 `POST /releases` 去"探测"一个已有 Release 的 tag**：实测会把**已发布**的
+  版本变成**草稿**（当时 v0.8.2 被这样转成草稿，出现两个同 tag 记录；删掉草稿那一条即恢复
+  发布态）。要查已有 Release 请用 `GET /releases/tags/<tag>`。
 
 ---
 
@@ -288,7 +328,7 @@ echo "   git push origin main && git push origin v$NEW"
 
 | 版本 | 发布时间 | 状态 | 关键说明 |
 |------|----------|------|----------|
-| **v0.9.0** | 2026-09-18 | ✨ 功能版 | **取字增强引擎（PaddleOCR-ONNX 本地两段式 OCR）**：det 把短边 <736px 图先放大再检测，小字/深色底 8/8 全对；设置页「取字引擎」标准/增强双选；新增 `ocr_engine_info` IPC（总数 80→**81**）。**macOS「标准」引擎 = 系统 Vision**（`VNRecognizeTextRequest`，Accurate + 语言校正，零下载、断网可用）。修复：桌宠拖拽期冻结皮肤动画（与悬浮窗同机制）、菜单↔设置页「隐藏桌宠」语义统一；**macOS / Linux 取字完全不可用（P0×3：运行库落盘路径返回目录而非文件名 → 永远落不了盘；下载超时 20s 过短；默认引擎/配置归一化不感知平台）**、macOS「取字引擎」两个选项都点不了的死锁（判据改为只看随包模型）。**资源分发分平台**：Windows 运行库+模型随包；macOS / Linux 模型随包、运行库首次使用时后台静默下载（源 GitHub Release `ocr-runtime` → Gitee 镜像，`SD_OCR_DOWNLOAD_BASE` 可覆盖，带 SHA256 校验）。⚠️ **本版为同名 tag 重切版**：首发版（`4b642ab`）对 macOS / Linux 取字不可用，修复后重切（见 §4.1） |
+| **v0.9.0** | 2026-09-18 | ✨ 功能版 | **取字增强引擎（PaddleOCR-ONNX 本地两段式 OCR）**：det 把短边 <736px 图先放大再检测，小字/深色底 8/8 全对；设置页「取字引擎」标准/增强双选；新增 `ocr_engine_info` IPC（总数 80→**81**）。**macOS「标准」引擎 = 系统 Vision**（`VNRecognizeTextRequest`，Accurate + 语言校正，零下载、断网可用）。修复：桌宠拖拽期冻结皮肤动画（与悬浮窗同机制）、菜单↔设置页「隐藏桌宠」语义统一；**macOS / Linux 取字完全不可用（P0×3：运行库落盘路径返回目录而非文件名 → 永远落不了盘；下载超时 20s 过短；默认引擎/配置归一化不感知平台）**、macOS「取字引擎」两个选项都点不了的死锁（判据改为只看随包模型）。**资源分发分平台**：Windows 运行库+模型随包；macOS / Linux 模型随包、运行库首次使用时后台静默下载（源 GitHub Release `ocr-runtime` → Gitee 镜像，`SD_OCR_DOWNLOAD_BASE` 可覆盖，带 SHA256 校验）。⚠️ **本版为同名 tag 重切版**：首发版（`4b642ab`）对 macOS / Linux 取字不可用，修复后重切（见 §4.1）。**重切版落点**：tag / commit `39a7810`；GitHub Release `391264105`（6 资产 / 240.5 MiB）；Gitee Release `1151533`（5 附件 / 133.8 MiB，AppImage 111.9 MB 超 Gitee 单文件 100 MB 上限，仅 GitHub 提供） |
 | **v0.8.2** | 2026-09-17 | 🩹 修复版 | 浮窗截图按钮（可见条件 = 截图开启 && 浮窗开启，1Hz 配置轮询，**零新增 IPC**）；桌宠右键菜单 ↔ 设置页状态同步 |
 | **v0.8.0** | 2026-09-16 | ✨ 功能版 | **屏幕截图（新功能）**：全局快捷键 `CmdOrCtrl+Shift+A` 唤起遮罩式全屏选区，仿 QQ 浮动工具栏（保存 / 全屏 / 圆角 / 阴影 / 确认 / 取消），**截图默认进剪贴板**，本地历史 FIFO（超限移入回收站）；新增 `screenshot/` 模块、`capture` 窗口、`screenshots` 表、10 个 IPC 命令。**桌宠点击穿透修复（P0）**：整窗开关改为 32×32 alpha 命中网格 + 全局光标轮询（`pet/hit_mask.rs`）。**macOS 前台全屏真识别**（`CGWindowListCopyWindowInfo` + `CGDisplayBounds`）。依赖 `windows` 0.58→0.62，新增 `xcap` / `arboard` / `image` / `tauri-plugin-global-shortcut` |
 | **v0.7.11** | 2026-09-14 | 🚀 正式版 | 三端统一悬浮指标条（macOS 菜单栏文字指标整体移除）+ 托盘快捷项改「启用状态栏」总开关并与设置页双向同步 + 死代码清理（约 140 行 + 单测） |
