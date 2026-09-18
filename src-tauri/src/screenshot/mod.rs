@@ -37,6 +37,16 @@
 //!     ⚠️ 增强引擎资源（`ort/onnxruntime.dll` + `models/*.onnx`，共 ~33MB）由
 //!     `tauri.windows.conf.json` 声明为 bundle resources **随包分发**（不做首次下载）；
 //!     路径解析一律多候选探测（安装目录 / 开发态 `src-tauri/` / `SD_OCR_MODELS`）。
+//!   - 2026-09-18 @v0.9.1: 修复 - macOS「屏幕录制」权限闸门（P0）。
+//!     无授权时 xcap 的 `CGWindowListCreateImage` **不报错**，返回一张「只有桌面壁纸」的图
+//!     （macOS 隐私软化行为，xcap#123 有完整复现）→ 现象是「截图后应用全消失、只剩桌面」，
+//!     而旧代码把这幅图当正常结果走完了整条链路（冻结帧 / 归档 / 剪贴板全都"成功"）。
+//!     现在 `begin_capture_inner` 先过 `tracker::macos::ensure_screen_capture_ready()`
+//!     （预检 → 主动 `CGRequestScreenCaptureAccess()`：把本应用登记进系统设置列表 + 弹系统
+//!     授权框 → 复查；整段放在 `spawn_blocking` 里，因为首次授权会同步等用户点击）→ 未授权即
+//!     返回可读原因，由前端弹窗提示 + 一键跳「屏幕录制」面板。
+//!     配套：`open_privacy_settings` 加 `pane` 参数（缺省仍是辅助功能）；前端补上
+//!     原本完全缺失的 `screenshot-error` 监听（此前失败是静默的）。
 //!
 
 mod ocr;
@@ -415,6 +425,26 @@ async fn begin_capture_inner(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
+    // v0.9.1：macOS「屏幕录制」权限闸门（P0）。
+    //
+    // 没有这张 TCC 授权时，xcap 底层的 `CGWindowListCreateImage` **不会报错** ——
+    // 它会返回一张「只有桌面壁纸」的图（macOS 的隐私软化行为，xcap#123 有完整复现）。
+    // 现象就是「截图后应用全消失、只剩桌面」，且用户无从判断原因：此前这段代码
+    // 把这幅图当正常结果一路往下走（冻结帧、归档、进剪贴板全都"成功"）。
+    //
+    // 所以提前拦下：先主动请求一次授权（把本应用登记进系统设置列表 + 弹系统授权框），
+    // 仍未拿到就返回可读原因，由前端提示 + 一键跳转「屏幕录制」面板。
+    #[cfg(target_os = "macos")]
+    {
+        // 闸门逻辑收在 `tracker::macos::ensure_screen_capture_ready` 里：那是个纯 mac 模块，
+        // 能被交叉编译探针覆盖（`cargo check --target aarch64-apple-darwin`）；
+        // 这里只负责把它挪到阻塞线程 —— 首次授权会弹系统授权框并同步等用户点击，
+        // 直接跑在 async 任务里会占住 runtime 线程。
+        tauri::async_runtime::spawn_blocking(crate::tracker::macos::ensure_screen_capture_ready)
+            .await
+            .unwrap_or_else(|e| Err(format!("屏幕录制权限检查线程异常: {e}")))?;
+    }
+
     // ① 先隐藏自家置顶窗（pet/float），等合成器稳定后再抓屏
     hide_self(app, &state);
     tokio::time::sleep(Duration::from_millis(160)).await;
@@ -738,6 +768,34 @@ pub fn screenshot_delete(
         move_to_trash(&path);
     }
     Ok(true)
+}
+
+/// 批量删除历史截图（图片移入回收站 + 删除索引）
+///
+/// 前端「截图历史」多选后一次性删除用。逐条复用 `delete_screenshot`（返回文件名）+ `move_to_trash`，
+/// 返回**实际删除的条数**（传入的 id 里可能含已不存在的，按 0 跳过，不报错）。
+#[tauri::command]
+pub fn screenshot_delete_many(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    ids: Vec<i64>,
+) -> Result<u32, String> {
+    let dir = screenshots_dir(&app)?;
+    let mut deleted = 0u32;
+    for id in ids {
+        if let Some(name) = state
+            .db
+            .delete_screenshot(id)
+            .map_err(|e| e.to_string())?
+        {
+            let path = dir.join(&name);
+            if path.exists() {
+                move_to_trash(&path);
+            }
+            deleted += 1;
+        }
+    }
+    Ok(deleted)
 }
 
 /// 在文件管理器中定位截图文件

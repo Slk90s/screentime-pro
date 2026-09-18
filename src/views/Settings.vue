@@ -369,20 +369,47 @@
         <!-- 截图历史（缩略图按需拉取，避免一次把 200 张全读进内存） -->
         <p class="zone-title">{{ t("settings.shotHistory") }}</p>
         <p v-if="shotHistory.length === 0" class="field-hint">{{ t("settings.shotHistoryEmpty") }}</p>
-        <div v-else class="shot-grid">
-          <figure v-for="s in shotHistory" :key="s.id" class="shot-item">
-            <img v-if="shotThumbs[s.id]" class="shot-img" :src="shotThumbs[s.id]" :alt="s.file_name" />
-            <div v-else class="shot-img shot-img--empty"></div>
-            <figcaption class="shot-cap">
-              <span class="shot-meta">{{ s.width }}×{{ s.height }} · {{ formatBytes(s.bytes) }}</span>
-              <span class="shot-meta shot-date">{{ s.created_at.slice(0, 16).replace("T", " ") }}</span>
-              <span class="shot-actions">
-                <button class="ghost-btn" @click="revealShot(s.id)">{{ t("settings.shotReveal") }}</button>
-                <button class="danger-btn" @click="deleteShot(s.id)">{{ t("settings.shotDelete") }}</button>
-              </span>
-            </figcaption>
-          </figure>
-        </div>
+        <template v-else>
+          <div class="shot-toolbar">
+            <button class="ghost-btn" @click="toggleShotSelecting">
+              {{ shotSelecting ? t("settings.shotSelectDone") : t("settings.shotSelect") }}
+            </button>
+            <template v-if="shotSelecting">
+              <button class="ghost-btn" @click="selectAllShots">{{ t("settings.shotSelectAll") }}</button>
+              <button class="ghost-btn" @click="clearShotSelection">{{ t("settings.shotSelectNone") }}</button>
+              <span class="shot-sel-count">{{ t("settings.shotSelected", { n: selectedShotIds.length }) }}</span>
+              <button
+                class="danger-btn"
+                :disabled="selectedShotIds.length === 0"
+                @click="deleteSelectedShots"
+              >
+                {{ t("settings.shotDeleteSelected") }} ({{ selectedShotIds.length }})
+              </button>
+            </template>
+          </div>
+          <div class="shot-grid">
+            <figure
+              v-for="s in shotHistory"
+              :key="s.id"
+              class="shot-item"
+              :class="{ selected: shotSelecting && selectedShotIds.includes(s.id) }"
+            >
+              <label v-if="shotSelecting" class="shot-check" @click.prevent="toggleShotSelect(s.id)">
+                <input type="checkbox" :checked="selectedShotIds.includes(s.id)" />
+              </label>
+              <img v-if="shotThumbs[s.id]" class="shot-img" :src="shotThumbs[s.id]" :alt="s.file_name" />
+              <div v-else class="shot-img shot-img--empty"></div>
+              <figcaption class="shot-cap">
+                <span class="shot-meta">{{ s.width }}×{{ s.height }} · {{ formatBytes(s.bytes) }}</span>
+                <span class="shot-meta shot-date">{{ s.created_at.slice(0, 16).replace("T", " ") }}</span>
+                <span class="shot-actions">
+                  <button class="ghost-btn" @click="revealShot(s.id)">{{ t("settings.shotReveal") }}</button>
+                  <button class="danger-btn" @click="deleteShot(s.id)">{{ t("settings.shotDelete") }}</button>
+                </span>
+              </figcaption>
+            </figure>
+          </div>
+        </template>
       </div>
     </div>
 
@@ -685,7 +712,7 @@
       :type="alertType"
       :title="alertTitle"
       :message="alertMsg"
-      :confirm-text="t('common.confirm')"
+      :confirm-text="alertConfirmText || t('common.confirm')"
       :cancel-text="alertType === 'info' ? '' : t('common.cancel')"
       width="420px"
       @confirm="onAlertConfirm"
@@ -1008,16 +1035,24 @@ const alertOpen = ref(false);
 const alertType = ref<"info" | "confirm" | "warn">("info");
 const alertTitle = ref("");
 const alertMsg = ref("");
+/**
+ * 自定义确认按钮文案（留空则用 i18n 默认「确定」）。
+ * v0.9.1：截图权限缺失时按钮要显示「打开系统设置」——比「确定」明确得多，
+ * 用户知道点下去会发生什么（跳系统设置），而不是以为点完问题就解决了。
+ */
+const alertConfirmText = ref("");
 let pendingConfirm: (() => void | Promise<void>) | null = null;
 function showAlert(
   type: "info" | "confirm" | "warn",
   title: string,
   msg: string,
-  onConfirm?: () => void | Promise<void>
+  onConfirm?: () => void | Promise<void>,
+  confirmText?: string
 ) {
   alertType.value = type;
   alertTitle.value = title;
   alertMsg.value = msg;
+  alertConfirmText.value = confirmText ?? "";
   pendingConfirm = onConfirm ?? null;
   alertOpen.value = true;
 }
@@ -1395,6 +1430,39 @@ async function deleteShot(id: number) {
   }
 }
 
+// v0.9.1：截图历史多选（批量删除）
+const shotSelecting = ref(false);
+const selectedShotIds = ref<number[]>([]);
+
+function toggleShotSelecting() {
+  shotSelecting.value = !shotSelecting.value;
+  if (!shotSelecting.value) selectedShotIds.value = [];
+}
+function toggleShotSelect(id: number) {
+  const i = selectedShotIds.value.indexOf(id);
+  if (i >= 0) selectedShotIds.value.splice(i, 1);
+  else selectedShotIds.value.push(id);
+}
+function selectAllShots() {
+  selectedShotIds.value = shotHistory.value.map((s) => s.id);
+}
+function clearShotSelection() {
+  selectedShotIds.value = [];
+}
+async function deleteSelectedShots() {
+  if (selectedShotIds.value.length === 0) return;
+  const ids = [...selectedShotIds.value];
+  try {
+    await screenshot.removeMany(ids);
+    shotHistory.value = shotHistory.value.filter((s) => !ids.includes(s.id));
+    for (const id of ids) delete shotThumbs.value[id];
+    selectedShotIds.value = [];
+    shotSelecting.value = false;
+  } catch (err) {
+    showAlert("warn", t("settings.shotTitle"), err instanceof Error ? err.message : String(err));
+  }
+}
+
 // 截图完成 → 刷新历史（主窗口收到 Rust 的 screenshot-done 事件）
 onMounted(async () => {
   await loadShotConfig();
@@ -1403,6 +1471,21 @@ onMounted(async () => {
   try {
     await listen("screenshot-done", () => {
       void loadShotHistory();
+    });
+    // v0.9.1：截图失败**必须让用户看见原因**。
+    // Rust 侧一直有 `emit_to("main", "screenshot-error", e)`，但前端没有任何监听 →
+    // 失败是静默的。macOS 缺「屏幕录制」权限时表现最典型：用户只看到「截出来只剩桌面」，
+    // 既没有报错，也不知道该去哪里授权。
+    await listen<string>("screenshot-error", (ev) => {
+      const msg = ev.payload ?? "";
+      const isPerm = msg.includes("屏幕录制");
+      showAlert(
+        "warn",
+        isPerm ? t("settings.shotPermTitle") : t("settings.shotTitle"),
+        msg,
+        isPerm ? () => void tracker.openPrivacySettings("screen_capture") : undefined,
+        isPerm ? t("settings.shotPermOpen") : undefined
+      );
     });
   } catch {
     /* 非 Tauri 环境 */
@@ -2369,5 +2452,40 @@ async function onCheckUpdate() {
 .shot-actions .danger-btn {
   padding: 2px 8px;
   font-size: 11px;
+}
+/* v0.9.1：截图历史多选工具栏与勾选框 */
+.shot-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.shot-sel-count {
+  font-size: 12px;
+  color: var(--muted);
+}
+.shot-item.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent) inset;
+}
+.shot-check {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.shot-check input {
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
 }
 </style>

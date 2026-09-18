@@ -545,11 +545,30 @@ pub fn check_permissions() -> PermissionStatus {
     }
 }
 
+/// 打开 macOS「隐私与安全性」中的指定面板。
+///
+/// `pane` 取值：`"screen_capture"` → 屏幕录制；其余（含缺省）→ 辅助功能。
+///
+/// v0.9.1：加 `pane` 参数。此前硬编码 `Privacy_Accessibility`，
+/// 而**截图**要的是「屏幕录制」权限 —— 引导跳过去会落在错误的页面，
+/// 用户在那个页面里怎么找都找不到本应用。
 #[tauri::command]
-pub fn open_privacy_settings() {
+pub fn open_privacy_settings(pane: Option<String>) {
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("open").arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility").spawn();
+        let anchor = match pane.as_deref() {
+            Some("screen_capture") => "Privacy_ScreenCapture",
+            _ => "Privacy_Accessibility",
+        };
+        let _ = std::process::Command::new("open")
+            .arg(format!(
+                "x-apple.systempreferences:com.apple.preference.security?{anchor}"
+            ))
+            .spawn();
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = pane;
     }
 }
 

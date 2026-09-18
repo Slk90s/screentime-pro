@@ -199,6 +199,16 @@ export default {
     shotHistoryEmpty: "还没有截图记录",
     shotDelete: "删除",
     shotReveal: "定位文件",
+    // v0.9.1（2026-09-18）：截图历史多选
+    shotSelect: "选择",
+    shotSelectDone: "完成",
+    shotSelectAll: "全选",
+    shotSelectNone: "取消全选",
+    shotSelected: "已选 {n} 项",
+    shotDeleteSelected: "删除选中",
+    // v0.9.1（2026-09-18）：macOS 缺「屏幕录制」权限的引导（截图会只剩桌面壁纸）
+    shotPermTitle: "缺少「屏幕录制」权限",
+    shotPermOpen: "打开系统设置",
     shotShortcutReset: "恢复默认快捷键",
     // v0.7.6：状态栏配置（总开关 + 子项；取代 v0.7.5 单字段 metricsTitle）
     // v0.7.11（2026-09-13）：三端统一——指标只由「悬浮指标条」显示，托盘恒为品牌图标。

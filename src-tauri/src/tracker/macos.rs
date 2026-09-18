@@ -8,6 +8,9 @@
 //! - `NSWorkspace.frontmostApplication()` —— 当前前台应用（无需特殊权限即可拿到 App 名称/包名）
 //! - `CGEventSourceSecondsSinceLastEventType()` —— 空闲检测，依赖「辅助功能」权限
 //! - 窗口标题需要「屏幕录制」权限（后续扩展用）
+//! - **截图**依赖同一张「屏幕录制」TCC 授权。v0.9.1 起截图侧把它做成了**强制闸门**
+//!   （见 `screenshot/mod.rs::begin_capture_inner`）：无授权时抓屏不会报错，只会拿到
+//!   「只有桌面壁纸」的图，必须提前拦下来并引导用户授权。
 //!
 //! 注意：本采集器仅在 `target_os = "macos"` 下编译进二进制。
 
@@ -213,6 +216,55 @@ pub fn is_screen_capture_trusted() -> bool {
     trusted
 }
 
+/// 主动请求「屏幕录制」权限（macOS 10.15+）
+///
+/// 与 [`is_screen_capture_trusted`] 的区别：后者只**查询**，本函数会
+/// ① 把应用登记进「系统设置 → 隐私与安全性 → 屏幕录制」列表（未表态过的应用
+///    不会出现在该列表里，用户想手动勾选也无从下手）；② 用户尚未表态时弹系统授权框。
+///
+/// 为什么必须有这个函数：截图用的 `CGWindowListCreateImage` 在**无授权时不报错** ——
+/// 它返回一张「只有桌面壁纸」的图（macOS 隐私软化行为，见 xcap#123）。
+/// 不主动请求，用户就只会看到「截图里应用全没了」，而系统设置列表里还找不到本应用。
+///
+/// ⚠️ 两条行为必须记住（调用方负责）：
+/// - **会阻塞**：首次弹窗时同步等待用户点击，可能数秒到数十秒。必须放在阻塞线程里
+///   （`spawn_blocking`），不要挂在 async 任务的直接路径上。
+/// - **拒过就不再问**：用户点过「不允许」后本函数立即返回 `false` 且**不再弹窗**，
+///   此时只能引导用户手动去系统设置勾选，且**必须重启应用**新授权才生效（TCC 按进程快照）。
+pub fn request_screen_capture_access() -> bool {
+    let granted = unsafe { CGRequestScreenCaptureAccess() };
+    tracing::info!(granted, "macOS 屏幕录制权限请求");
+    granted
+}
+
+/// 截图前的「屏幕录制」权限闸门（macOS）
+///
+/// `Ok(())` = 已授权，可以抓屏；`Err(原因)` = 未授权，原因**可直接展示给用户**
+/// （前端就是拿这个字符串弹提示的，所以文案要写成用户能照着做的步骤）。
+///
+/// 为什么这个闸门是**必须**的：无授权时抓屏 API 不报错，只会返回「只有桌面壁纸」的图
+/// （见 [`request_screen_capture_access`] 的说明）。不在这里拦下，用户只会拿到一张
+/// 没有应用窗口的废图 —— 现象是「截图后应用全消失、只剩桌面」，且完全不知道原因，
+/// 系统设置里也找不到本应用可以勾选。
+///
+/// ⚠️ **会阻塞**：首次弹系统授权框时会同步等待用户点击 → 调用方必须放在阻塞线程里
+/// （`spawn_blocking`），不要挂在 async 任务的直接路径上。
+pub fn ensure_screen_capture_ready() -> Result<(), String> {
+    if is_screen_capture_trusted() {
+        return Ok(());
+    }
+    // 首次未表态：主动请求一次 —— 这会把本应用登记进「系统设置 → 隐私与安全性 →
+    // 屏幕录制」列表并弹授权框（未表态过的应用不会出现在该列表里，用户想手动勾选也无从下手）。
+    request_screen_capture_access();
+    // 请求后复查：新授权通常要**重启进程**才生效（TCC 按进程签名快照），这里多半仍是 false。
+    if is_screen_capture_trusted() {
+        return Ok(());
+    }
+    Err("缺少「屏幕录制」权限：macOS 会拦截其他应用的窗口内容，截出来只剩桌面壁纸。\
+         请到「系统设置 → 隐私与安全性 → 屏幕录制」勾选本应用，然后重启应用再试。"
+        .into())
+}
+
 // 链接 CoreGraphics.framework，调用 C 接口获取用户空闲秒数
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
@@ -220,6 +272,8 @@ extern "C" {
     fn CGEventSourceSecondsSinceLastEventType(state: u32, event_type: u32) -> f64;
     // 屏幕录制权限预检（macOS 10.15+）
     fn CGPreflightScreenCaptureAccess() -> bool;
+    // 屏幕录制权限请求（macOS 10.15+）：首次调用弹系统授权框并把本应用登记进系统设置列表
+    fn CGRequestScreenCaptureAccess() -> bool;
 }
 
 // kCGEventSourceStateCombinedSessionState = 0

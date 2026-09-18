@@ -77,6 +77,10 @@ export const screenshot = {
 
   remove: (id: number): Promise<boolean> => invoke<boolean>("screenshot_delete", { id }),
 
+  /** 批量删除（多选历史后一次性删除），返回实际删除的条数 */
+  removeMany: (ids: number[]): Promise<number> =>
+    isTauri ? invoke<number>("screenshot_delete_many", { ids }) : Promise.resolve(0),
+
   reveal: (id: number): Promise<void> => invoke<void>("screenshot_reveal", { id }),
 
   /** 缩略图 data URL（文件缺失时返回空串） */

@@ -665,6 +665,7 @@ pub fn run() {
             screenshot::screenshot_cancel,
             screenshot::screenshot_list,
             screenshot::screenshot_delete,
+            screenshot::screenshot_delete_many,
             screenshot::screenshot_reveal,
             screenshot::screenshot_thumbnail,
             screenshot::screenshot_dir,

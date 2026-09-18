@@ -92,7 +92,13 @@ export const tracker = {
   setIdle: (secs: number) => call<boolean>("set_idle_threshold", { secs }),
   getIdle: () => call<number>("get_idle_threshold"),
   checkPermissions: () => call<PermissionStatus>("check_permissions"),
-  openPrivacySettings: () => call<void>("open_privacy_settings"),
+  /**
+   * 打开 macOS「隐私与安全性」面板。
+   * v0.9.1：加 `pane` 参数 —— 截图要的是「屏幕录制」，此前只能跳「辅助功能」，
+   * 用户落到错误页面里找不到本应用。缺省仍为辅助功能（保持既有调用点行为）。
+   */
+  openPrivacySettings: (pane?: "accessibility" | "screen_capture") =>
+    call<void>("open_privacy_settings", { pane: pane ?? null }),
   checkWebview2: () => call<Webview2Status>("check_webview2"),
   openWebview2Download: () => call<void>("open_webview2_download"),
   checkUpdate: () => call<UpdateInfo>("check_for_update"),
