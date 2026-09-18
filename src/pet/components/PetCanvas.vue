@@ -143,6 +143,13 @@ const L = LAYER_SPECS;
   user-select: none;
   -webkit-user-select: none;
 }
+/* v0.9.0：拖拽期杀掉部件层动画/过渡（与 PetWindow 的 .is-dragging 全局冻结对称，
+   双保险保证拖拽期窗口零重合成，与悬浮窗同样丝滑）。 */
+.pet-canvas.dragging,
+.pet-canvas.dragging :deep(img) {
+  animation: none !important;
+  transition: none !important;
+}
 /* PNG sprite 渲染优化：Retina 屏保持锐利边缘 */
 .pet-canvas :deep(img) {
   image-rendering: -webkit-optimize-contrast;

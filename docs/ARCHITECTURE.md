@@ -31,7 +31,8 @@
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-09-17（同步至 v0.8.2；悬浮指标条新增「截图」按钮 + 开关联动，零新增 IPC）
+> 最后更新：2026-09-17（同步至 v0.9.0；取字新增「增强引擎」（PaddleOCR-ONNX 本地模型）+
+> 引擎调度层与设置页引擎切换，运行库与模型随包分发）
 
 ---
 
@@ -39,7 +40,7 @@
 
 跨平台应用使用时长追踪（macOS / Windows / Linux），对标 iOS「屏幕使用时间」。**数据 100% 本地（SQLite bundled），零上传，隐私优先**。
 
-栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v0.8.2**（已发布，详见 [`RELEASE.md`](RELEASE.md)）。
+栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v0.9.0**（已发布，详见 [`RELEASE.md`](RELEASE.md)）。
 
 > ⚠️ 本节版本号在 v0.7.0 → v0.7.5 期间**长期未更新**（曾停留在 v0.7.0），与 `tauri.conf.json` 脱节。
 > 版本号唯一真实来源是 **`src-tauri/tauri.conf.json` 的 `version`**，改版本时务必回来同步本节。
@@ -80,7 +81,7 @@
 ### 3.1 Rust 后端（src-tauri/src/）
 | 模块 | 职责 | 改我会影响 |
 |------|------|------------|
-| `commands.rs` (~1148 行) | 主 IPC 命令路由（50 个 `#[tauri::command]`；桌宠窗口/菜单命令 9 + 命中 3 个在 `pet/`，截图 13 个在 `screenshot/`，悬浮窗 5 个在 `float_window.rs`，合计 **80** 个已注册） | 前端 `api/*` 必须对齐字段名 |
+| `commands.rs` (~1148 行) | 主 IPC 命令路由（50 个 `#[tauri::command]`；桌宠窗口/菜单命令 9 + 命中 3 个在 `pet/`，截图 14 个在 `screenshot/`，悬浮窗 5 个在 `float_window.rs`，合计 **81** 个已注册） | 前端 `api/*` 必须对齐字段名 |
 | `lib.rs` (~700 行) | Tauri Builder、插件注册（含 `tauri-plugin-global-shortcut`）、`generate_handler!` 命令注册、系统托盘（含「截图」菜单项） | **新命令必须在此注册**，否则 invoke 报不存在 |
 | `tracker/{macos,windows,linux}.rs` | 平台采样器（10s tick） | 跨平台数据一致性 |
 | `tracker/mod.rs` | trait 抽象 + 后台循环 | — |
@@ -218,7 +219,7 @@ PetSkinRenderer.watchEffect → skinTick++
 
 ---
 
-## 5. IPC 契约（当前 80 个命令）
+## 5. IPC 契约（当前 81 个命令）
 
 Rust 端在 `commands.rs` / `pet/` 定义，**在 `lib.rs` 的 `generate_handler!` 注册**；前端通过 `src/api/*` 调用。**改 IPC 必须同时改两端，并记得注册。**
 
@@ -425,7 +426,7 @@ src-tauri/
 └── src/
     ├── main.rs          ← App 入口（仅转调 lib）
     ├── lib.rs           ← Tauri Builder / 插件（含 global-shortcut）/ generate_handler! 命令注册 / 托盘
-    ├── commands.rs      ← 主 IPC 命令路由（50 个）+ float_window（5）+ pet/（12：窗口/菜单 9 + hit_mask 3）+ screenshot/（13）= 80
+    ├── commands.rs      ← 主 IPC 命令路由（50 个）+ float_window（5）+ pet/（12：窗口/菜单 9 + hit_mask 3）+ screenshot/（14）= 81
     ├── pet/             ← 桌宠 Rust 端（window / menu_window / hit_mask）
     ├── screenshot/      ← v0.8.0 截图 Rust 端（mod：捕获 / 下发整屏帧 / 解码落库 / 快捷键；合成在前端 canvas）
     ├── tracker/         ← 平台采样（mod / platform / macos / windows / linux）

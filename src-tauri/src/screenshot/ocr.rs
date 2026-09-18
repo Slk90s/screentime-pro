@@ -45,16 +45,34 @@
 
 use image::RgbaImage;
 
-/// 取字结果
+/// 取字结果（v0.9.0：新增 engine / lines —— 同一结构承载两个引擎的输出）
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct OcrOut {
-    /// 识别出的完整文本（多行以 \n 分隔，顺序与系统识别出的行序一致）
+    /// 识别出的完整文本（多行以 \n 分隔，顺序与行序一致）
     pub text: String,
     /// 参与识别的图像尺寸（物理像素），回给前端做范围提示
     pub width: u32,
     pub height: u32,
-    /// 本次真正生效的识别语言标签（如 zh-Hans-CN），非 Windows 端为空
+    /// 本次真正生效的识别语言标签（如 zh-Hans-CN）；增强引擎为 PP-OCR 的 `ch`
     pub language: Option<String>,
+    /// 本次生效的引擎：`system`（系统内置） / `enhanced`（PaddleOCR-ONNX）
+    pub engine: String,
+    /// 识别出的行数（增强引擎按行输出，可直接展示；标准引擎只有整段文本，计 0）
+    pub lines: usize,
+}
+
+impl OcrOut {
+    /// 标准引擎的构造口（本文件内部用；增强引擎在 ocr_engine.rs 里自建）
+    fn system(text: String, width: u32, height: u32, language: Option<String>) -> Self {
+        Self {
+            text,
+            width,
+            height,
+            language,
+            engine: "system".into(),
+            lines: 0,
+        }
+    }
 }
 
 /// 对一张 RGBA 图做 OCR。失败返回**可以直接展示给用户**的中文原因。
@@ -192,12 +210,7 @@ mod platform {
         // 去掉中文单字之间的多余空格（见 tidy_text 的说明）
         let text = tidy_text(&raw);
 
-        Ok(OcrOut {
-            text,
-            width: w,
-            height: h,
-            language: Some(lang),
-        })
+        Ok(OcrOut::system(text, w, h, Some(lang)))
     }
 
     /// 选识别语言。引擎按调用创建（实测 1–5ms），不做全局缓存 ——
@@ -236,6 +249,8 @@ mod platform {
 
     pub fn recognize(_img: &RgbaImage) -> Result<OcrOut, String> {
         // 不假装成功、也不静默失败：把「为什么不行 + 后续计划」直接说清楚。
+        // v0.9.0：macOS/Linux 的增强引擎（ONNX）运行库尚未随包分发，
+        // 所以这两端目前两个引擎都不可用 —— 文案要如实反映，别让用户以为切换引擎能救。
         Err(if cfg!(target_os = "macos") {
             "当前版本的取字功能仅支持 Windows（macOS 计划接入系统 Vision，尚未落地）".into()
         } else {

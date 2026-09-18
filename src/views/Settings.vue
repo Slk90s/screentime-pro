@@ -271,6 +271,43 @@
           </div>
           <p class="field-hint">{{ t("settings.shotAutoSaveHint") }}</p>
 
+          <!-- v0.9.0：取字引擎切换（标准 = 系统内置 / 增强 = PaddleOCR-ONNX 本地模型）。
+               「增强」按钮在资源缺失时禁用并给出原因，不让用户选一个必然报错的引擎。 -->
+          <p class="zone-title">{{ t("settings.shotOcrEngine") }}</p>
+          <div class="engine-picker">
+            <label
+              class="engine-opt"
+              :class="{ on: shotConfig.ocr_engine === 'system', off: ocrInfo && !ocrInfo.system_available }"
+            >
+              <input
+                type="radio"
+                name="ocr-engine"
+                value="system"
+                :checked="shotConfig.ocr_engine === 'system'"
+                :disabled="!shotConfig.enabled || (!!ocrInfo && !ocrInfo.system_available)"
+                @change="onOcrEngine('system')"
+              />
+              <b>{{ t("settings.shotOcrEngineSystem") }}</b>
+              <span>{{ t("settings.shotOcrEngineSystemDesc") }}</span>
+            </label>
+            <label
+              class="engine-opt"
+              :class="{ on: shotConfig.ocr_engine === 'enhanced', off: ocrInfo && !ocrInfo.enhanced_ready }"
+            >
+              <input
+                type="radio"
+                name="ocr-engine"
+                value="enhanced"
+                :checked="shotConfig.ocr_engine === 'enhanced'"
+                :disabled="!shotConfig.enabled || (!!ocrInfo && !ocrInfo.enhanced_ready)"
+                @change="onOcrEngine('enhanced')"
+              />
+              <b>{{ t("settings.shotOcrEngineEnhanced") }}</b>
+              <span>{{ t("settings.shotOcrEngineEnhancedDesc") }}</span>
+            </label>
+          </div>
+          <p class="field-hint">{{ ocrEngineHint }}</p>
+
           <p class="zone-title">{{ t("settings.shotExportStyle") }}</p>
           <div class="form-row row between">
             <label>{{ t("settings.shotRadius") }} · {{ shotConfig.corner_radius }}px</label>
@@ -771,6 +808,8 @@ import type {
   UpdateInfo,
   ScreenshotConfig,
   ScreenshotOut,
+  OcrEngineInfo,
+  OcrEngineKind,
 } from "../types";
 import { formatDuration } from "../utils/format";
 import { petStore } from "../pet/stores/petStore";
@@ -865,6 +904,9 @@ async function onShowPet() {
   }
 }
 async function onHidePet() {
+  // v0.9.0：与右键菜单「隐藏桌宠」语义统一——不仅隐藏窗口，同时关闭桌宠开关
+  // （翻转 petStore.enabled 并广播 pet-enabled-changed），确保菜单 / 设置页 / 桌宠三处开关状态一致。
+  petStore.setEnabled(false);
   try {
     await invoke("hide_pet_window");
   } catch (err) {
@@ -1061,6 +1103,41 @@ async function loadShotConfig() {
     shotDir.value = await screenshot.dir();
   } catch (err) {
     console.warn("[Settings] 加载截图配置失败", err);
+  }
+}
+
+// ---- v0.9.0：取字引擎 ----
+/** 引擎资源探测结果（决定「增强」选项是否可选，以及提示文案） */
+const ocrInfo = ref<OcrEngineInfo | null>(null);
+
+async function loadOcrEngineInfo() {
+  try {
+    ocrInfo.value = await screenshot.ocrEngineInfo();
+  } catch (err) {
+    console.warn("[Settings] 读取取字引擎信息失败", err);
+  }
+}
+
+/** 引擎选择提示：资源缺失时说清「为什么不能选」，齐备时报体积（用户对体积有知情权） */
+const ocrEngineHint = computed(() => {
+  const info = ocrInfo.value;
+  if (!info) return t("settings.shotOcrEngineChecking");
+  if (!info.enhanced_ready) return t("settings.shotOcrEngineMissing");
+  return t("settings.shotOcrEngineReady", { mb: String(info.enhanced_size_mb) });
+});
+
+/** 切换取字引擎：乐观更新 + 失败回滚（与卡片内其他开关同款约定） */
+async function onOcrEngine(kind: OcrEngineKind) {
+  const prev = shotConfig.value.ocr_engine;
+  if (prev === kind) return;
+  shotConfig.value = { ...shotConfig.value, ocr_engine: kind };
+  try {
+    await screenshot.setConfig(shotConfig.value);
+    // 切换后重新探测一次：后端会顺带回报资源状态与当前生效引擎
+    await loadOcrEngineInfo();
+  } catch (err) {
+    shotConfig.value = { ...shotConfig.value, ocr_engine: prev };
+    showAlert("warn", t("settings.shotTitle"), err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -1286,6 +1363,7 @@ async function deleteShot(id: number) {
 // 截图完成 → 刷新历史（主窗口收到 Rust 的 screenshot-done 事件）
 onMounted(async () => {
   await loadShotConfig();
+  await loadOcrEngineInfo();
   await loadShotHistory();
   try {
     await listen("screenshot-done", () => {
@@ -2161,6 +2239,49 @@ async function onCheckUpdate() {
 .range-input {
   width: 180px;
   accent-color: var(--accent);
+}
+/* ===== v0.9.0：取字引擎选择（胶囊式卡片，与语言选择同风格） ===== */
+.engine-picker {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 6px;
+}
+.engine-opt {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.engine-opt:hover:not(.off) {
+  border-color: var(--accent);
+}
+.engine-opt.on {
+  border-color: var(--accent);
+  background: var(--accent-soft, var(--seg-bg));
+}
+/* 资源缺失：置灰不可选（禁用态要让用户一眼看出「不是我不想给，是这儿没有」） */
+.engine-opt.off {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.engine-opt input {
+  display: none;
+}
+.engine-opt b {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.engine-opt span {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--muted);
 }
 .shot-grid {
   display: grid;

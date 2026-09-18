@@ -26,6 +26,9 @@
     - 2026-09-17 @v0.8.1: 性能 - 重绘改为 **rAF 按帧合并**（原 `deep` 监听逐 pointermove 全幅重绘，
       高刷屏下每帧上千次 2M 像素合成 → 掉帧）；`paintOps` 去掉「每条马赛克新建一张 canvas」的临时分配；
       无标注时跳过全幅 `clip()`；顺带修正「取字」图标里 A 字不居中（字形与外框非同心中轴）
+    - 2026-09-17 @v0.9.0: 新增 - 取字结果面板显示**本次生效的引擎徽标**（标准引擎显示系统语言标签，
+      增强引擎显示「本地增强引擎 · N 行」）。引擎由设置页决定，遮罩窗只负责如实展示，
+      失败时清空徽标只留错误原因（避免"引擎写着增强、其实报错了"的误导）
 -->。
 <template>
   <div
@@ -188,7 +191,11 @@
     >
       <div class="ocr-head">
         <span class="pill-label">{{ t("shot.ocr") }}</span>
-        <span v-if="ocrLang" class="ocr-lang">{{ ocrLang }}</span>
+        <span
+          v-if="ocrBadge"
+          class="ocr-lang"
+          :class="{ 'ocr-lang--enh': ocrEngine === 'enhanced' }"
+        >{{ ocrBadge }}</span>
         <span v-if="ocrStale" class="ocr-lang ocr-lang--warn">{{ t("shot.ocrStale") }}</span>
       </div>
       <p v-if="ocrBusy" class="ocr-hint">{{ t("shot.ocrBusy") }}</p>
@@ -232,7 +239,7 @@ import { useI18n } from "vue-i18n";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { screenshot } from "../api/screenshot";
-import type { CaptureReadyPayload } from "../types";
+import type { CaptureReadyPayload, OcrEngineKind } from "../types";
 
 const { t } = useI18n();
 
@@ -289,13 +296,31 @@ const autoSave = ref(false);
 const activePanel = ref<"radius" | "ocr" | null>(null);
 const textEdit = ref<{ x: number; y: number } | null>(null);
 const textValue = ref("");
-/** 取字（本地离线 OCR）：忙碌态 / 结果 / 错误 / 生效语言 / 已复制提示 / 选区变更后结果过期 */
+/** 取字（本地离线 OCR）：忙碌态 / 结果 / 错误 / 生效语言 / 引擎 / 行数 / 已复制提示 / 选区变更后结果过期 */
 const ocrBusy = ref(false);
 const ocrText = ref("");
 const ocrErr = ref("");
 const ocrLang = ref("");
+/** 本次真正生效的引擎（v0.9.0）。空串 = 还没取过字 */
+const ocrEngine = ref<OcrEngineKind | "">("");
+/** 增强引擎识别出的行数（标准引擎只有整段文本，恒 0） */
+const ocrLines = ref(0);
 const ocrCopied = ref(false);
 const ocrStale = ref(false);
+
+/**
+ * 面板头部的引擎徽标：
+ * - 标准引擎 → 显示系统给的语言标签（zh-Hans-CN 这类）
+ * - 增强引擎 → 显示「本地增强引擎 · N 行」（语言标签 `ch` 对用户没意义，行数才有）
+ */
+const ocrBadge = computed(() => {
+  if (ocrEngine.value === "enhanced") {
+    return ocrLines.value > 0
+      ? `${t("shot.ocrEngineEnhanced")} · ${t("shot.ocrLines", { n: ocrLines.value })}`
+      : t("shot.ocrEngineEnhanced");
+  }
+  return ocrLang.value;
+});
 const textSize = 20;
 const vw = ref(window.innerWidth);
 const vh = ref(window.innerHeight);
@@ -804,6 +829,9 @@ async function runOcr() {
   ocrText.value = "";
   ocrCopied.value = false;
   ocrStale.value = false;
+  // 引擎徽标也清掉：失败时必须显示的是错误原因，而不是上一次的引擎
+  ocrEngine.value = "";
+  ocrLines.value = 0;
   try {
     const s = k.value;
     const res = await screenshot.ocr(
@@ -814,6 +842,8 @@ async function runOcr() {
     );
     ocrText.value = res.text.trim();
     ocrLang.value = res.language ?? "";
+    ocrEngine.value = res.engine;
+    ocrLines.value = res.lines;
     if (!ocrText.value) ocrErr.value = t("shot.ocrEmpty");
   } catch (err) {
     ocrErr.value = err instanceof Error ? err.message : String(err);
@@ -1218,6 +1248,10 @@ onBeforeUnmount(() => {
 }
 .ocr-lang--warn {
   background: rgba(245, 158, 11, 0.28);
+}
+/* v0.9.0：增强引擎徽标用青绿区分（一眼看出「这次走的是本地模型」） */
+.ocr-lang--enh {
+  background: rgba(16, 185, 129, 0.32);
 }
 .ocr-hint {
   margin: 0;

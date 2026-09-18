@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "ort/onnxruntime.dll": "ort/onnxruntime.dll",
+      "models/ch_PP-OCRv4_det_infer.onnx": "models/ch_PP-OCRv4_det_infer.onnx",
+      "models/ch_PP-OCRv4_rec_infer.onnx": "models/ch_PP-OCRv4_rec_infer.onnx"
+    }
+  }
+}

@@ -51,6 +51,8 @@ libc = "0.2"
 xcap = "0.9"
 arboard = "3"
 base64 = "0.22"
+# 增强引擎运行时库按需下载（macOS / Linux 不随包，首次使用时后台静默拉取）的 SHA256 校验
+sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png"] }
 tauri-plugin-global-shortcut = "2"
 ort = { version = "2.0.0-rc.13", features = ["load-dynamic"] }

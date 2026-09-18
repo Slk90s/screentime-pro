@@ -15,6 +15,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "./tracker";
 import type {
+  OcrEngineInfo,
   OcrOut,
   ScreenshotConfig,
   ScreenshotOut,
@@ -31,6 +32,8 @@ export const DEFAULT_SCREENSHOT_CONFIG: ScreenshotConfig = {
   corner_radius: 8,
   shadow: false,
   max_count: 200,
+  // v0.9.0：默认标准引擎（增强引擎要额外吃一次模型加载与 ~33MB 内存）
+  ocr_engine: "system",
 };
 
 /** 提交参数：一张已经合成好的 PNG（含裁剪 / 标注 / 圆角 / 投影） */
@@ -91,6 +94,22 @@ export const screenshot = {
 
   /** 把取字结果写进系统剪贴板（走 Rust 的 arboard，避免依赖浏览器剪贴板权限） */
   copyText: (text: string): Promise<void> => invoke<void>("screenshot_copy_text", { text }),
+
+  /**
+   * 取字引擎信息（v0.9.0）：当前引擎 + 增强引擎资源是否齐备。
+   * 非 Tauri 预览环境返回「都不可用」的安全值，避免预览里假装能用。
+   */
+  ocrEngineInfo: (): Promise<OcrEngineInfo> =>
+    isTauri
+      ? invoke<OcrEngineInfo>("ocr_engine_info")
+      : Promise.resolve({
+          kind: "system",
+          system_available: false,
+          enhanced_ready: false,
+          ort_lib: null,
+          models_dir: null,
+          enhanced_size_mb: 0,
+        }),
 
   dir: (): Promise<string> =>
     isTauri ? invoke<string>("screenshot_dir") : Promise.resolve(""),

@@ -670,6 +670,8 @@ pub fn run() {
             screenshot::screenshot_dir,
             screenshot::screenshot_ocr,
             screenshot::screenshot_copy_text,
+            // v0.9.0：取字引擎信息（设置页展示当前引擎 + 增强引擎资源齐备情况）
+            screenshot::ocr_engine_info,
             pet::create_pet_window,
             pet::show_pet_window,
             pet::hide_pet_window,

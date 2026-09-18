@@ -244,6 +244,33 @@ export interface ScreenshotConfig {
   shadow: boolean;
   /** 历史 FIFO 上限 */
   max_count: number;
+  /**
+   * 取字引擎（v0.9.0）：`system` = 系统内置（WinRT）/ `enhanced` = PaddleOCR-ONNX 本地模型。
+   * Rust 侧读侧有兜底：未知值一律回 `system`，所以这里即使拿到脏值也不会让取字不可用。
+   */
+  ocr_engine: OcrEngineKind;
+}
+
+/** 取字引擎类型（与 Rust `ocr_engine::EngineKind` 对齐） */
+export type OcrEngineKind = "system" | "enhanced";
+
+/**
+ * 取字引擎信息（Rust `screenshot::ocr_engine::EngineInfo`）。
+ * 设置页用它决定「增强」选项是否可选、以及显示随包体积。
+ */
+export interface OcrEngineInfo {
+  /** 当前选中的引擎 */
+  kind: OcrEngineKind;
+  /** 标准引擎在本平台是否可用（目前仅 Windows 实现） */
+  system_available: boolean;
+  /** 增强引擎是否可用（onnxruntime 运行库 + det/rec 模型齐备） */
+  enhanced_ready: boolean;
+  /** 运行库绝对路径（缺失为 null，便于排障） */
+  ort_lib: string | null;
+  /** 模型目录（缺失为 null） */
+  models_dir: string | null;
+  /** 增强引擎随包体积（MB） */
+  enhanced_size_mb: number;
 }
 
 /**
@@ -296,6 +323,10 @@ export interface OcrOut {
   /** 参与识别的图像尺寸（物理像素） */
   width: number;
   height: number;
-  /** 本次生效的识别语言标签（如 zh-Hans-CN）；非 Windows 端为 null */
+  /** 本次生效的识别语言标签（如 zh-Hans-CN）；增强引擎为 PP-OCR 的 `ch` */
   language: string | null;
+  /** 本次真正生效的引擎：system（系统内置）/ enhanced（PaddleOCR-ONNX） */
+  engine: OcrEngineKind;
+  /** 识别出的行数（增强引擎按行输出；标准引擎只有整段文本，为 0） */
+  lines: number;
 }

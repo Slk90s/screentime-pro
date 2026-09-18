@@ -134,6 +134,8 @@ export default {
     ocrCopy: "Copy text",
     ocrCopied: "Copied",
     ocrStale: "Selection changed",
+    ocrEngineEnhanced: "On-device enhanced engine",
+    ocrLines: "{n} lines",
     close: "Close",
     radiusShadow: "Corner radius & shadow",
     radius: "Radius",
@@ -179,6 +181,16 @@ export default {
     shotAutoSave: "Also save to history on confirm",
     shotAutoSaveHint:
       "Off by default: confirm (✓ / Enter) only copies. When on, every confirm also writes a file into the screenshots folder.",
+    shotOcrEngine: "Text recognition engine",
+    shotOcrEngineSystem: "Standard",
+    shotOcrEngineSystemDesc: "Built into the OS, no extra size; loses text at small sizes and on dark backgrounds.",
+    shotOcrEngineEnhanced: "Enhanced",
+    shotOcrEngineEnhancedDesc: "On-device PaddleOCR models — far better on tiny text and dark backgrounds; fully offline.",
+    shotOcrEngineReady:
+      "Enhanced engine is ready ({mb} MB bundled). The first recognition loads the models (~2–3 s), then they stay in memory for instant response.",
+    shotOcrEngineMissing:
+      "The enhanced engine runtime or models are missing, so it can't be enabled in this build — please reinstall the full version.",
+    shotOcrEngineChecking: "Checking engine resources…",
     shotExportStyle: "Default export style",
     shotRadius: "Default corner radius",
     shotShadow: "Default drop shadow",

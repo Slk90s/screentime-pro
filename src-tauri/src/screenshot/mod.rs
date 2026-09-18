@@ -24,9 +24,23 @@
 //!     删除不再使用的 `compose_export` / `sd_rounded_box`（合成职责已移交前端 canvas）。
 //!   - 2026-09-17 @v0.8.1: 新增 - 取字（本地离线 OCR，`ocr.rs` + `screenshot_ocr` +
 //!     `screenshot_copy_text`）。裁剪用缓存帧在 Rust 侧做，前端只传**物理像素**矩形。
+//!   - 2026-09-17 @v0.9.0: 新增 - 取字「引擎调度」（`ocr_engine.rs`）：
+//!     ① `ScreenshotConfig` 增第 8 个键 `ocr_engine`（`system` / `enhanced`，脏值一律回 `system`）；
+//!        ⚠️ 归一化**只有一个口径** `normalized_engine()`，`load` / `save` /
+//!        `screenshot_set_config` 三处共用 —— 真机验证曾抓到：只归一化 DB 而把**原始入参**
+//!        放进内存缓存时，`screenshot_get_config`（读缓存）会把脏值漏回前端，
+//!        造成「接口报的值 ≠ 实际生效的值」。改动此处务必保持三处口径一致。
+//!     ② `screenshot_ocr` 改经 `ocr_engine::recognize()` 分发，返回体增 `engine` / `lines`
+//!        （同一结构承载两个引擎的输出，前端据 `engine` 显示真正生效的引擎）；
+//!     ③ 新增 IPC `ocr_engine_info`（截图上交 14 个、全项目 80→**81**）；
+//!     ④ 打开遮罩即后台预热增强引擎，把 ~2.5s 模型加载摊到用户框选的那几秒里。
+//!     ⚠️ 增强引擎资源（`ort/onnxruntime.dll` + `models/*.onnx`，共 ~33MB）由
+//!     `tauri.windows.conf.json` 声明为 bundle resources **随包分发**（不做首次下载）；
+//!     路径解析一律多候选探测（安装目录 / 开发态 `src-tauri/` / `SD_OCR_MODELS`）。
 //!
 
 mod ocr;
+mod ocr_engine;
 mod ocr_onnx;
 
 use crate::AppState;
@@ -34,7 +48,7 @@ use base64::Engine as _;
 use image::codecs::png::PngEncoder;
 use image::{imageops, ExtendedColorType, ImageEncoder, RgbaImage};
 use std::borrow::Cow;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{
@@ -71,7 +85,7 @@ impl ScreenshotState {
 }
 
 // ===== 配置 =====
-// 落 settings 表 7 个 key；默认值面向「QQ 式」肌肉记忆：确认即复制到剪贴板。
+// 落 settings 表 8 个 key；默认值面向「QQ 式」肌肉记忆：确认即复制到剪贴板。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ScreenshotConfig {
     /// 截图总开关（关掉后快捷键与托盘「截图」均不响应）
@@ -88,6 +102,10 @@ pub struct ScreenshotConfig {
     pub shadow: bool,
     /// 历史截图 FIFO 上限（超出后最旧的移入回收站）
     pub max_count: u32,
+    /// 取字引擎（v0.9.0）：`system` = 系统内置 / `enhanced` = PaddleOCR-ONNX 本地模型。
+    /// 存字符串而非枚举，是为了让「旧配置没有这个键」与「用户手改脏值」都能安全回落
+    /// （解析在 `ocr_engine::EngineKind::parse`，未知值一律回 `system`）。
+    pub ocr_engine: String,
 }
 
 impl Default for ScreenshotConfig {
@@ -103,6 +121,9 @@ impl Default for ScreenshotConfig {
             corner_radius: 8,
             shadow: false,
             max_count: 200,
+            // 默认标准引擎：增强引擎要额外吃 ~33MB 内存与一次模型加载，
+            // 用户显式选了才付这个代价（也保住「默认零额外依赖」的产品口径）。
+            ocr_engine: ocr_engine::EngineKind::System.as_str().into(),
         }
     }
 }
@@ -116,9 +137,27 @@ impl ScreenshotConfig {
         }
     }
 
+    /// 引擎值的**唯一**归一化口径（脏值 / 空值 / 旧版本未知值 → `system`）。
+    /// `load` / `save` / `screenshot_set_config` 三处共用，避免「一处归一化、
+    /// 另一处原样透传」的口径分裂。
+    fn normalized_engine(&self) -> &'static str {
+        ocr_engine::EngineKind::parse(&self.ocr_engine).as_str()
+    }
+
+    /// 就地归一化全部「有规范形式」的字段（目前只有 `ocr_engine`）。
+    ///
+    /// 为什么必须做：`screenshot_set_config` 把**入参**放进内存缓存，而
+    /// `screenshot_get_config` 读的正是这份缓存 —— 只在 `save()` 里归一化 DB 的话，
+    /// 脏值会从读接口漏回前端（设置页据此渲染会「两个引擎都不选中」）。
+    /// 取字功能本身不受影响（所有调用点都会 `EngineKind::parse` 兜底），
+    /// 但读接口报出的值必须与真正生效的一致。
+    pub fn normalize(&mut self) {
+        self.ocr_engine = self.normalized_engine().to_string();
+    }
+
     pub fn load(db: &crate::db::AppDb) -> Self {
         let d = Self::default();
-        Self {
+        let mut cfg = Self {
             enabled: db
                 .get_setting("screenshot_enabled")
                 .map(|s| s == "true")
@@ -148,7 +187,14 @@ impl ScreenshotConfig {
                 .and_then(|s| s.parse::<u32>().ok())
                 .filter(|v| *v >= 10)
                 .unwrap_or(d.max_count),
-        }
+            // 原样取库值，随后统一走 normalize() 归一化
+            ocr_engine: db
+                .get_setting("screenshot_ocr_engine")
+                .unwrap_or(d.ocr_engine),
+        };
+        // 未知/空值一律回 system（normalize 内置兜底），保证取字永远有个能用的引擎
+        cfg.normalize();
+        cfg
     }
 
     pub fn save(&self, db: &crate::db::AppDb) -> rusqlite::Result<()> {
@@ -159,6 +205,8 @@ impl ScreenshotConfig {
         db.set_setting("screenshot_corner_radius", &self.corner_radius.to_string())?;
         db.set_setting("screenshot_shadow", Self::b(self.shadow))?;
         db.set_setting("screenshot_max_count", &self.max_count.to_string())?;
+        // 存「归一化后」的引擎值，脏值不落库（读侧也有兜底，这里是第二道保险）
+        db.set_setting("screenshot_ocr_engine", self.normalized_engine())?;
         Ok(())
     }
 }
@@ -286,6 +334,10 @@ fn hide_capture_window(app: &AppHandle) {
 /// 触发一次截图（全局快捷键 / 托盘菜单 / 前端调用共用）。
 /// 整体异步执行：隐藏自家窗 → 等一帧 → 抓屏 → 亮遮罩。
 pub fn begin_capture(app: &AppHandle) {
+    // v0.9.0：选了增强引擎就在后台先把模型加载好（~2.5s）。
+    // 用户框完选区再点「取字」通常要好几秒，这段时间足够把加载摊掉；
+    // 不预热的话第一次取字要多等一次模型加载（3.1s → 体感「卡住」）。
+    warm_ocr_engine(app);
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(e) = begin_capture_inner(&app2).await {
@@ -296,6 +348,39 @@ pub fn begin_capture(app: &AppHandle) {
             }
             hide_capture_window(&app2);
             let _ = app2.emit_to("main", "screenshot-error", e);
+        }
+    });
+}
+
+/// 后台预热增强引擎（非阻塞；已加载则是一次锁检查，几乎零成本）
+fn warm_ocr_engine(app: &AppHandle) {
+    let Some(state) = app.try_state::<ScreenshotState>() else {
+        return;
+    };
+    let kind = ocr_engine::EngineKind::parse(
+        &state
+            .config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .ocr_engine,
+    );
+    if kind != ocr_engine::EngineKind::Enhanced {
+        return;
+    }
+    let rd = resource_dir(app);
+    tauri::async_runtime::spawn_blocking(move || {
+        // 运行库缺失（macOS / Linux 不随包）→ 先尝试后台静默下载，再预热
+        ocr_engine::download_runtime_lib_if_missing(rd.as_deref());
+        let paths = ocr_engine::EnginePaths::resolve(rd.as_deref());
+        let (Some(models), lib) = (
+            paths.models_path().map(Path::to_path_buf),
+            paths.ort_lib_path().map(Path::to_path_buf),
+        ) else {
+            return;
+        };
+        if let Err(e) = ocr_onnx::warmup(&models, lib.as_deref()) {
+            // 预热失败不致命：真正取字时会再试一次，并把原因展示给用户
+            tracing::warn!(error = %e, "增强引擎预热失败");
         }
     });
 }
@@ -574,11 +659,15 @@ pub struct ApplyResult {
 pub fn screenshot_set_config(
     app: AppHandle,
     state: tauri::State<'_, ScreenshotState>,
-    config: ScreenshotConfig,
+    mut config: ScreenshotConfig,
 ) -> Result<ApplyResult, String> {
     let app_state = app
         .try_state::<Arc<AppState>>()
         .ok_or_else(|| "应用状态未初始化".to_string())?;
+    // v0.9.0：**先归一化再落库 + 进缓存**。只归一化 DB 是不够的 ——
+    // `screenshot_get_config` 读的是内存缓存，脏值会从读接口漏回前端
+    // （设置页据此渲染会「两个引擎都不选中」），且接口报的值与实际生效的不一致。
+    config.normalize();
     config.save(&app_state.db).map_err(|e| e.to_string())?;
     *state.config.lock().unwrap_or_else(|e| e.into_inner()) = config.clone();
     // v0.8.2：浮窗尾部「截图」按钮的可见性走 get_status_bar_config（读 AppState 缓存、
@@ -692,6 +781,7 @@ pub fn screenshot_thumbnail(app: AppHandle, id: i64, max_width: u32) -> Result<S
 /// 裁剪在 Rust 做：整屏帧本就缓存在 `state.frame`，不必让前端把几 MB 的图再传回来。
 #[tauri::command]
 pub async fn screenshot_ocr(
+    app: AppHandle,
     state: tauri::State<'_, ScreenshotState>,
     x: i32,
     y: i32,
@@ -717,11 +807,44 @@ pub async fn screenshot_ocr(
         imageops::crop_imm(img, x1 as u32, y1 as u32, (x2 - x1) as u32, (y2 - y1) as u32).to_image()
     };
 
-    // ② 识别必须离开 async 上下文：`IAsyncOperation::get()` 是阻塞等待，
+    // ② 引擎选择与资源路径在此解析（读配置 + 探测文件系统），
+    //    再连同裁剪图一起 move 进阻塞任务 —— 阻塞线程里不碰 Tauri 状态。
+    let kind = ocr_engine::EngineKind::parse(
+        &state
+            .config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .ocr_engine,
+    );
+    let paths = ocr_engine::EnginePaths::resolve(resource_dir(&app).as_deref());
+
+    // ③ 识别必须离开 async 上下文：WinRT 的 `IAsyncOperation::join()` 是阻塞等待，
     //    且 COM 初始化属线程级状态 —— 两者都要求「初始化与调用在同一线程」。
-    tauri::async_runtime::spawn_blocking(move || ocr::recognize(&crop))
+    tauri::async_runtime::spawn_blocking(move || ocr_engine::recognize(kind, &paths, &crop))
         .await
         .map_err(|e| format!("取字任务异常：{e}"))?
+}
+
+/// 取字引擎信息（设置页展示：当前引擎 / 增强引擎资源是否齐备 / 体积）
+#[tauri::command]
+pub fn ocr_engine_info(
+    app: AppHandle,
+    state: tauri::State<'_, ScreenshotState>,
+) -> ocr_engine::EngineInfo {
+    let kind = ocr_engine::EngineKind::parse(
+        &state
+            .config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .ocr_engine,
+    );
+    let paths = ocr_engine::EnginePaths::resolve(resource_dir(&app).as_deref());
+    ocr_engine::EngineInfo::probe(kind, &paths)
+}
+
+/// Tauri 资源目录（失败不致命：`candidate_roots` 里还有 exe 同级等候选）
+fn resource_dir(app: &AppHandle) -> Option<PathBuf> {
+    app.path().resource_dir().ok()
 }
 
 /// 把取字结果写进系统剪贴板（复用截图同一条 arboard 路径，不额外引剪贴板插件）
@@ -792,5 +915,38 @@ pub mod shortcut {
                 Err(format!("{e}"))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// v0.9.0：脏值必须在**进入内存缓存与 DB 之前**就被归一化。
+    ///
+    /// 这个测试来自一次真机验证抓到的真实缺陷：`save()` 只归一化了写入 DB 的值，
+    /// 而 `screenshot_set_config` 把**原始入参**放进内存缓存、`screenshot_get_config`
+    /// 又读那份缓存 —— 于是写入 `garbage-engine` 后读回来还是 `garbage-engine`。
+    /// 取字功能本身没错（各调用点都会 `EngineKind::parse` 兜底），但接口报的值
+    /// 与实际生效的不一致，设置页会「两个引擎都不选中」。
+    #[test]
+    fn normalize_canonicalizes_ocr_engine() {
+        let mut cfg = ScreenshotConfig::default();
+
+        cfg.ocr_engine = "garbage-engine".into();
+        cfg.normalize();
+        assert_eq!(cfg.ocr_engine, "system", "未知值必须回落 system");
+
+        cfg.ocr_engine = "  ".into();
+        cfg.normalize();
+        assert_eq!(cfg.ocr_engine, "system", "空白值必须回落 system");
+
+        cfg.ocr_engine = "ONNX".into();
+        cfg.normalize();
+        assert_eq!(cfg.ocr_engine, "enhanced", "别名 ONNX 应归一化为 enhanced");
+
+        // 幂等：归一化过的值再归一化不变
+        cfg.normalize();
+        assert_eq!(cfg.ocr_engine, "enhanced", "归一化必须幂等");
     }
 }

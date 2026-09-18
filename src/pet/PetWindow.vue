@@ -36,6 +36,7 @@
   <div
     ref="rootEl"
     class="pet-window"
+    :class="{ 'is-dragging': isDragging }"
     :style="windowStyle"
     @pointerdown="onPointerDown"
     @contextmenu.prevent="onContextMenu"
@@ -210,12 +211,13 @@ function onWheel(e: WheelEvent): void {
   const { isDragging, onPointerDown } = usePetDrag(
     () => petStore.position,
     (x, y) => petStore.setPosition(x, y),
-    // 拖拽开始：暂停持久化 + 清除可能残留的点击动画 class（避免动画与窗口移动叠加的卡顿观感）
+    // 拖拽开始：暂停持久化 + 清除点击动画 class + 暂停随机气泡（避免动画与窗口移动叠加的卡顿观感）
     // v0.8.0：同时锁住「按 alpha 命中」的穿透轮询——否则光标拖出身体边缘会被切成穿透，
     // 原生拖拽/手动拖拽都会中途断掉。
-    () => { petStore.setPersistSuspended(true); clearAnim(); setDragLock(true); },
-    // 拖拽结束：恢复持久化；若确实发生了拖拽，抑制尾随 pointerup 的点击反应（避免抖动）
-    (didDrag: boolean) => { petStore.setPersistSuspended(false); setDragLock(false); if (didDrag) suppressNextClick(); },
+    // v0.9.0：拖拽开始 pauseBubble()——冻结气泡计时，避免拖拽期气泡突然冒出再被 .is-dragging 动画冻结规则卡住。
+    () => { petStore.setPersistSuspended(true); clearAnim(); setDragLock(true); pauseBubble(); },
+    // 拖拽结束：恢复持久化 + 恢复气泡节奏；若确实发生了拖拽，抑制尾随 pointerup 的点击反应（避免抖动）
+    (didDrag: boolean) => { petStore.setPersistSuspended(false); setDragLock(false); resumeBubble(); if (didDrag) suppressNextClick(); },
   );
 
   // 鼠标穿透（默认 false，桌宠可交互）
@@ -370,6 +372,19 @@ onBeforeUnmount(() => {
 }
 .pet-window:active {
   cursor: grabbing;
+}
+
+/* v0.9.0：拖拽期间杀掉窗内所有子元素的动画/过渡（含皮肤 infinite idle 动画、过热角标脉冲、
+   点击交互动画）。
+   根因：透明置顶窗下每帧 transform 动画会强迫 DWM 整窗重合成，与 OS 原生拖拽叠加后
+   呈现「抖动/卡顿」观感（同 v0.7.2 walk-cycle 教训）。原生拖拽本身已平滑移动整窗，
+   拖拽期应让窗口 100% 静态，与悬浮窗同机制。.is-dragging 仅在拖拽期存在，平时零开销。 */
+.pet-window.is-dragging :deep(*) {
+  animation: none !important;
+  transition: none !important;
+}
+.pet-window.is-dragging .pet-overheat-badge {
+  animation: none !important;
 }
 
 /* 点击交互动画 */
