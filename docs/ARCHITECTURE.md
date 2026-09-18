@@ -27,12 +27,21 @@
     `Globalization` / `Foundation` / `Win32_System_Com`。§3.1 / §5 / §11 计数同步。
   - 2026-09-17 @v0.8.1: 修正 - 标注工具去重（删「模糊（打码）」，与「马赛克」功能重复）；
     工具栏按钮仍 13 个（删 1 加 1）。
+  - 2026-09-17 @v0.8.2: 新增 - 浮窗截图按钮（可见条件 = 截图开启 && 浮窗开启，走 1Hz 配置轮询
+    **零新增 IPC**，总数保持 80）；桌宠右键菜单 ↔ 设置页状态同步。
+  - 2026-09-18 @v0.9.0: 新增 - 取字「增强引擎」`screenshot/ocr_onnx.rs`（PaddleOCR v4 det/rec，
+    ONNX，跨平台）+ 引擎调度 `screenshot/ocr_engine.rs`（`EngineKind` / `EnginePaths::resolve`
+    多候选探测 / `ocr_engine_info` IPC）；截图上交 14 个、总数 80→**81**。**资源分发改为分平台**：
+    Windows 运行库+模型随包；macOS / Linux 模型随包、运行库 `download_runtime_lib_if_missing()`
+    首次使用时后台下载（默认源 GitHub Release `ocr-runtime`，`SD_OCR_DOWNLOAD_BASE` 可覆盖，
+    带 SHA256 校验）。§12 的 releaseBody 现值说明更新为「v0.9.0 文案」。
 -->
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-09-17（同步至 v0.9.0；取字新增「增强引擎」（PaddleOCR-ONNX 本地模型）+
-> 引擎调度层与设置页引擎切换，运行库与模型随包分发）
+> 最后更新：2026-09-18（同步至 v0.9.0；取字新增「增强引擎」（PaddleOCR-ONNX 本地模型）+
+> 引擎调度层与设置页引擎切换；**Windows 运行库与模型随包；macOS / Linux 模型随包、运行库改为
+> 首次使用时后台静默下载**（源 GitHub Release `ocr-runtime`））
 
 ---
 
@@ -480,7 +489,7 @@ sql/                     ← SQLite 迁移（已恢复入库，为数据库唯�
 | 各版本 `NOTES.md` | 发布说明草稿（**需人工**回填到 `build.yml` 的 `releaseBody`，见下） |
 
 > ⚠️ `build.yml` 的 `releaseBody` 是**硬编码死文本**，不会自动跟随版本。
-> 当前仓库三份（windows / linux / macos job）为 **v0.8.0 的文案**（发版时已同步）。
+> 当前仓库三份（windows / linux / macos job）为 **v0.9.0 的文案**（发版时已同步）。
 > 每次发版前必须手动替换为本版内容，否则线上 Release Notes 显示旧版本的内容。
 > 模板与完整流程见 [`RELEASE.md`](RELEASE.md) §3.1 / §5。
 
