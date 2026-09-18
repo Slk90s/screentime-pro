@@ -9,7 +9,8 @@
 //! - **增强（`Enhanced`）**：`ocr_onnx.rs` 的 PaddleOCR v4（det + rec 两段式）。
 //!   短边不足 736px 的图会先被 det 放大再检测，小字在检测阶段就被拉大 ——
 //!   这是 WinRT 单段链路做不到的，也是识别率提升的真正来源。
-//!   代价：随包分发 ~33MB（onnxruntime.dll + det/rec 模型）。**依旧零联网、零上传。**
+//!   代价：随包分发 ~33MB（`onnxruntime` 运行库 + det/rec 模型）。依旧**零上传**；
+//!   其中 Windows 运行库随包（零联网），macOS / Linux 运行库首次使用时下载一次（见下）。
 //!
 //! 资源分发策略（v0.9.0，按平台分两种）：
 //! - **模型（det/rec `.onnx`，跨平台通用）**：三端一律**随包分发**（提交进仓库 + 打进安装包），
@@ -17,11 +18,14 @@
 //! - **运行时库（`onnxruntime` 动态库，平台相关）**：
 //!   - Windows：`onnxruntime.dll` **随包分发**（提交进仓库），零下载、零联网；
 //!   - macOS / Linux：平台运行库**不随包**（无法在本机产出对应二进制），改为
-//!     **首次使用时后台静默下载**到用户可写缓存目录（`download_runtime_lib_if_missing`），
-//!     下载源默认 GitHub Release `ocr-runtime`，可用 `SD_OCR_DOWNLOAD_BASE` 覆盖。
-//!     依旧**零上传**——只拉 Ryan 自己托管的那一份运行库，不传任何用户数据。
+//!     **打开截图遮罩时在后台线程静默下载**到用户可写缓存目录（`download_runtime_lib_if_missing`），
+//!     下载源按序尝试 GitHub Release `ocr-runtime` → Gitee 同名 Release，
+//!     可用 `SD_OCR_DOWNLOAD_BASE` 覆盖。依旧**零上传**——只拉运行库，不传任何用户数据。
+//! - ⚠️ **下载一律只在后台预热线程做，绝不在 `recognize()` 同步路径里做**：
+//!   运行库 29~43MB，慢网下可能数分钟；卡住取字调用会让 UI 长时间无响应。
+//!   取字时若尚未就绪，立刻返回可读原因让用户稍后重试。
 //! - 「零外部接口 / 断网可用」的红线对**截图与取字本身**始终成立；运行库下载是一次性的
-//!   平台二进制获取，失败时自动回落「标准」引擎并提示用户，不会让取字崩溃。
+//!   平台二进制获取，失败时自动回落「标准」引擎（Windows）并提示用户，不会让取字崩溃。
 //!
 //! 路径解析一律**多候选探测**，因为「资源到底落在哪」随打包方式而变：
 //! NSIS 安装（资源在安装目录）、开发直跑（资源在 target/release）、
@@ -29,6 +33,11 @@
 //!
 //! 修改历史：
 //!   - 2026-09-17 @v0.9.0: 初始创建 - 引擎枚举 + 资源路径探测 + 统一 recognize 出口
+//!   - 2026-09-18 @v0.9.0: 修复 - ①下载超时由「20s 总超时」（慢网 43MB 必失败）改为
+//!     「连接 30s + 总上限 10 分钟 + 每源 3 次重试」；②新增 Gitee 镜像作为第二下载源；
+//!     ③SHA256 校验加状态码与摘要格式判断（.sha256 缺失/404 不再误判为损坏）；
+//!     ④`recognize_enhanced` 移除同步下载（改由后台预热下载），并修正其重解析
+//!     `EnginePaths::resolve(None)` 会丢 macOS `Contents/Resources/models` 的问题。
 //!
 
 use super::{ocr, ocr_onnx};
@@ -235,9 +244,13 @@ fn download_target_path(name: &str) -> PathBuf {
 
 /// 增强引擎运行时库按需下载（macOS / Linux 走此通道；Windows 运行库随包天然就绪）。
 ///
-/// **默认启用**内置基址 [`DEFAULT_OCR_DOWNLOAD_BASE`]（GitHub Release `ocr-runtime`），
-/// 可用环境变量 `SD_OCR_DOWNLOAD_BASE` 覆盖。基址下应存在 `<lib_name>`（文件名见 `ort_lib_name`），
+/// **按序尝试**内置基址 [`MIRROR_OCR_DOWNLOAD_BASES`]（GitHub Release `ocr-runtime` → Gitee 镜像），
+/// 可用环境变量 `SD_OCR_DOWNLOAD_BASE` 覆盖（覆盖后只用该单一基址）。
+/// 基址下应存在 `<lib_name>`（文件名见 `ort_lib_name`），
 /// 可选 `<lib_name>.sha256`（单行十六进制摘要）做完整性校验。
+///
+/// ⚠️ **只在后台预热线程调用**（见 `mod.rs::warm_ocr_engine`），不要放进 `recognize()` 同步路径：
+/// 运行库 29~43MB，慢网下可能数分钟。超时策略为「连接 30s + 总上限 10 分钟 + 每源 3 次重试」。
 ///
 /// 设计原则：**绝不阻断取字**。任何失败（网络 / 校验 / 写入）都只记 `tracing` 日志并返回
 /// `false`，调用方据此回落到「标准」引擎或向用户提示，不会让截图流程崩溃。
@@ -248,17 +261,23 @@ pub fn download_runtime_lib_if_missing(resource_dir: Option<&Path>) -> bool {
     if resolve_ort_lib(resource_dir).is_some() {
         return true; // 已就绪，无需下载（Windows 常态）
     }
-    let base = std::env::var("SD_OCR_DOWNLOAD_BASE")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_OCR_DOWNLOAD_BASE.to_string());
+    // 候选下载基址：环境变量覆盖（只用一个）→ 否则按内置顺序尝试（GitHub 主源 → Gitee 国内镜像）。
+    let bases: Vec<String> = match std::env::var("SD_OCR_DOWNLOAD_BASE") {
+        Ok(v) if !v.trim().is_empty() => vec![v.trim().trim_end_matches('/').to_string()],
+        _ => MIRROR_OCR_DOWNLOAD_BASES
+            .iter()
+            .map(|s| s.trim_end_matches('/').to_string())
+            .collect(),
+    };
     let name = ort_lib_name();
-    let url = format!("{}/{}", base.trim_end_matches('/'), name);
     let target = download_target_path(name);
-    tracing::info!(url = %url, "增强引擎运行库未随包，尝试后台下载");
 
+    // ⚠️ 超时策略是本函数的关键：运行库 29~43MB，**绝不能用短「总超时」**
+    // （最初写成 20s 总超时 → 慢网必然失败，等于 mac/Linux 取字永远不可用）。
+    // 改为「连接 30s + 总上限 10 分钟 + 每个基址 3 次重试」。
     let client = match reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(600))
         .build()
     {
         Ok(c) => c,
@@ -268,30 +287,48 @@ pub fn download_runtime_lib_if_missing(resource_dir: Option<&Path>) -> bool {
         }
     };
 
-    let bytes = match client
-        .get(&url)
-        .send()
-        .and_then(|r| r.error_for_status())
-        .and_then(|r| r.bytes())
-    {
-        Ok(b) => b.to_vec(),
-        Err(e) => {
-            tracing::warn!(error = %e, "增强引擎运行库下载失败");
-            return false;
+    let mut downloaded: Option<(String, Vec<u8>)> = None;
+    'outer: for base in &bases {
+        let url = format!("{}/{}", base, name);
+        for attempt in 1..=3u32 {
+            tracing::info!(url = %url, attempt, "增强引擎运行库未随包，尝试后台下载");
+            match client
+                .get(&url)
+                .send()
+                .and_then(|r| r.error_for_status())
+                .and_then(|r| r.bytes())
+            {
+                Ok(b) => {
+                    downloaded = Some((base.clone(), b.to_vec()));
+                    break 'outer;
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, url = %url, attempt, "增强引擎运行库下载失败，将重试 / 换源");
+                }
+            }
         }
+    }
+    let Some((base, bytes)) = downloaded else {
+        tracing::error!("增强引擎运行库所有下载源均失败");
+        return false;
     };
 
-    // 可选 SHA256 校验：基址下存在 `<name>.sha256` 文本才校验，缺失则跳过（仅记日志）
-    if let Ok(hr) = client.get(format!("{url}.sha256")).send() {
-        if let Ok(htext) = hr.text() {
-            let expected = htext.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
-            if !expected.is_empty() {
-                let mut h = Sha256::new();
-                h.update(&bytes);
-                let got = format!("{:x}", h.finalize());
-                if got != expected {
-                    tracing::error!(expected = %expected, got = %got, "增强引擎运行库 SHA256 校验失败，已丢弃");
-                    return false;
+    // 可选 SHA256 校验：基址下存在 `<name>.sha256`（单行十六进制摘要）才校验；
+    // 缺失 / 404 / 内容不是摘要 → 一律跳过（仅记日志）。绝不因为「校验文件本身不可用」而误判为损坏。
+    if let Ok(hr) = client.get(format!("{}/{}.sha256", base, name)).send() {
+        if hr.status().is_success() {
+            if let Ok(htext) = hr.text() {
+                let expected = htext.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+                if expected.len() == 64 && expected.bytes().all(|c| c.is_ascii_hexdigit()) {
+                    let mut h = Sha256::new();
+                    h.update(&bytes);
+                    let got = format!("{:x}", h.finalize());
+                    if got != expected {
+                        tracing::error!(expected = %expected, got = %got, "增强引擎运行库 SHA256 校验失败，已丢弃");
+                        return false;
+                    }
+                } else {
+                    tracing::warn!("增强引擎运行库 .sha256 内容非摘要，跳过校验");
                 }
             }
         }
@@ -308,11 +345,18 @@ pub fn download_runtime_lib_if_missing(resource_dir: Option<&Path>) -> bool {
     resolve_ort_lib(resource_dir).is_some()
 }
 
-/// 增强引擎运行时库默认下载基址（Ryan 在 GitHub 建 `ocr-runtime` Release，
-/// 上传 `libonnxruntime.dylib`(mac) / `libonnxruntime.so`(linux) 及可选 `.sha256`）。
-/// 可用环境变量 `SD_OCR_DOWNLOAD_BASE` 覆盖（如自建镜像）。
-const DEFAULT_OCR_DOWNLOAD_BASE: &str =
-    "https://github.com/Slk90s/screentime-pro/releases/download/ocr-runtime";
+/// 增强引擎运行时库的内置下载基址（**按顺序尝试**，前者失败自动换后者）。
+///
+/// 两个基址下都应存在 `libonnxruntime.dylib`(macOS) / `libonnxruntime.so`(Linux)
+/// 以及可选的同名 `.sha256`（单行十六进制摘要）。
+/// - 主源：GitHub Release `ocr-runtime`（Ryan 自托管，与 Windows 随包的 `onnxruntime.dll` 同为 ORT 1.30.0）
+/// - 镜像：Gitee 同名 Release（国内网络更稳——43MB 走 github.com 极易超时）
+///
+/// 可用环境变量 `SD_OCR_DOWNLOAD_BASE` 覆盖为任意单一基址（如自建 CDN）。
+const MIRROR_OCR_DOWNLOAD_BASES: [&str; 2] = [
+    "https://github.com/Slk90s/screentime-pro/releases/download/ocr-runtime",
+    "https://gitee.com/create100/screentime-pro/releases/download/ocr-runtime",
+];
 
 /// 统一取字出口：按引擎分发，返回结构与标准引擎一致（多一个 `engine` 字段）。
 pub fn recognize(kind: EngineKind, paths: &EnginePaths, img: &RgbaImage) -> Result<ocr::OcrOut, String> {
@@ -323,24 +367,32 @@ pub fn recognize(kind: EngineKind, paths: &EnginePaths, img: &RgbaImage) -> Resu
 }
 
 fn recognize_enhanced(paths: &EnginePaths, img: &RgbaImage) -> Result<ocr::OcrOut, String> {
+    // 模型在三端都随包 → 直接用调用方（带 resource_dir）解析好的 models。
+    // ⚠️ 此处**不要**再 `EnginePaths::resolve(None)`：candidate_roots 不含 macOS 的
+    // `Contents/Resources`（那要靠 Tauri 的 resource_dir 传入），重解析会把模型目录弄丢。
     let models = paths.models_path().ok_or_else(|| {
         "增强引擎的模型文件缺失：请重新安装完整版本的应用（models/ 未随包落盘）".to_string()
     })?;
-    // 运行库缺失（macOS / Linux 不随包）→ 先尝试按需下载，下载后重新探测
-    let paths = if paths.enhanced_ready() {
-        paths.clone()
-    } else {
-        download_runtime_lib_if_missing(None);
-        EnginePaths::resolve(None)
-    };
-    if !paths.enhanced_ready() {
+    // 运行库缺失（macOS / Linux 不随包）→ **绝不在此处阻塞下载**：
+    // 下载由 `warm_ocr_engine` 在打开截图遮罩时于后台线程静默进行（运行库 29~43MB，
+    // 慢网下可能耗时数分钟，卡在取字调用里会让 UI 长时间无响应）。
+    // 这里只重探一次运行库路径（后台线程可能刚把文件落到用户可写缓存目录），
+    // 未就绪就立刻返回可读原因，让用户稍后重试。
+    let mut resolved = paths.clone();
+    if !resolved.enhanced_ready() {
+        if let Some(lib) = resolve_ort_lib(None) {
+            resolved.ort_lib = Some(lib.to_string_lossy().into_owned());
+        }
+    }
+    if !resolved.enhanced_ready() {
         return Err(
-            "增强引擎的运行库缺失：本平台运行库未随包，需联网后首次使用时后台下载；\n\
-             若已联网仍失败，请在设置中将「取字引擎」切回「标准」，或重新安装包含运行库的版本。"
+            "增强引擎的运行库正在后台下载中（macOS / Linux 的运行库不随包，首次使用时自动获取）：\n\
+             请稍等片刻后重试；若长时间仍失败，可在设置里把「取字引擎」切回「标准」，\n\
+             或用环境变量 SD_OCR_DOWNLOAD_BASE 指定可用的下载源。"
                 .into(),
         );
     }
-    let lines = ocr_onnx::recognize_cached(models, paths.ort_lib_path(), img)?;
+    let lines = ocr_onnx::recognize_cached(models, resolved.ort_lib_path(), img)?;
     // PP-OCR 按行输出连续文本（不是 WinRT 的「单字 + 空格」），
     // 所以**不能**复用 ocr.rs 的 tidy_text —— 那个规则会误删 `CPU 使用率` 的真实间隔。
     let text = lines
