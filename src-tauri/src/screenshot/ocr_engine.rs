@@ -3,12 +3,16 @@
 //! 取字「引擎调度」（v0.9.0）：在标准引擎与增强引擎之间做选择，并统一解析引擎资源路径。
 //!
 //! 两个引擎的分工：
-//! - **标准（`System`）**：`ocr.rs` 的系统内置能力（Windows = WinRT `Media.Ocr`）。
-//!   零体积、零依赖、随系统语言包走；短板是小字号（<14px）与低对比场景丢字，
-//!   且已实测「放大 / 灰度 / 留边」三种预处理全部无效（见 `ocr.rs` 头部否决记录）。
+//! - **标准（`System`）**：**操作系统内置**的识别能力 —— 零体积、零联网、随系统语言包走。
+//!   - Windows = WinRT `Media.Ocr`（`ocr.rs`）
+//!   - macOS = Vision framework `VNRecognizeTextRequest`（`ocr_vision.rs`）
+//!
+//!   两端短板同源：小字号（<14px）与低对比场景丢字，且已实测
+//!   「放大 / 灰度 / 留边」三种预处理全部无效（见 `ocr.rs` 头部否决记录）。
+//!   Linux 的系统识别尚未落地，该平台上「标准」不可用。
 //! - **增强（`Enhanced`）**：`ocr_onnx.rs` 的 PaddleOCR v4（det + rec 两段式）。
 //!   短边不足 736px 的图会先被 det 放大再检测，小字在检测阶段就被拉大 ——
-//!   这是 WinRT 单段链路做不到的，也是识别率提升的真正来源。
+//!   这是单段链路（WinRT / Vision）做不到的，也是识别率提升的真正来源。
 //!   代价：随包分发 ~33MB（`onnxruntime` 运行库 + det/rec 模型）。依旧**零上传**；
 //!   其中 Windows 运行库随包（零联网），macOS / Linux 运行库首次使用时下载一次（见下）。
 //!
@@ -48,7 +52,7 @@ use std::path::{Path, PathBuf};
 /// 取字引擎类型（落 settings 键 `screenshot_ocr_engine`）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineKind {
-    /// 标准：系统内置（Windows = WinRT Media.Ocr）
+    /// 标准：操作系统内置（Windows = WinRT `Media.Ocr`；macOS = Vision）
     System,
     /// 增强：PaddleOCR-ONNX 本地模型
     Enhanced,
@@ -76,18 +80,34 @@ impl EngineKind {
 
 /// 本平台是否内置「标准」取字引擎。
 ///
-/// 标准引擎 = `ocr.rs` 的系统能力，**目前仅 Windows 实现**（WinRT `Media.Ocr`）；
-/// macOS / Linux 尚未落地（macOS 计划接系统 Vision、Linux 计划接 Tesseract，均未实现），
-/// 在这两个平台上 `ocr::recognize()` 只会返回「仅支持 Windows」的错误。
+/// 标准引擎 = 操作系统自带的识别能力：**Windows = WinRT `Media.Ocr`、
+/// macOS = Vision framework**（`ocr_vision.rs`）。
+/// Linux 尚未落地（系统识别计划接 Tesseract），在它上面 `ocr::recognize()`
+/// 只会返回「暂不支持本平台」的错误。
 pub const fn system_engine_available() -> bool {
-    cfg!(target_os = "windows")
+    cfg!(target_os = "windows") || cfg!(target_os = "macos")
+}
+
+/// 标准引擎的**具体实现名**（仅用于设置页/排障展示，不参与任何逻辑分支）。
+///
+/// 有这个字段的原因：macOS 只能靠 CI 或用户反馈验证，出问题时能一眼看出
+/// 「本机识别走的是 Vision 还是 WinRT」，省掉一轮来回猜。
+pub const fn system_engine_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "winrt"
+    } else if cfg!(target_os = "macos") {
+        "vision"
+    } else {
+        ""
+    }
 }
 
 /// 引擎**缺省值**（配置里没有这个键时使用）。
 ///
-/// - 有标准引擎的平台（Windows）→ `system`：零额外体积、零依赖、零模型加载；
-/// - 没有标准引擎的平台（macOS / Linux）→ `enhanced`：若默认成 `system`，
-///   开箱取字必然报「仅支持 Windows」，等于功能不可用。
+/// - 有标准引擎的平台（Windows / macOS）→ `system`：零额外体积、零依赖、
+///   零模型加载，**且无需任何下载**（macOS 选它就不必等 43MB 运行库）；
+/// - 没有标准引擎的平台（Linux）→ `enhanced`：若默认成 `system`，
+///   开箱取字必然报「暂不支持本平台」，等于功能不可用。
 pub const fn default_engine() -> EngineKind {
     if system_engine_available() {
         EngineKind::System
@@ -98,10 +118,12 @@ pub const fn default_engine() -> EngineKind {
 
 /// 把「配置里的引擎字符串」解析为**本平台真正可用**的引擎。
 ///
-/// 唯一会改写用户选择的情形：**本平台没有标准引擎（macOS / Linux）却配了标准** ——
+/// 唯一会改写用户选择的情形：**本平台没有标准引擎（Linux）却配了标准** ——
 /// 此时回落到增强，否则取字必然失败。这条同时也是**自愈路径**：
-/// v0.9.0 的默认值是 `system`，macOS 用户只要改过任意一项截图设置（触发 `save()`）
-/// 就会把 `system` 写进库；升级到修复版后靠这里自动改回 `enhanced`，无需用户手改配置。
+/// v0.9.0 的默认值是 `system`，而当时 macOS 上没有标准引擎，用户只要改过任意一项
+/// 截图设置（触发 `save()`）就会被写成 `system`；v0.9.1 起 macOS 真的有了标准引擎
+/// （Vision），这个 `system` 不再需要被改写，直接生效。
+/// 反过来，若用户在修复版里被自愈成了 `enhanced`，那是有效选择，**不再改动**。
 pub fn effective_kind(config_value: &str) -> EngineKind {
     let k = EngineKind::parse(config_value);
     if k == EngineKind::System && !system_engine_available() {
@@ -137,10 +159,28 @@ impl EnginePaths {
         self.models_dir.as_ref().map(Path::new)
     }
 
+    /// 模型是否齐备（det + rec 两个 `.onnx`）。
+    ///
+    /// 三端**一律随包**，所以这里为 `false` 只说明一件事：**安装不完整**
+    /// （models/ 被删、或用了残缺的绿色包）。它是前端「增强」选项能否被选中的判据。
+    pub fn models_ready(&self) -> bool {
+        self.models_path().is_some_and(ocr_onnx::is_ready)
+    }
+
+    /// 运行库是否就绪（`onnxruntime` 动态库）。
+    ///
+    /// ⚠️ 与 [`Self::models_ready`]**必须分开看**：Windows 运行库随包，缺了是安装问题；
+    /// 而 **macOS / Linux 运行库不随包**，缺了是**正常初始状态**（首次使用后台下载）。
+    /// 一旦把两者揉成一个布尔值，mac 用户会掉进死锁：运行库没下载 → `enhanced_ready=false`
+    /// → 「增强」置灰选不中 → 而下载**只在选中增强后才触发** → 永远选不中
+    /// （这正是 v0.9.0 在 mac 上的实际表现，前端与后端各占一半责任）。
+    pub fn runtime_ready(&self) -> bool {
+        self.ort_lib_path().is_some_and(|p| p.is_file())
+    }
+
     /// 增强引擎是否**真正可用**（运行库 + 两个模型都在）
     pub fn enhanced_ready(&self) -> bool {
-        self.ort_lib_path().is_some_and(|p| p.is_file())
-            && self.models_path().is_some_and(ocr_onnx::is_ready)
+        self.runtime_ready() && self.models_ready()
     }
 }
 
@@ -494,10 +534,16 @@ fn recognize_enhanced(paths: &EnginePaths, img: &RgbaImage) -> Result<ocr::OcrOu
 pub struct EngineInfo {
     /// 当前选中的引擎（system / enhanced）
     pub kind: String,
-    /// 标准引擎在本平台是否可用（仅 Windows 实现）
+    /// 标准引擎在本平台是否可用（Windows = WinRT；macOS = Vision；Linux 暂无）
     pub system_available: bool,
-    /// 增强引擎是否可用（运行库 + 模型齐备）
+    /// 标准引擎的具体实现（`winrt` / `vision`；无系统引擎时为空串）
+    pub system_engine: String,
+    /// 增强引擎是否可用（运行库 + 模型齐备，选了就能直接用）
     pub enhanced_ready: bool,
+    /// 增强引擎**模型**是否齐备（三端随包；`false` = 安装不完整）
+    pub enhanced_models_ready: bool,
+    /// 增强引擎**运行库**是否就绪（mac / Linux 缺失属正常，会后台下载）
+    pub enhanced_runtime_ready: bool,
     /// 增强引擎运行库路径（缺失为 null，便于排障）
     pub ort_lib: Option<String>,
     /// 增强引擎模型目录（缺失为 null）
@@ -520,7 +566,10 @@ impl EngineInfo {
         Self {
             kind: kind.as_str().to_string(),
             system_available: system_engine_available(),
+            system_engine: system_engine_name().to_string(),
             enhanced_ready: paths.enhanced_ready(),
+            enhanced_models_ready: paths.models_ready(),
+            enhanced_runtime_ready: paths.runtime_ready(),
             ort_lib: paths.ort_lib.clone(),
             models_dir: paths.models_dir.clone(),
             enhanced_size_mb: (bytes as f64 / 1048576.0 * 100.0).round() / 100.0,
@@ -578,24 +627,41 @@ mod tests {
         }
     }
 
-    /// 平台差异：本平台没有标准引擎时（macOS / Linux），
+    /// 平台差异：本平台没有标准引擎时（当前只有 Linux），
     /// 配置里的 `system` 与任何脏值都必须被抬成 `enhanced`，
-    /// 否则取字必然报「仅支持 Windows」（也涵盖旧配置自愈）。
+    /// 否则取字必然报「暂不支持本平台」。
     #[test]
     fn effective_kind_heals_on_platforms_without_system_engine() {
         if system_engine_available() {
-            // Windows：如实尊重用户选择，脏值回标准
+            // Windows / macOS：如实尊重用户选择，脏值回标准
             assert_eq!(effective_kind("system"), EngineKind::System);
             assert_eq!(effective_kind("enhanced"), EngineKind::Enhanced);
             assert_eq!(effective_kind("garbage"), EngineKind::System);
         } else {
-            // macOS / Linux：一切「非增强」输入都落到增强
+            // Linux：一切「非增强」输入都落到增强
             assert_eq!(effective_kind("system"), EngineKind::Enhanced);
             assert_eq!(effective_kind("garbage"), EngineKind::Enhanced);
             assert_eq!(effective_kind(""), EngineKind::Enhanced);
             assert_eq!(effective_kind("  "), EngineKind::Enhanced);
             assert_eq!(effective_kind("ONNX"), EngineKind::Enhanced);
         }
+    }
+
+    /// `system_engine_name()` 与 `system_engine_available()` 必须自洽：
+    /// 设置页「标准」选项的可用性与实现名展示都读这两个值，
+    /// 一旦打架（比如平台有引擎、实现名却是空串）设置页会出现自相矛盾的展示。
+    #[test]
+    fn system_engine_name_matches_availability() {
+        let name = system_engine_name();
+        assert_eq!(
+            !name.is_empty(),
+            system_engine_available(),
+            "有系统引擎时实现名不能为空，反之亦然（实际 name={name:?}）"
+        );
+        assert!(
+            matches!(name, "winrt" | "vision" | ""),
+            "实现名只能是 winrt / vision / 空串，实际 {name:?}"
+        );
     }
 
     /// 缺省引擎必须是本平台**开箱可用**的那个。
@@ -609,6 +675,36 @@ mod tests {
         assert_eq!(default_engine(), expected);
         // 缺省值经「平台自愈」后必须仍是它自己（不能出现「默认 system、自愈成 enhanced」的矛盾）
         assert_eq!(effective_kind(default_engine().as_str()), default_engine());
+    }
+
+    /// 回归：「模型就绪」与「运行库就绪」必须**各自独立**，不能揉成一个布尔值。
+    /// 前端靠 `enhanced_models_ready` 决定「增强」能否被选中、靠
+    /// `enhanced_runtime_ready` 决定提示「首次使用会自动下载」。
+    /// 揉在一起就会重现 mac 死锁：运行库没下载 → 选项置灰 → 下载永不触发。
+    #[test]
+    fn models_and_runtime_readiness_are_independent() {
+        let absent = EnginePaths {
+            ort_lib: None,
+            models_dir: Some("Z:/definitely/no/such/models/dir".into()),
+        };
+        assert!(!absent.models_ready());
+        assert!(!absent.runtime_ready());
+        assert!(!absent.enhanced_ready());
+
+        // 构造「模型在、运行库不在」—— 这正是 mac / Linux 首次使用前的正常状态。
+        let real = EnginePaths::resolve(None);
+        if real.models_ready() {
+            let before_download = EnginePaths {
+                ort_lib: None,
+                models_dir: real.models_dir.clone(),
+            };
+            assert!(before_download.models_ready(), "模型在就必须报 ready");
+            assert!(!before_download.runtime_ready(), "没给运行库就不能报 ready");
+            assert!(
+                !before_download.enhanced_ready(),
+                "缺运行库时整体仍未就绪（前端据此提示「下载中」）"
+            );
+        }
     }
 
     /// 探针（默认忽略）：**真实**下载 macOS / Linux 运行库，验证

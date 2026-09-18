@@ -183,18 +183,21 @@ export default {
       "Off by default: confirm (✓ / Enter) only copies. When on, every confirm also writes a file into the screenshots folder.",
     shotOcrEngine: "Text recognition engine",
     shotOcrEngineSystem: "Standard",
-    shotOcrEngineSystemDesc: "Built into the OS, no extra size; loses text at small sizes and on dark backgrounds.",
+    shotOcrEngineSystemDesc:
+      "Built into the OS — no extra size, no download; loses text at small sizes and on dark backgrounds.",
+    shotOcrEngineSystemVision:
+      "Provided by macOS Vision — nothing to download, works out of the box and offline.",
     shotOcrEngineEnhanced: "Enhanced",
     shotOcrEngineEnhancedDesc: "On-device PaddleOCR models — far better on tiny text and dark backgrounds; fully offline.",
     shotOcrEngineReady:
       "Enhanced engine is ready ({mb} MB bundled). The first recognition loads the models (~2–3 s), then they stay in memory for instant response.",
-    shotOcrEngineMissing:
-      "The enhanced engine runtime or models are missing, so it can't be enabled in this build — please reinstall the full version.",
+    shotOcrEngineModelsMissing:
+      "The enhanced engine's model files are missing (incomplete installation) — please reinstall the full version.",
     shotOcrEngineChecking: "Checking engine resources…",
     shotOcrEngineSystemUnsupported:
-      "The OS engine isn't available on this platform (Windows only) — please use the Enhanced engine.",
+      "The OS engine isn't available on this platform (Windows uses WinRT, macOS uses Vision) — please use the Enhanced engine.",
     shotOcrEngineDownloading:
-      "This platform uses the Enhanced engine: its runtime library (~30–45 MB, SHA256-verified) downloads automatically in the background the first time you open the capture overlay. Until it finishes, recognition asks you to retry shortly — no manual action needed.",
+      "The Enhanced engine's runtime library (~30–45 MB, SHA256-verified) isn't bundled: once you select it, it downloads automatically in the background the first time you open the capture overlay. Until it finishes, recognition asks you to retry shortly — no manual action needed.",
     shotExportStyle: "Default export style",
     shotRadius: "Default corner radius",
     shotShadow: "Default drop shadow",

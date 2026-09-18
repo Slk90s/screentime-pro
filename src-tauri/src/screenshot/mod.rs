@@ -42,6 +42,10 @@
 mod ocr;
 mod ocr_engine;
 mod ocr_onnx;
+/// macOS 系统取字引擎（Vision framework）—— 「标准」引擎的 mac 实现。
+/// 仅在 macOS 上编译：Windows 走 `ocr.rs` 的 WinRT，Linux 的系统识别尚未落地。
+#[cfg(target_os = "macos")]
+mod ocr_vision;
 
 use crate::AppState;
 use base64::Engine as _;

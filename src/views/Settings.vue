@@ -272,7 +272,9 @@
           <p class="field-hint">{{ t("settings.shotAutoSaveHint") }}</p>
 
           <!-- v0.9.0：取字引擎切换（标准 = 系统内置 / 增强 = PaddleOCR-ONNX 本地模型）。
-               「增强」按钮在资源缺失时禁用并给出原因，不让用户选一个必然报错的引擎。 -->
+               「标准」在 Windows = WinRT、macOS = 系统 Vision；Linux 暂无，此时置灰。
+               「增强」只在**模型缺失**（= 安装不完整）时置灰；运行库缺失不是禁用理由
+               —— macOS / Linux 的运行库本就不随包，得靠选中「增强」才触发后台下载。 -->
           <p class="zone-title">{{ t("settings.shotOcrEngine") }}</p>
           <div class="engine-picker">
             <label
@@ -288,15 +290,11 @@
                 @change="onOcrEngine('system')"
               />
               <b>{{ t("settings.shotOcrEngineSystem") }}</b>
-              <span>{{
-                ocrInfo && !ocrInfo.system_available
-                  ? t("settings.shotOcrEngineSystemUnsupported")
-                  : t("settings.shotOcrEngineSystemDesc")
-              }}</span>
+              <span>{{ systemEngineDesc }}</span>
             </label>
             <label
               class="engine-opt"
-              :class="{ on: shotConfig.ocr_engine === 'enhanced', off: ocrInfo && !ocrInfo.enhanced_ready }"
+              :class="{ on: shotConfig.ocr_engine === 'enhanced', off: ocrInfo && !ocrInfo.enhanced_models_ready }"
             >
               <input
                 type="radio"
@@ -1124,30 +1122,43 @@ async function loadOcrEngineInfo() {
 
 /** 引擎选择提示：资源缺失时说清「为什么不能选」，齐备时报体积（用户对体积有知情权） */
 /**
- * 「增强」引擎可否被选中。
- *
- * ⚠️ 修复点（v0.9.0 补丁）：原先只要 `!enhanced_ready` 就禁用「增强」。
- * 但 macOS / Linux 的运行库不随包，下载又**只在选中「增强」后才触发** ——
- * 结果「标准」禁用（本平台没有）、「增强」也禁用（尚未下载）→ **两个都点不了**，
- * 用户被永久卡死。故：本平台没有系统引擎时，即使运行库尚未就绪也允许选，
- * 由后台下载补齐（提示文案会说清「首次使用自动下载」）。
+ * 「标准」引擎的描述：按本平台的实际实现换文案。
+ * 有系统引擎时顺带写明实现是什么（Windows WinRT / macOS Vision）——
+ * 「标准」在不同平台背后是完全不同的东西，写清楚就不用用户猜。
  */
-const enhancedSelectable = computed(() => {
+const systemEngineDesc = computed(() => {
   const info = ocrInfo.value;
-  if (!info) return false;
-  return info.enhanced_ready || !info.system_available;
+  if (!info) return t("settings.shotOcrEngineSystemDesc");
+  if (!info.system_available) return t("settings.shotOcrEngineSystemUnsupported");
+  if (info.system_engine === "vision") return t("settings.shotOcrEngineSystemVision");
+  return t("settings.shotOcrEngineSystemDesc");
 });
+
+/**
+ * 「增强」引擎可否被选中 —— 判据是**模型是否齐备**（三端随包），
+ * 而不是 `enhanced_ready`（= 运行库 + 模型）。
+ *
+ * ⚠️ 这条判据改过两次，别再改回去：
+ * - v0.9.0 初版：只要 `!enhanced_ready` 就禁用。macOS 上运行库不随包、下载又
+ *   **只在选中「增强」后才触发** → 「标准」禁用（当时 mac 没有系统引擎）、
+ *   「增强」也禁用 → **两个都点不了**，用户被永久卡死。
+ * - 补丁版：`enhanced_ready || !system_available`（拿「本平台没有系统引擎」兜底）。
+ *   v0.9.1 给 macOS 接上系统 Vision 后，这个兜底条件在 mac 上**不再成立**，
+ *   死锁会原样复现（mac 默认走 system → 永远选不中 enhanced → 运行库永不下载）。
+ * - 现在：只看 `enhanced_models_ready`。运行库缺失**不是**禁用理由 ——
+ *   它由后台下载补齐，提示文案会说清「首次自动下载」。
+ */
+const enhancedSelectable = computed(() => ocrInfo.value?.enhanced_models_ready === true);
 
 const ocrEngineHint = computed(() => {
   const info = ocrInfo.value;
   if (!info) return t("settings.shotOcrEngineChecking");
-  if (info.enhanced_ready) {
-    return t("settings.shotOcrEngineReady", { mb: String(info.enhanced_size_mb) });
-  }
-  // 本平台没有系统引擎（macOS / Linux）→ 运行库靠后台自动下载补，
-  // 此时是「正在获取」而不是「缺失/请重装」，文案必须区分开。
-  if (!info.system_available) return t("settings.shotOcrEngineDownloading");
-  return t("settings.shotOcrEngineMissing");
+  // 模型缺失 = 安装不完整 —— 这是唯一「选了也用不了」的情形
+  if (!info.enhanced_models_ready) return t("settings.shotOcrEngineModelsMissing");
+  // 模型在、运行库不在：macOS / Linux 的**正常初始状态**，选中后会后台下载。
+  // 「正在获取」与「缺失/请重装」必须分开说，否则用户会以为坏了。
+  if (!info.enhanced_runtime_ready) return t("settings.shotOcrEngineDownloading");
+  return t("settings.shotOcrEngineReady", { mb: String(info.enhanced_size_mb) });
 });
 
 /** 切换取字引擎：乐观更新 + 失败回滚（与卡片内其他开关同款约定） */

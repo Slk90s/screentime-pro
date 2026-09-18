@@ -107,7 +107,10 @@ export const screenshot = {
       : Promise.resolve({
           kind: "system",
           system_available: false,
+          system_engine: "",
           enhanced_ready: false,
+          enhanced_models_ready: false,
+          enhanced_runtime_ready: false,
           ort_lib: null,
           models_dir: null,
           enhanced_size_mb: 0,

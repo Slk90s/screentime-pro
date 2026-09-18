@@ -35,6 +35,14 @@
     Windows 运行库+模型随包；macOS / Linux 模型随包、运行库 `download_runtime_lib_if_missing()`
     首次使用时后台下载（默认源 GitHub Release `ocr-runtime`，`SD_OCR_DOWNLOAD_BASE` 可覆盖，
     带 SHA256 校验）。§12 的 releaseBody 现值说明更新为「v0.9.0 文案」。
+  - 2026-09-18 @v0.9.1: 新增 - macOS「标准」取字引擎落地：`screenshot/ocr_vision.rs`
+    （系统 Vision `VNRecognizeTextRequest`；objc2 0.6 / objc2-vision 0.3 —— 与 Tauri 已引入的
+    objc2 谱系**同代**，零新增版本谱系）。`ocr.rs` 降为「系统引擎的平台分发壳」
+    （Win→WinRT / mac→Vision / Linux 明确降级）；`system_engine_available()` 在 macOS 为真，
+    `default_engine()` 在 macOS 由此回落 `system` —— **mac 开箱取字、零下载**。
+    `EngineInfo` 增 `system_engine` / `enhanced_models_ready` / `enhanced_runtime_ready`：
+    把「模型齐备」与「运行库就绪」**拆成两个字段**，修掉 macOS 上「增强」被永久锁死的死锁
+    （前端判据由 `enhanced_ready` 改为 `enhanced_models_ready`）。**IPC 总数不变（仍 81）**。
 -->
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  

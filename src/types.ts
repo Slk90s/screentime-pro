@@ -261,10 +261,25 @@ export type OcrEngineKind = "system" | "enhanced";
 export interface OcrEngineInfo {
   /** 当前选中的引擎 */
   kind: OcrEngineKind;
-  /** 标准引擎在本平台是否可用（目前仅 Windows 实现） */
+  /** 标准引擎在本平台是否可用（Windows = WinRT；macOS = Vision；Linux 暂无） */
   system_available: boolean;
-  /** 增强引擎是否可用（onnxruntime 运行库 + det/rec 模型齐备） */
+  /** 标准引擎的具体实现（"winrt" / "vision"；无系统引擎时为空串） */
+  system_engine: "winrt" | "vision" | "";
+  /** 增强引擎是否可用（运行库 + 模型齐备，选了就能直接用） */
   enhanced_ready: boolean;
+  /**
+   * 增强引擎**模型**是否齐备（三端随包；false = 安装不完整）。
+   * 这是「增强」选项能否被选中的判据 —— 不要用 enhanced_ready，见下。
+   */
+  enhanced_models_ready: boolean;
+  /**
+   * 增强引擎**运行库**是否就绪。
+   *
+   * ⚠️ macOS / Linux 的运行库**不随包**，缺失是正常初始状态（首次使用后台下载）。
+   * 若拿 `enhanced_ready`（= 运行库 && 模型）当「可选中」判据，mac 用户会死锁：
+   * 运行库没下载 → 选项置灰 → 而下载只在选中后才触发 → 永远选不中。
+   */
+  enhanced_runtime_ready: boolean;
   /** 运行库绝对路径（缺失为 null，便于排障） */
   ort_lib: string | null;
   /** 模型目录（缺失为 null） */

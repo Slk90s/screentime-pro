@@ -62,7 +62,9 @@ pub struct OcrOut {
 }
 
 impl OcrOut {
-    /// 标准引擎的构造口（本文件内部用；增强引擎在 ocr_engine.rs 里自建）
+    /// 标准引擎的构造口（WinRT 分支用；增强引擎在 ocr_engine.rs 里自建、
+    /// macOS 的 Vision 分支在 ocr_vision.rs 里自建 —— 两边都要填 lines，故不复用这里）
+    #[cfg(any(target_os = "windows", test))]
     fn system(text: String, width: u32, height: u32, language: Option<String>) -> Self {
         Self {
             text,
@@ -83,9 +85,16 @@ pub fn recognize(img: &RgbaImage) -> Result<OcrOut, String> {
     platform::recognize(img)
 }
 
-// ===== 结果后处理（跨平台，与 WinRT 用法解耦，便于单测） =====
+// ===== 结果后处理（**WinRT 专用**，与另两个引擎的取舍刻意不同） =====
+//
+// ⚠️ 不要把它当成「通用清洗」推广到 Vision / PP-OCR：那两个引擎按**整行**返回文本，
+// 不存在 WinRT 那种「中文单字之间被塞空格」的问题，套用下面的规则反而会
+// 误删 `CPU 使用率` 的真实间隔（它们的实现处各自写了同样的说明）。
+// 因此这三个 helper 只在 Windows 构建与测试中编译 —— 否则 macOS 构建会报一片
+// dead_code 警告，把真正的问题淹掉。
 
 /// 字符是否属于「CJK 语境」——汉字、中文标点、全角符号。
+#[cfg(any(target_os = "windows", test))]
 fn is_cjk(c: char) -> bool {
     matches!(
         c as u32,
@@ -110,6 +119,7 @@ fn is_cjk(c: char) -> bool {
 ///
 /// 规则：某个空格只要**前一个非空格字符或后一个非空格字符**是 CJK，就删掉它。
 /// 纯拉丁文本（`Hello World`、`OCR Engine`）两侧都不是 CJK，空格原样保留。
+#[cfg(any(target_os = "windows", test))]
 fn tidy_text(raw: &str) -> String {
     // 统一换行，避免 \r\n 混进来
     let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
@@ -240,22 +250,28 @@ mod platform {
     }
 }
 
-// ===== 其它平台：明确降级 =====
+// ===== macOS：系统 Vision（实现在 ocr_vision.rs） =====
 
-#[cfg(not(target_os = "windows"))]
+/// 直接以**模块身份**复用，而不是在 `ocr_engine.rs` 里写 `cfg` 分支：
+/// 这样 `ocr.rs` 保持「系统内置引擎的平台分发壳」这一单一职责，
+/// 上层只需调 `ocr::recognize()`，永远不必关心平台差异。
+#[cfg(target_os = "macos")]
+use super::ocr_vision as platform;
+
+// ===== 其余平台（Linux）：明确降级 =====
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 mod platform {
     use super::OcrOut;
     use image::RgbaImage;
 
     pub fn recognize(_img: &RgbaImage) -> Result<OcrOut, String> {
         // 不假装成功、也不静默失败：把「为什么不行 + 后续计划」直接说清楚。
-        // v0.9.0：macOS/Linux 的增强引擎（ONNX）运行库尚未随包分发，
-        // 所以这两端目前两个引擎都不可用 —— 文案要如实反映，别让用户以为切换引擎能救。
-        Err(if cfg!(target_os = "macos") {
-            "当前版本的取字功能仅支持 Windows（macOS 计划接入系统 Vision，尚未落地）".into()
-        } else {
-            "当前版本的取字功能仅支持 Windows".to_string()
-        })
+        // Linux 目前两个引擎都不可用：系统引擎未落地（计划接 Tesseract），
+        // 而增强引擎虽有模型随包、运行库可下载，却没有「零下载」的系统引擎兜底。
+        Err("当前版本的取字功能暂不支持本平台：\
+             Windows 用系统识别、macOS 用系统 Vision，Linux 的系统识别尚未落地。"
+            .into())
     }
 }
 

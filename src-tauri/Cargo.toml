@@ -62,7 +62,20 @@ ndarray = "0.17.2"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication", "NSApplication"] }
-objc2-foundation = { version = "0.3", features = ["NSString", "NSURL"] }
+# features 显式列全（默认也是开着的，但写清楚就不用担心将来有人关掉 default）
+# NSEnumerator 是 `Retained<NSArray<T>>: IntoIterator` 的前提；NSData 用于把 PNG 交给 Vision。
+objc2-foundation = { version = "0.3", features = [
+    "NSString",
+    "NSURL",
+    "NSArray",
+    "NSData",
+    "NSDictionary",
+    "NSError",
+    "NSEnumerator",
+] }
+# 系统 Vision framework 绑定 = macOS 的「标准」取字引擎（ocr_vision.rs）。
+# ⚠️ 版本必须与上面的 objc2 0.6 同代（0.3.x 配 0.6），否则会同时编译两份 objc2。
+objc2-vision = "0.3"
 # 前台窗口标题采集（CGWindowListCopyWindowInfo，需「屏幕录制」权限）
 # 用底层 core-foundation-sys 直接调 C 函数，规避 core-foundation 0.10 高层 API 变更
 core-foundation-sys = "0.8"
