@@ -50,6 +50,7 @@ use super::{ocr, ocr_onnx};
 use image::RgbaImage;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// 取字引擎类型（落 settings 键 `screenshot_ocr_engine`）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -436,6 +437,29 @@ fn fetch_and_store(name: &str, target: &Path, bases: &[String]) -> Result<(), St
     Ok(())
 }
 
+/// 「运行库正在下载」标记：把并发请求收敛成一次真正的下载。
+///
+/// 为什么必须：`warm_ocr_engine` 在**每次**触发截图时都会调用
+/// [`download_runtime_lib_if_missing`]。运行库缺失时（macOS / Linux 常态，Windows 随包不受影响），
+/// 用户连按几次快捷键就会**并发**拉起多个 42MB 下载，而且都写同一个目标文件。
+///
+/// 实测（v0.9.1 macOS 真机日志）：一分钟内连按 7 次 → **7 个 `attempt=1` 同时开跑**，
+/// 日志刷屏之外，`download_target_path` 指向同一路径，存在被交叉写坏的风险。
+/// 用一次性标记让「第一个真下、其余立即返回」；失败后标记复位，下次触发自然重试。
+static RUNTIME_DOWNLOAD_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// 复位 [`RUNTIME_DOWNLOAD_IN_FLIGHT`]。
+///
+/// 用 RAII 而不是在函数末尾手动复位：`fetch_and_store` 若 panic（含解压 / IO 异常），
+/// 手动复位会被跳过，标记永久为 `true` → 下载通道被一次 panic 死锁。
+struct DownloadInFlightGuard;
+
+impl Drop for DownloadInFlightGuard {
+    fn drop(&mut self) {
+        RUNTIME_DOWNLOAD_IN_FLIGHT.store(false, Ordering::Release);
+    }
+}
+
 /// 增强引擎运行时库按需下载（macOS / Linux 走此通道；Windows 运行库随包天然就绪）。
 ///
 /// **按序尝试**内置基址 [`MIRROR_OCR_DOWNLOAD_BASES`]（GitHub Release `ocr-runtime` → Gitee 镜像），
@@ -449,12 +473,25 @@ fn fetch_and_store(name: &str, target: &Path, bases: &[String]) -> Result<(), St
 /// 设计原则：**绝不阻断取字**。任何失败（网络 / 校验 / 写入）都只记 `tracing` 日志并返回
 /// `false`，调用方据此向用户提示，不会让截图流程崩溃。
 ///
+/// ⚠️ **可并发调用**（每次触发截图都会走一遍）：内部用 [`RUNTIME_DOWNLOAD_IN_FLIGHT`]
+/// 收敛，重复请求会立即返回 `false` 而不是再开一个下载。
+///
 /// ⚠️ 仅在「本平台运行库未随包」时才有意义：Windows 运行库（`onnxruntime.dll`）随包，
 /// `resolve_ort_lib` 已命中 → 直接返回 `true`，不会发任何网络请求。
 pub fn download_runtime_lib_if_missing(resource_dir: Option<&Path>) -> bool {
     if resolve_ort_lib(resource_dir).is_some() {
         return true; // 已就绪，无需下载（Windows 常态）
     }
+    // 并发收敛：已有下载在跑就直接返回（说明见 RUNTIME_DOWNLOAD_IN_FLIGHT）。
+    // 返回 false 表示「本次没拿到」——调用方本来就要能处理「运行库暂不可用」。
+    if RUNTIME_DOWNLOAD_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        tracing::debug!("增强引擎运行库正在下载中，跳过本次重复请求");
+        return false;
+    }
+    let _guard = DownloadInFlightGuard;
     let name = ort_lib_name();
     let target = download_target_path(name);
     if let Err(e) = fetch_and_store(name, &target, &download_bases()) {

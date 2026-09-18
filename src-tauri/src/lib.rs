@@ -195,6 +195,31 @@ pub fn run() {
                 debug = cfg!(debug_assertions),
                 "ScreenTime Pro 启动"
             );
+            // v0.9.2 诊断：把「当前运行的可执行文件路径」写进启动日志。
+            //
+            // 起因：macOS 上「系统设置里授权开关明明是开的，应用却说没权限，重启也无效」
+            // 这类问题，根因几乎都是**授权记在另一个二进制身份上**（TCC 按路径 + 二进制指纹记账）：
+            // - 从 DMG / 下载目录直接双击运行 → Gatekeeper 把 App 挪到随机只读路径
+            //   （`/private/var/folders/…/AppTranslocation/<uuid>/d/…`），系统不会把授权
+            //   保留在这份临时副本上，且**每次启动路径还会变**，怎么重启都没用；
+            // - 无代码签名的应用**升级后指纹变化** → 旧授权看着还开着，实际已不匹配。
+            //
+            // 有这一行日志，下次就不用再猜了。用纯 `std`（不依赖 mac 专属模块），全平台通用。
+            {
+                let exe = std::env::current_exe()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|e| format!("<无法获取: {e}>"));
+                if exe.contains("/AppTranslocation/") {
+                    tracing::warn!(
+                        exe = %exe,
+                        "当前处于 App Translocation（从 DMG / 下载目录直接运行）—— \
+                         系统不会把权限授权保留在这份临时副本上，且每次启动路径都会变；\
+                         请先把 App 拖进「应用程序」文件夹，再从那里启动"
+                    );
+                } else {
+                    tracing::info!(exe = %exe, "运行位置");
+                }
+            }
             // v0.7.7（2026-09-10）：panic 兜底钩子。
             // 背景：release 是 GUI 进程（Windows 无控制台 / macOS .app 双击无 stderr 终端），
             // 一旦 panic，用户只看到「闪退」而拿不到任何信息（macOS 反馈的现场即如此）。
