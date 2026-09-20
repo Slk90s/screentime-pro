@@ -660,6 +660,7 @@ pub fn run() {
             commands::check_permissions,
             commands::open_privacy_settings,
             commands::restart_app,
+            commands::reset_screen_capture_permission,
             commands::get_rules,
             commands::add_rule,
             commands::update_rule,

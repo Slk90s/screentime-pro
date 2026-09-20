@@ -47,7 +47,22 @@
 //!     返回可读原因，由前端弹窗提示 + 一键跳「屏幕录制」面板。
 //!     配套：`open_privacy_settings` 加 `pane` 参数（缺省仍是辅助功能）；前端补上
 //!     原本完全缺失的 `screenshot-error` 监听（此前失败是静默的）。
+//!   - 2026-09-20 @v0.9.3: 重构 - macOS 授权逻辑整体迁出到 **`screenshot/macos.rs`**，
+//!     `begin_capture_inner` 只调 `macos::ensure_ready()`。三处实质改变：
+//!     ① **修掉「授权了还报没权限」**：此前只用 `CGPreflightScreenCaptureAccess()` 当唯一闸门，
+//!        而它有 Apple 已知行为 —— 一旦返回 false，**在同一进程内可能一直返回 false**
+//!        （真正的抓屏其实已经生效）。现新增独立第二信号「窗口标题探针」（窗口标题与窗口内容
+//!        同属一张 TCC 授权，读得到标题 = 抓得到内容），两信号**取或**放行，不再被过期预检卡死。
+//!     ② 失败文案按**实际查到的证据**分档：运行路径 / App Translocation / 下载隔离标记
+//!        （com.apple.quarantine）/ 代码签名状态（ad-hoc 或未签名 = 授权反复失效的根因）。
+//!     ③ 新增 IPC `reset_screen_capture_permission`（`tccutil reset ScreenCapture <bundle id>`，
+//!        只清本应用条目），配合界面「重置权限并重启」一键清掉指向旧指纹的脏授权记录。
 //!
+
+/// macOS 截图专属逻辑（屏幕录制授权闸门 / 授权失效根因诊断 / 一键重置授权）。
+/// 仅在 macOS 上编译：Windows/Linux 抓屏不需要 TCC 授权，问题全在 mac 这一侧。
+#[cfg(target_os = "macos")]
+pub(crate) mod macos;
 
 mod ocr;
 mod ocr_engine;
@@ -436,11 +451,10 @@ async fn begin_capture_inner(app: &AppHandle) -> Result<(), String> {
     // 仍未拿到就返回可读原因，由前端提示 + 一键跳转「屏幕录制」面板。
     #[cfg(target_os = "macos")]
     {
-        // 闸门逻辑收在 `tracker::macos::ensure_screen_capture_ready` 里：那是个纯 mac 模块，
-        // 能被交叉编译探针覆盖（`cargo check --target aarch64-apple-darwin`）；
-        // 这里只负责把它挪到阻塞线程 —— 首次授权会弹系统授权框并同步等用户点击，
-        // 直接跑在 async 任务里会占住 runtime 线程。
-        tauri::async_runtime::spawn_blocking(crate::tracker::macos::ensure_screen_capture_ready)
+        // 闸门逻辑收在 `screenshot/macos.rs`（纯 mac 模块，可被交叉编译探针覆盖：
+        // `cargo check --target aarch64-apple-darwin`）；这里只负责把它挪到阻塞线程 ——
+        // 首次授权会弹系统授权框并同步等用户点击，直接跑在 async 任务里会占住 runtime 线程。
+        tauri::async_runtime::spawn_blocking(macos::ensure_ready)
             .await
             .unwrap_or_else(|e| Err(format!("屏幕录制权限检查线程异常: {e}")))?;
     }

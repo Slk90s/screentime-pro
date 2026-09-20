@@ -598,6 +598,28 @@ pub fn restart_app(app: tauri::AppHandle) {
     app.restart();
 }
 
+/// 重置本应用的「屏幕录制」授权记录（仅 macOS 有意义）。
+///
+/// 为什么需要：授权记录一旦指向**旧版本的代码签名指纹**（未签名的包每次升级都会这样），
+/// 系统设置界面是清不掉的 —— 用户把开关关了再开、或把条目按「−」移除再加，
+/// 系统写进去的往往仍是旧身份，于是「开关是开的、应用还说没权限」的循环解不开。
+/// `tccutil reset ScreenCapture <bundle id>` 是 Apple 官方支持的清除方式：清掉后
+/// 下一次截图会重新弹授权框、重新写入一条干净的记录。
+///
+/// ⚠️ 只重置本应用（显式传了 bundle id），不影响其它 App；正常无需 sudo。
+/// 前端把它和「重启应用」串成一个按钮 —— 重置后必须重启进程，新授权才对运行中的进程生效。
+#[tauri::command]
+pub fn reset_screen_capture_permission() -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::screenshot::macos::reset_permission()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("仅 macOS 需要「屏幕录制」授权".to_string())
+    }
+}
+
 #[tauri::command]
 pub fn get_rules(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<RuleOut>, String> {
     state.db.get_rules_out().map_err(|e| e.to_string())

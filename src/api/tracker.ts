@@ -107,6 +107,15 @@ export const tracker = {
    * ⚠️ 调用后进程会立刻退出，不要在其后写任何依赖返回值的代码。
    */
   restartApp: () => call<void>("restart_app"),
+  /**
+   * 重置本应用的「屏幕录制」授权记录（仅 macOS）。
+   *
+   * 解「系统设置里开关开着、应用还说没权限」的死循环：授权记录一旦指向旧版本的
+   * 代码签名指纹（未签名的包每次升级都会这样），系统设置界面清不掉，只能用
+   * `tccutil reset ScreenCapture` 清。重置后必须重启进程（新授权只对新启动的进程生效），
+   * 所以界面把「重置授权 + 重启应用」串成一个动作。
+   */
+  resetScreenCapturePermission: () => call<string>("reset_screen_capture_permission"),
   checkWebview2: () => call<Webview2Status>("check_webview2"),
   openWebview2Download: () => call<void>("open_webview2_download"),
   checkUpdate: () => call<UpdateInfo>("check_for_update"),

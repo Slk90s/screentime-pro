@@ -729,7 +729,7 @@
       <template #footer>
         <template v-if="alertPermRestart">
           <button class="modal-btn cancel" @click="alertOpen = false">{{ t("common.cancel") }}</button>
-          <button class="modal-btn cancel" @click="onAlertRestart">{{ t("settings.shotPermRestart") }}</button>
+          <button class="modal-btn cancel" @click="onAlertRestart">{{ t("settings.shotPermFix") }}</button>
           <button class="modal-btn primary" @click="onAlertConfirm">
             {{ alertConfirmText || t("common.confirm") }}
           </button>
@@ -1099,11 +1099,23 @@ function showAlert(
 }
 
 /**
- * 一键重启应用（macOS「屏幕录制」新授权只对新进程生效，见 `restart_app` 命令注释）。
- * 成功时进程会直接退出，这个 await 不会返回；catch 兜的是 IPC 本身失败的情况。
+ * 一键「重置授权 + 重启」（macOS）。
+ *
+ * 为什么是两步而不是单纯重启：系统里那条屏幕录制授权记录可能指向**旧版本的代码签名指纹**
+ * （未签名的包每次升级都会这样），这种脏记录在系统设置界面里清不掉 —— 用户把开关关了再开、
+ * 把条目按「−」删了再加，写进去的往往还是旧身份。所以先 `tccutil reset` 清干净，再重启进程。
+ * 两步缺一不可：只清不重启，新授权对当前进程无效；只重启，脏记录还在。
+ *
+ * 成功时进程会直接退出，restartApp 的 await 不会返回；catch 兜的是 IPC 本身失败。
  */
 async function onAlertRestart() {
   alertOpen.value = false;
+  try {
+    await tracker.resetScreenCapturePermission();
+  } catch (err) {
+    // 重置失败不阻断重启：tccutil 在个别系统上需要 sudo，此时至少让「重启」这条路还能走
+    console.warn("[shot] 重置屏幕录制授权失败:", err);
+  }
   try {
     await tracker.restartApp();
   } catch (err) {

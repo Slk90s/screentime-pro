@@ -227,6 +227,10 @@ export default {
     // processes — offer a one-click restart so users don't get stuck on
     // "the toggle is on but the app says no".
     shotPermRestart: "Restart App",
+    // v0.9.3 (2026-09-20): a plain restart is often not enough — the TCC entry may point at a
+    // previous build's signature fingerprint and cannot be cleared from the Settings UI, so we
+    // reset it via tccutil first. One button so users cannot do only half of the fix.
+    shotPermFix: "Reset Permission & Restart",
     shotShortcutReset: "Reset shortcut",
     // v0.7.6: Status bar config (master + sub-toggles; replaces v0.7.5 metricsTitle)
     // v0.7.11 (2026-09-13): unified across all three platforms — metrics are shown only on the

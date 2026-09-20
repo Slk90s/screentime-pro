@@ -84,7 +84,7 @@
       <span class="shot-toast-msg">{{ shotError.msg }}</span>
       <div v-if="shotError.perm" class="shot-toast-actions">
         <button @click="openShotPermSettings">{{ t("settings.shotPermOpen") }}</button>
-        <button @click="restartApp">{{ t("settings.shotPermRestart") }}</button>
+        <button @click="restartApp">{{ t("settings.shotPermFix") }}</button>
       </div>
       <button class="shot-toast-close" @click="shotError = null" :title="t('app.dismissTip')"><AppIcon name="x" /></button>
     </div>
@@ -199,9 +199,15 @@ async function openShotPermSettings() {
   }
 }
 
-// 重启应用：TCC 新授予的「屏幕录制」权限需重启进程才生效，否则会卡在
-// 「开关已开 → 仍报无权限」的循环里出不来。
+// 重置授权 + 重启应用（v0.9.3）。
+// 屏幕录制授权记录若指向旧版本的签名指纹，系统设置界面里清不掉 → 先 tccutil 重置再重启，
+// 否则用户会一直卡在「开关已开 → 仍报无权限」的循环里。重置失败不阻断重启。
 async function restartApp() {
+  try {
+    await tracker.resetScreenCapturePermission();
+  } catch {
+    /* tccutil 失败（如个别系统需 sudo）不阻断重启 */
+  }
   try {
     await tracker.restartApp();
   } catch {

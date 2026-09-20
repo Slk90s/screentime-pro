@@ -50,7 +50,12 @@
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-09-20（同步至 **v0.9.2**；日志可追溯性改造 —— 日志**每行带版本戳** + 新增用户行为
+> 最后更新：2026-09-20（同步至 **v0.9.3**；macOS 截图的屏幕录制授权判定由**单信号改双信号** —— 官方
+> `CGPreflightScreenCaptureAccess` 在「授权已生效」时仍可能持续返回过期 false，现叠加**窗口标题探针**
+> （`CGWindowListCopyWindowInfo`，与窗口内容共用同一张 TCC 授权）联合放行；新增 `reset_screen_capture_permission`
+> IPC（83→**84**）与「重置权限并重启」按钮；macOS 截图逻辑独立为 `screenshot/macos.rs`（权限闸门 + 诊断 +
+> 重置集中一处，失败文案按 App Translocation / 未签名 / 多副本分档），并修 `CFRelease` 泄漏。
+> 上一版 v0.9.2 为日志可追溯性改造 —— 日志**每行带版本戳** + 新增用户行为
 > **`audit.<date>.log`** 独立审计文件 + 保留期 3→**14 天**（启动 + 运行时每小时双清理）+ 卸载前自动备份日志
 > 到「文档\ScreenTimePro-Logs」；截图失败提升为**主窗全局提示**（权限类错误带「打开系统设置 / 重启应用」）；
 > 修复 3 处监听器泄漏、自动建规则反向覆盖用户禁用项、空选区误取字，并补齐自 v0.8.0 起缺失的提示条样式；
@@ -65,7 +70,7 @@
 
 跨平台应用使用时长追踪（macOS / Windows / Linux），对标 iOS「屏幕使用时间」。**数据 100% 本地（SQLite bundled），零上传，隐私优先**。
 
-栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v0.9.2**（已发布，详见 [`RELEASE.md`](RELEASE.md)）。
+栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v0.9.3**（已发布，详见 [`RELEASE.md`](RELEASE.md)）。
 
 > ⚠️ 本节版本号在 v0.7.0 → v0.7.5 期间**长期未更新**（曾停留在 v0.7.0），与 `tauri.conf.json` 脱节。
 > 版本号唯一真实来源是 **`src-tauri/tauri.conf.json` 的 `version`**，改版本时务必回来同步本节。

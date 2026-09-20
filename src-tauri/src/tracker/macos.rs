@@ -8,8 +8,9 @@
 //! - `NSWorkspace.frontmostApplication()` —— 当前前台应用（无需特殊权限即可拿到 App 名称/包名）
 //! - `CGEventSourceSecondsSinceLastEventType()` —— 空闲检测，依赖「辅助功能」权限
 //! - 窗口标题需要「屏幕录制」权限（后续扩展用）
-//! - **截图**依赖同一张「屏幕录制」TCC 授权。v0.9.1 起截图侧把它做成了**强制闸门**
-//!   （见 `screenshot/mod.rs::begin_capture_inner`）：无授权时抓屏不会报错，只会拿到
+//! - **截图**依赖同一张「屏幕录制」TCC 授权。v0.9.1 起截图侧把它做成了**强制闸门**，
+//!   v0.9.3 起闸门整体迁到 `crate::screenshot::macos`（含授权失效根因诊断），
+//!   本模块只保留两个权限**原语**供其复用：无授权时抓屏不会报错，只会拿到
 //!   「只有桌面壁纸」的图，必须提前拦下来并引导用户授权。
 //!
 //! 注意：本采集器仅在 `target_os = "macos"` 下编译进二进制。
@@ -237,77 +238,11 @@ pub fn request_screen_capture_access() -> bool {
     granted
 }
 
-/// 诊断：当前进程的可执行文件路径，以及是否处于 App Translocation。
-///
-/// 为什么需要：macOS 的 TCC 授权按**二进制身份**记账（路径 + 代码签名指纹）。
-/// 用户若从 DMG / 下载目录直接双击运行，Gatekeeper 会把 App 挪到一个**随机的只读临时路径**
-/// （`/private/var/folders/…/AppTranslocation/<uuid>/d/…`）再启动 —— 此时正在跑的进程
-/// 与用户勾选授权的那份 App **不是同一个身份**，授权永远不生效。
-///
-/// 症状与「授权陈旧」一模一样：设置里开关是开的、应用仍报没权限、**重启也无用**
-/// （重启后要么还在同一临时路径，要么换成新的 uuid）。所以排查这类问题，
-/// 第一件事必须是把「实际运行路径」打出来，否则只能靠猜。
-///
-/// 返回 `(可执行文件路径, 是否处于 translocation)`；只用 `std`，可被交叉编译探针覆盖。
-pub fn exe_diagnosis() -> (String, bool) {
-    let exe = match std::env::current_exe() {
-        Ok(p) => p.display().to_string(),
-        Err(e) => format!("<无法获取: {e}>"),
-    };
-    let translocated = exe.contains("/AppTranslocation/");
-    (exe, translocated)
-}
-
-/// 截图前的「屏幕录制」权限闸门（macOS）
-///
-/// `Ok(())` = 已授权，可以抓屏；`Err(原因)` = 未授权，原因**可直接展示给用户**
-/// （前端就是拿这个字符串弹提示的，所以文案要写成用户能照着做的步骤）。
-///
-/// 为什么这个闸门是**必须**的：无授权时抓屏 API 不报错，只会返回「只有桌面壁纸」的图
-/// （见 [`request_screen_capture_access`] 的说明）。不在这里拦下，用户只会拿到一张
-/// 没有应用窗口的废图 —— 现象是「截图后应用全消失、只剩桌面」，且完全不知道原因，
-/// 系统设置里也找不到本应用可以勾选。
-///
-/// ⚠️ **会阻塞**：首次弹系统授权框时会同步等待用户点击 → 调用方必须放在阻塞线程里
-/// （`spawn_blocking`），不要挂在 async 任务的直接路径上。
-pub fn ensure_screen_capture_ready() -> Result<(), String> {
-    if is_screen_capture_trusted() {
-        return Ok(());
-    }
-    // 首次未表态：主动请求一次 —— 这会把本应用登记进「系统设置 → 隐私与安全性 →
-    // 屏幕录制」列表并弹授权框（未表态过的应用不会出现在该列表里，用户想手动勾选也无从下手）。
-    request_screen_capture_access();
-    // 请求后复查：新授权通常要**重启进程**才生效（TCC 按进程签名快照），这里多半仍是 false。
-    if is_screen_capture_trusted() {
-        return Ok(());
-    }
-    // 失败即把「到底在哪个二进制上找授权」写进日志。
-    // v0.9.1 真机反馈证明这步不能省：用户看到的是「设置里开关开着 + 重启多次仍报没权限」，
-    // 而日志里只有 granted=false，没有运行路径 → 只能靠猜。身份不匹配（translocation /
-    // 无签名升级后指纹变化）才是这类症状的主因，不是「用户没重启」。
-    let (exe, translocated) = exe_diagnosis();
-    tracing::warn!(
-        exe = %exe,
-        translocated,
-        "屏幕录制权限未生效：TCC 未授权当前二进制（设置里开关可能是开着的，但记的是另一个身份）"
-    );
-    let mut msg = String::from(
-        "缺少「屏幕录制」权限：macOS 会拦截其他应用的窗口内容，截出来只剩桌面壁纸。\n\
-① 到「系统设置 → 隐私与安全性 → 屏幕录制」勾选本应用；\n\
-② 然后**完全退出并重新打开**本应用 —— 授权只对新启动的进程生效，只开开关不重启没用。\n\
-若那里本来就是开着的：先关掉再打开（或选中本应用按左下角「−」移除后重试）。\
-安装新版本后旧授权会失效，需要重新勾选。",
-    );
-    if translocated {
-        msg.push_str(&format!(
-            "\n\n⚠️ 检测到当前是从**临时位置**运行的（App Translocation）：{exe}\n\
-             从 DMG / 下载目录直接双击启动时，macOS 会把 App 挪到随机只读路径再运行，\
-             授权不会保留在这份副本上（而且每次启动路径还会变，所以重启多少次都没用）。\n\
-             请先把 App 拖进「应用程序」文件夹，再从那里启动。"
-        ));
-    }
-    Err(msg)
-}
+// v0.9.3（2026-09-20）：原 `exe_diagnosis()` 与 `ensure_screen_capture_ready()` 已迁入
+// `crate::screenshot::macos` —— 那才是「截图授权」的归属地，且在那边强化为
+// 「官方预检 + 窗口标题探针」双信号（修掉预检返回**过期 false** 时误拦有效授权的问题），
+// 并把运行路径 / App Translocation / 下载隔离标记 / 代码签名状态一并纳入错误文案。
+// 本采集器只保留下面两个**权限原语**，供截图闸门复用。
 
 // ⚠️ 为什么「升级后授权会失效」：本应用目前**没有代码签名**（见 `tauri.macos.conf.json`
 // 未配置 `signingIdentity`），macOS 的 TCC 是按**二进制指纹**记录授权的 —— 每次换版本
