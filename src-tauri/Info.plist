@@ -6,5 +6,9 @@
   <string>需要访问前台应用信息以统计使用时长</string>
   <key>NSAccessibilityUsageDescription</key>
   <string>需要辅助功能权限以检测当前窗口标题与系统空闲状态，用于精确统计应用使用时长</string>
+  <!-- v0.9.4: ScreenCaptureKit (macOS 14+) 触发屏幕录制 TCC 弹窗时，若无此用途说明键，
+       系统会直接终止应用（screencapturekit crate README §Requirements 确认）。 -->
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>ScreenTime Pro 需要录制屏幕来统计各应用的使用时长，并支持截图取字功能。您的屏幕内容仅在本机处理，不会上传。</string>
 </dict>
 </plist>

@@ -78,16 +78,23 @@
 
     <!-- v0.9.2：截图失败全局提示（任何页面可见）。此前失败只在设置页弹错，
          用户用全局快捷键截图、而人不在设置页时 → 失败是静默的（仅进日志）。
-         权限类错误额外给「打开系统设置 / 重启应用」两个动作（TCC 新授权需重启进程才生效）。 -->
+         v0.9.4：权限类失败**不再走这条 toast**（改由下方紧凑授权弹窗引导），
+         这里只剩非权限类错误（引擎/磁盘等），因此不再需要动作按钮。 -->
     <div v-if="shotError" class="shot-toast shot-toast--error" role="alert">
       <span class="shot-toast-icon shot-toast-icon--error">!</span>
-      <span class="shot-toast-msg">{{ shotError.msg }}</span>
-      <div v-if="shotError.perm" class="shot-toast-actions">
-        <button @click="openShotPermSettings">{{ t("settings.shotPermOpen") }}</button>
-        <button @click="restartApp">{{ t("settings.shotPermFix") }}</button>
-      </div>
+      <span class="shot-toast-msg">{{ shotError }}</span>
       <button class="shot-toast-close" @click="shotError = null" :title="t('app.dismissTip')"><AppIcon name="x" /></button>
     </div>
+
+    <!-- v0.9.4：macOS「屏幕录制」授权紧凑弹窗（一句话原因 + 去授权/重置并重启 +
+         2s 轮询翻转「已授权点此重启」+ 详情折叠）。由 screenshot-permission-blocked
+         （截图被闸门拦）与 screenshot-permission-changed（启动预请求后仍未授权）
+         两个事件驱动；取代 v0.9.2/3 的大段错误 toast。 -->
+    <PermissionDialog
+      v-if="permDialogReason"
+      :reason="permDialogReason"
+      @close="permDialogReason = null"
+    />
   </div>
 </template>
 
@@ -123,6 +130,8 @@ import PetMenuWindow from "./pet/PetMenuWindow.vue";
 import FloatBar from "./float/FloatBar.vue";
 // v0.8.0：截图遮罩分支
 import CaptureOverlay from "./screenshot/CaptureOverlay.vue";
+// v0.9.4：macOS 屏幕录制授权紧凑弹窗
+import PermissionDialog from "./screenshot/PermissionDialog.vue";
 import Dashboard from "./views/Dashboard.vue";
 import { tracker } from "./api/tracker";
 import { formatDuration } from "./utils/format";
@@ -154,9 +163,13 @@ const webview2Dismissed = ref(false);
 // v0.8.0：截图完成 toast 文案（空 = 不显示）
 const shotToast = ref("");
 let toastTimer: number | undefined;
-// v0.9.2：截图失败全局提示（msg + 是否权限类，权限类附带「打开设置 / 重启应用」）
-const shotError = ref<{ msg: string; perm: boolean } | null>(null);
+// v0.9.2：截图失败全局提示。v0.9.4 起只承载**非权限类**错误（权限类改走
+// 下方紧凑授权弹窗 PermissionDialog），因此从 {msg,perm} 简化为纯字符串。
+const shotError = ref<string | null>(null);
 let errTimer: number | undefined;
+// v0.9.4：紧凑授权弹窗的当前原因码（null = 关闭）。两条链路写入：
+// screenshot-permission-blocked（截图被闸门拦）/ screenshot-permission-changed（启动预请求后仍未授权）
+const permDialogReason = ref<string | null>(null);
 let timer: number | undefined;
 // 已注册的 Tauri 事件监听器「注销函数」集合，统一在 onBeforeUnmount 注销（防监听器泄漏）
 const unlisteners: Array<() => void> = [];
@@ -185,31 +198,6 @@ function fmtDur(sec: number): string {
 async function openSettings() {
   try {
     await tracker.openPrivacySettings();
-  } catch {
-    /* ignore */
-  }
-}
-
-// 打开「屏幕录制」隐私面板（截图失败全局提示里用）
-async function openShotPermSettings() {
-  try {
-    await tracker.openPrivacySettings("screen_capture");
-  } catch {
-    /* ignore */
-  }
-}
-
-// 重置授权 + 重启应用（v0.9.3）。
-// 屏幕录制授权记录若指向旧版本的签名指纹，系统设置界面里清不掉 → 先 tccutil 重置再重启，
-// 否则用户会一直卡在「开关已开 → 仍报无权限」的循环里。重置失败不阻断重启。
-async function restartApp() {
-  try {
-    await tracker.resetScreenCapturePermission();
-  } catch {
-    /* tccutil 失败（如个别系统需 sudo）不阻断重启 */
-  }
-  try {
-    await tracker.restartApp();
   } catch {
     /* ignore */
   }
@@ -289,16 +277,36 @@ onMounted(async () => {
         toastTimer = window.setTimeout(() => (shotToast.value = ""), 2600);
       })
     );
-    // v0.9.2：截图失败全局提示（任何页面可见）。此前失败只在设置页弹错，
-    // 用户用快捷键截图、人不在设置页时失败是静默的（仅进日志）。权限类错误
-    // 额外给「打开系统设置 / 重启应用」两个动作（见模板）。
+    // v0.9.2：截图失败全局提示（任何页面可见）。
+    // v0.9.4：权限类失败（__PERM__ 原因码语义）已改走 Rust 的
+    // screenshot-permission-blocked 事件 → 紧凑授权弹窗；这条 toast 只收
+    // 非权限类错误（引擎失败 / 磁盘错误等），12s 自动消失。
     unlisteners.push(
       await listen<string>("screenshot-error", (ev) => {
         const msg = ev.payload ?? "";
-        shotError.value = { msg, perm: msg.includes("屏幕录制") };
+        shotError.value = msg;
         if (errTimer) clearTimeout(errTimer);
         errTimer = window.setTimeout(() => (shotError.value = null), 12000);
       })
+    );
+    // v0.9.4：截图被权限闸门拦下（Rust begin_capture_inner 发出，payload = 原因码）。
+    // 打开紧凑授权弹窗；若弹窗已在（用户连按快捷键），只更新原因码。
+    unlisteners.push(
+      await listen<string>("screenshot-permission-blocked", (ev) => {
+        permDialogReason.value = ev.payload || "not_granted";
+      })
+    );
+    // v0.9.4：启动预请求完成后仍未授权（Rust schedule_startup_permission_request 发出）。
+    // 首启用户会在这里被引导完成授权 —— 不再等第一次截图时才发现。
+    unlisteners.push(
+      await listen<{ reason: string; permitted: boolean }>(
+        "screenshot-permission-changed",
+        (ev) => {
+          if (!ev.payload?.permitted && !permDialogReason.value) {
+            permDialogReason.value = ev.payload.reason || "not_granted";
+          }
+        }
+      )
     );
   } catch { /* 非 Tauri 环境 */ }
 

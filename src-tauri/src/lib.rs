@@ -322,6 +322,12 @@ pub fn run() {
             if let Err(e) = screenshot::shortcut::apply(app.handle(), &screenshot_cfg) {
                 tracing::warn!(error = %e, "启动期注册截图快捷键失败");
             }
+            // v0.9.4（Task 79）：启动 3 秒后预请求「屏幕录制」授权（仅 macOS）。
+            // 把登记 + 弹系统授权框从「第一次截图时」提前到「启动时」：用户在主界面
+            // 从容处理授权框，而不是按快捷键截图时被突然弹出的系统框打断。
+            // 已授权的应用启动时只做一次轻量预检，零打扰。
+            #[cfg(target_os = "macos")]
+            screenshot::macos::schedule_startup_permission_request(app.handle().clone());
             // 桌宠「按身体 alpha 命中」穿透轮询线程（修透明区点击死区）
             pet::hit_mask::spawn_watcher(app.handle().clone());
             app.manage(LogGuardHolder(log_guard.unwrap_or_default()));
@@ -711,6 +717,11 @@ pub fn run() {
             screenshot::screenshot_copy_text,
             // v0.9.0：取字引擎信息（设置页展示当前引擎 + 增强引擎资源齐备情况）
             screenshot::ocr_engine_info,
+            // v0.9.4：macOS 屏幕录制授权四件套（紧凑授权弹窗轮询 + 引导重启）
+            screenshot::screenshot_permission_status,
+            screenshot::screenshot_request_permission,
+            screenshot::screenshot_open_permission_settings,
+            screenshot::screenshot_restart_app,
             pet::create_pet_window,
             pet::show_pet_window,
             pet::hide_pet_window,

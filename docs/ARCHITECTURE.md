@@ -50,11 +50,16 @@
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-09-20（同步至 **v0.9.3**；macOS 截图的屏幕录制授权判定由**单信号改双信号** —— 官方
-> `CGPreflightScreenCaptureAccess` 在「授权已生效」时仍可能持续返回过期 false，现叠加**窗口标题探针**
-> （`CGWindowListCopyWindowInfo`，与窗口内容共用同一张 TCC 授权）联合放行；新增 `reset_screen_capture_permission`
-> IPC（83→**84**）与「重置权限并重启」按钮；macOS 截图逻辑独立为 `screenshot/macos.rs`（权限闸门 + 诊断 +
-> 重置集中一处，失败文案按 App Translocation / 未签名 / 多副本分档），并修 `CFRelease` 泄漏。
+> 最后更新：2026-09-20（同步至 **v0.9.4**；macOS 截图**授权 UX 重做 + ScreenCaptureKit 引擎** ——
+> 失败文案精简为一句话（`__PERM__:<reason>` 短码，证据转日志）+ 前端紧凑授权弹窗 `PermissionDialog.vue`
+> （2s 轮询翻转「已授权点此重启」+ 详情折叠）+ 启动 3s 后台预请求授权 + macOS 14+ 截图引擎升级 SCK
+> （`screenshot/macos_sck.rs` 单帧，低版本回落 xcap）+ Info.plist 补 `NSScreenCaptureUsageDescription`；
+> 新增权限四件套 IPC（84→**88**）：`screenshot_permission_status` / `screenshot_request_permission` /
+> `screenshot_open_permission_settings` / `screenshot_restart_app`。
+> 上一版 v0.9.3 为 macOS 截图修复 —— 屏幕录制授权判定由**单信号改双信号**（官方
+> `CGPreflightScreenCaptureAccess` 在「授权已生效」时仍可能持续返回过期 false，叠加**窗口标题探针**
+> 联合放行）+ `reset_screen_capture_permission` IPC + 「重置权限并重启」按钮 + 逻辑独立为 `screenshot/macos.rs`，
+> 并修 `CFRelease` 泄漏。
 > 上一版 v0.9.2 为日志可追溯性改造 —— 日志**每行带版本戳** + 新增用户行为
 > **`audit.<date>.log`** 独立审计文件 + 保留期 3→**14 天**（启动 + 运行时每小时双清理）+ 卸载前自动备份日志
 > 到「文档\ScreenTimePro-Logs」；截图失败提升为**主窗全局提示**（权限类错误带「打开系统设置 / 重启应用」）；

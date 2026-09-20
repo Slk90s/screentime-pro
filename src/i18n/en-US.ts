@@ -231,6 +231,17 @@ export default {
     // previous build's signature fingerprint and cannot be cleared from the Settings UI, so we
     // reset it via tccutil first. One button so users cannot do only half of the fix.
     shotPermFix: "Reset Permission & Restart",
+    // v0.9.4 (2026-09-20): compact permission dialog — one-line reason (per Rust reason code),
+    // polling flip to "granted", collapsible details. v0.9.3's wall of diagnostic text felt
+    // "too much, too ugly" per user feedback.
+    shotPermReasonNotGranted: "Screenshots need the Screen Recording permission: allow this app in System Settings, then restart the app to take effect.",
+    shotPermReasonTranslocated: "The app is running from a temporary path (not in /Applications), so the grant cannot stick: move the app into the Applications folder first, then launch and grant from there.",
+    shotPermReasonQuarantined: "The app carries a download quarantine flag that keeps triggering temporary-path runs: run xattr -dr com.apple.quarantine in Terminal, then reopen the app.",
+    shotPermReasonAdhoc: "This app is not developer-signed, so every upgrade looks like a brand-new app to macOS and needs one re-grant (the \"on\" toggle you see belongs to the previous build).",
+    shotPermGranted: "Permission is now active",
+    shotPermDetailToggle: "Technical details",
+    shotPermDetailSteps: "1. System Settings → Privacy & Security → Screen Recording, enable this app; 2. Fully quit and reopen the app (new grants apply only to new processes); 3. If the toggle is already on: remove the app with \"−\" and re-grant, or reset via the command below.",
+    shotPermDetailAdhoc: "This app is ad-hoc signed — its signature fingerprint changes on every build, so macOS treats each new version as a brand-new app. The real fix is Developer ID signing + notarization.",
     shotShortcutReset: "Reset shortcut",
     // v0.7.6: Status bar config (master + sub-toggles; replaces v0.7.5 metricsTitle)
     // v0.7.11 (2026-09-13): unified across all three platforms — metrics are shown only on the

@@ -40,6 +40,11 @@
 //!   - 2026-09-20 @v0.9.3: 初始创建 —— 从 `tracker/macos.rs::ensure_screen_capture_ready`
 //!     迁入并重写：新增 `TitlesProbe` 独立信号（修「过期预检误拦」）、`collect` 采集完整
 //!     诊断证据、`reset_permission` 一键 `tccutil reset`、错误文案按实际证据分档。
+//!   - 2026-09-20 @v0.9.4: 改造 —— ① 失败文案**精简**：弹窗只收一句话 + 结构化原因码
+//!     （`__PERM__:<reason>`，用户反馈 v0.9.3 的长文案「太多太丑」），完整证据改走日志；
+//!     ② 新增权限状态快照 `status_snapshot` / 主动请求 `request_permission` /
+//!     打开设置 `open_permission_settings` / 启动预请求 `schedule_startup_permission_request`，
+//!     配合前端紧凑授权弹窗（轮询 + 引导重启）与启动期预登记。
 //!
 
 use core_foundation_sys::array::{CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef};
@@ -55,6 +60,7 @@ use core_graphics::window::{
     kCGWindowName, kCGWindowOwnerPID,
 };
 use std::os::raw::{c_char, c_void};
+use tauri::{AppHandle, Emitter};
 
 /// 本应用的 bundle id —— 必须与 `tauri.conf.json` 的 `identifier` 逐字一致，
 /// 否则 `tccutil reset` 会去重置一个不存在的条目（失败但不报错，白忙一场）。
@@ -375,12 +381,13 @@ pub fn ensure_ready() -> Result<(), String> {
     }
 
     let msg = build_error(&sig);
-    tracing::warn!(signals = %sig.summary(), "屏幕录制授权未生效，拒绝抓屏");
+    tracing::warn!(signals = %sig.summary(), evidence = %msg, "屏幕录制授权未生效，拒绝抓屏");
     crate::logging::audit("screenshot_permission_denied", &sig.summary());
-    Err(msg)
+    Err(short_error(&sig))
 }
 
-/// 组装给用户看的失败说明：先给「照做就能解决」的步骤，再附本次实际查到的证据。
+/// 组装**日志用**的完整证据（v0.9.4 起不再直接展示给用户——用户反馈「太多太丑」；
+/// 完整证据走 `tracing::warn!` 的 evidence 字段进日志文件，排查时看日志即可）。
 fn build_error(sig: &PermissionSignals) -> String {
     let mut m = String::new();
     m.push_str(
@@ -439,6 +446,137 @@ fn build_error(sig: &PermissionSignals) -> String {
         ),
     }
     m
+}
+
+/// 弹窗展示的**一句话**原因（v0.9.4）。
+///
+/// v0.9.3 的失败文案把三步操作 + Translocation / 隔离 / ad-hoc 证据全部糊在弹窗里，
+/// 用户反馈「太多太丑」。v0.9.4 起弹窗只说一句话 + 一个结构化原因码（前端据此渲染
+/// 紧凑授权弹窗与对应按钮），完整证据只进日志（[`build_error`]）。
+///
+/// 原因码优先级：Translocation > 隔离标记 > ad-hoc 指纹漂移 > 普通未授权。
+/// （前两者是「重启多少次都没用」的硬问题，必须最优先提示。）
+fn short_error(sig: &PermissionSignals) -> String {
+    let reason = if sig.translocated {
+        "app_translocated"
+    } else if sig.quarantined {
+        "quarantined"
+    } else if sig.adhoc_unsigned == Some(true) {
+        "adhoc_signature"
+    } else {
+        "not_granted"
+    };
+    format!("__PERM__:{reason}")
+}
+
+// ===== v0.9.4：权限状态快照 + 主动请求（供前端紧凑授权弹窗轮询） =====
+
+/// 一次授权状态查询的结果（`screenshot_permission_status` IPC 的返回体）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PermissionStatusSnapshot {
+    /// 官方预检 `CGPreflightScreenCaptureAccess()`。⚠️ 可能是过期 false，不能单独采信
+    pub preflight: bool,
+    /// 独立第二信号（窗口标题探针）：`"readable"` / `"redacted"` / `"inconclusive"`
+    pub titles: &'static str,
+    /// 双信号取或后的最终判定：当前进程**现在**能不能抓屏
+    pub permitted: bool,
+    /// 结构化原因码（未放行时前端据此选择提示与按钮）：
+    /// `app_translocated` / `quarantined` / `adhoc_signature` / `not_granted`；
+    /// 已放行时为 `ok`
+    pub reason: &'static str,
+}
+
+/// 采集当前授权状态快照（轻量：预检 + 窗口枚举；未放行才补子进程诊断）。
+pub fn status_snapshot() -> PermissionStatusSnapshot {
+    let sig = collect();
+    let titles = match sig.titles {
+        TitlesProbe::Readable => "readable",
+        TitlesProbe::Redacted => "redacted",
+        TitlesProbe::Inconclusive => "inconclusive",
+    };
+    let reason = if sig.permitted() {
+        "ok"
+    } else if sig.translocated {
+        "app_translocated"
+    } else if sig.quarantined {
+        "quarantined"
+    } else if sig.adhoc_unsigned == Some(true) {
+        "adhoc_signature"
+    } else {
+        "not_granted"
+    };
+    PermissionStatusSnapshot {
+        preflight: sig.preflight,
+        titles,
+        permitted: sig.permitted(),
+        reason,
+    }
+}
+
+/// 主动请求一次「屏幕录制」授权（弹系统框 / 登记进系统设置列表）。
+///
+/// ⚠️ **会阻塞**（首次弹框同步等用户点击）→ 只能从 `spawn_blocking` 里调。
+/// 返回请求后的最新状态快照（前端轮询用同一结构）。
+pub fn request_permission() -> PermissionStatusSnapshot {
+    crate::tracker::macos::request_screen_capture_access();
+    status_snapshot()
+}
+
+/// 打开「系统设置 → 隐私与安全性 → 屏幕录制」面板。
+pub fn open_permission_settings() {
+    let _ = std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+        .spawn();
+    crate::logging::audit("open_screen_capture_settings", "Privacy_ScreenCapture");
+}
+
+/// 启动时预请求授权（Task 79）：把本应用登记进系统设置列表 + 首次弹系统授权框。
+///
+/// 为什么在启动做：v0.9.3 及以前，登记发生在**第一次截图**时 —— 用户第一次按快捷键，
+/// 屏幕上突然弹出一个系统授权框，而遮罩窗流程已经开始走，体验割裂且容易误点「不允许」。
+/// 启动后 3 秒在后台线程预请求，用户在主界面就能从容看到并处理这个框。
+///
+/// 只在「预检为 false」时请求（已授权的应用每次启动都弹框就是骚扰了）。
+/// 结果只记日志，不弹任何 UI —— 前端紧凑弹窗（Task 81）会通过
+/// `screenshot_permission_status` 轮询自行感知状态变化。
+pub fn preflight_request_on_startup() {
+    if crate::tracker::macos::is_screen_capture_trusted() {
+        tracing::debug!("屏幕录制授权已生效，启动预请求跳过");
+        return;
+    }
+    tracing::info!("启动预请求：向系统登记并请求「屏幕录制」授权");
+    let granted = crate::tracker::macos::request_screen_capture_access();
+    let sig = collect();
+    tracing::info!(
+        granted,
+        signals = %sig.summary(),
+        "启动预请求完成（新授权仅对新启动的进程生效）"
+    );
+    // 把状态变化广播给主窗：前端据此决定是否亮出紧凑授权引导弹窗（Task 81）
+    let _ = STARTUP_HANDLE.get().map(|h| {
+        let _ = h.emit("screenshot-permission-changed", status_snapshot());
+    });
+}
+
+/// 启动期缓存的 AppHandle（`preflight_request_on_startup` 里发事件用）。
+///
+/// 用 `OnceLock` 存一份全局句柄：setup 阶段写入，之后任何线程都能安全读取。
+static STARTUP_HANDLE: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
+
+/// setup 阶段调用：缓存 AppHandle + 3 秒后在后台线程执行预请求。
+///
+/// 为什么延迟 3 秒：启动瞬间主窗还在初始化，立刻弹系统授权框容易和
+/// 应用自身的首屏渲染抢焦点；延后几秒体验更从容。且**必须**在独立线程：
+/// `CGRequestScreenCaptureAccess` 首次调用会同步等用户点击，绝不能占住主线程。
+pub fn schedule_startup_permission_request(handle: AppHandle) {
+    let _ = STARTUP_HANDLE.set(handle.clone());
+    std::thread::Builder::new()
+        .name("perm-preflight".into())
+        .spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            preflight_request_on_startup();
+        })
+        .ok();
 }
 
 /// 重置本应用的「屏幕录制」授权记录（`tccutil reset ScreenCapture <bundle id>`）。

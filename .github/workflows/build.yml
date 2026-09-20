@@ -32,14 +32,15 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v0.9.3
-            #### 🔴 macOS 截图修复（本版重点）
-            - **修复「系统里已授权，应用仍提示无法截图」**：此前仅依据 macOS 官方的 `CGPreflightScreenCaptureAccess()` 判定权限，而该系统接口存在「授权已生效、却仍返回过期 false」的已知行为，会被误拦。现在改为**双信号判定**——官方预检为真 **或** 窗口标题探针可读（两者共用同一张屏幕录制授权）即放行
-            - **修复「截出来只有桌面壁纸、看不到当前应用」**：这是**未取得屏幕录制授权**时系统的表现（并非没截到，而是其他窗口内容被系统抹掉了）。失败提示现在会把成因讲清楚，并给出可直接照做的处置步骤
-            - 新增**「重置权限并重启」一键按钮**（权限弹窗 + 截图失败提示条）：自动执行 `tccutil reset ScreenCapture` 并重启应用，无需手动开终端
-            - macOS 截图逻辑独立为 `src-tauri/src/screenshot/macos.rs`，失败文案按实际检测证据分档（App Translocation / 未签名 / 多副本安装各给对应处置）
-            - 修复窗口枚举未释放 `CFRelease` 造成的一处内存泄漏
-            - 新增 `reset_screen_capture_permission` IPC（总数 83→84）
+            ### 屏幕时间管家 ScreenTime Pro — v0.9.4
+            #### 🟣 macOS 截图体验重做（本版重点）
+            - **全新紧凑授权弹窗**：失败提示从一大段诊断文字精简为一句话原因 + 两个按钮（「去授权」/「重置权限并重启」），详细诊断折叠进「详情」区，完整证据转日志
+            - **授权状态实时翻转**：弹窗每 2 秒轮询一次，在系统设置里勾选授权后，弹窗自动变为「✅ 已授权，点此重启」，无需手动刷新
+            - **启动即预请求授权**：应用启动 3 秒后自动向系统登记屏幕录制权限，首次使用前系统设置列表里就能看到本应用，不用等第一次截图失败
+            - **macOS 14+ 升级 ScreenCaptureKit 引擎**：替代已废弃的 CGWindowListCreateImage 旧接口，截图更准更快；旧系统自动回落原引擎，行为不变
+            - 修复「系统里已授权，应用仍提示无法截图」的双信号判定保持不变（官方预检 或 窗口标题探针可读即放行）
+            - 新增 4 个权限相关 IPC（总数 84→88）：`screenshot_permission_status` / `screenshot_request_permission` / `screenshot_open_permission_settings` / `screenshot_restart_app`
+            - Info.plist 补充 `NSScreenCaptureUsageDescription`（触发屏幕录制授权弹窗的必需键，缺失会被系统直接终止应用）
             #### 📊 包体积
             | 平台 | 产物 | 体积 |
             |---|---|---|
@@ -87,14 +88,15 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v0.9.3
-            #### 🔴 macOS 截图修复（本版重点）
-            - **修复「系统里已授权，应用仍提示无法截图」**：此前仅依据 macOS 官方的 `CGPreflightScreenCaptureAccess()` 判定权限，而该系统接口存在「授权已生效、却仍返回过期 false」的已知行为，会被误拦。现在改为**双信号判定**——官方预检为真 **或** 窗口标题探针可读（两者共用同一张屏幕录制授权）即放行
-            - **修复「截出来只有桌面壁纸、看不到当前应用」**：这是**未取得屏幕录制授权**时系统的表现（并非没截到，而是其他窗口内容被系统抹掉了）。失败提示现在会把成因讲清楚，并给出可直接照做的处置步骤
-            - 新增**「重置权限并重启」一键按钮**（权限弹窗 + 截图失败提示条）：自动执行 `tccutil reset ScreenCapture` 并重启应用，无需手动开终端
-            - macOS 截图逻辑独立为 `src-tauri/src/screenshot/macos.rs`，失败文案按实际检测证据分档（App Translocation / 未签名 / 多副本安装各给对应处置）
-            - 修复窗口枚举未释放 `CFRelease` 造成的一处内存泄漏
-            - 新增 `reset_screen_capture_permission` IPC（总数 83→84）
+            ### 屏幕时间管家 ScreenTime Pro — v0.9.4
+            #### 🟣 macOS 截图体验重做（本版重点）
+            - **全新紧凑授权弹窗**：失败提示从一大段诊断文字精简为一句话原因 + 两个按钮（「去授权」/「重置权限并重启」），详细诊断折叠进「详情」区，完整证据转日志
+            - **授权状态实时翻转**：弹窗每 2 秒轮询一次，在系统设置里勾选授权后，弹窗自动变为「✅ 已授权，点此重启」，无需手动刷新
+            - **启动即预请求授权**：应用启动 3 秒后自动向系统登记屏幕录制权限，首次使用前系统设置列表里就能看到本应用，不用等第一次截图失败
+            - **macOS 14+ 升级 ScreenCaptureKit 引擎**：替代已废弃的 CGWindowListCreateImage 旧接口，截图更准更快；旧系统自动回落原引擎，行为不变
+            - 修复「系统里已授权，应用仍提示无法截图」的双信号判定保持不变（官方预检 或 窗口标题探针可读即放行）
+            - 新增 4 个权限相关 IPC（总数 84→88）：`screenshot_permission_status` / `screenshot_request_permission` / `screenshot_open_permission_settings` / `screenshot_restart_app`
+            - Info.plist 补充 `NSScreenCaptureUsageDescription`（触发屏幕录制授权弹窗的必需键，缺失会被系统直接终止应用）
             #### 📊 包体积
             | 平台 | 产物 | 体积 |
             |---|---|---|
@@ -136,14 +138,15 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v0.9.3
-            #### 🔴 macOS 截图修复（本版重点）
-            - **修复「系统里已授权，应用仍提示无法截图」**：此前仅依据 macOS 官方的 `CGPreflightScreenCaptureAccess()` 判定权限，而该系统接口存在「授权已生效、却仍返回过期 false」的已知行为，会被误拦。现在改为**双信号判定**——官方预检为真 **或** 窗口标题探针可读（两者共用同一张屏幕录制授权）即放行
-            - **修复「截出来只有桌面壁纸、看不到当前应用」**：这是**未取得屏幕录制授权**时系统的表现（并非没截到，而是其他窗口内容被系统抹掉了）。失败提示现在会把成因讲清楚，并给出可直接照做的处置步骤
-            - 新增**「重置权限并重启」一键按钮**（权限弹窗 + 截图失败提示条）：自动执行 `tccutil reset ScreenCapture` 并重启应用，无需手动开终端
-            - macOS 截图逻辑独立为 `src-tauri/src/screenshot/macos.rs`，失败文案按实际检测证据分档（App Translocation / 未签名 / 多副本安装各给对应处置）
-            - 修复窗口枚举未释放 `CFRelease` 造成的一处内存泄漏
-            - 新增 `reset_screen_capture_permission` IPC（总数 83→84）
+            ### 屏幕时间管家 ScreenTime Pro — v0.9.4
+            #### 🟣 macOS 截图体验重做（本版重点）
+            - **全新紧凑授权弹窗**：失败提示从一大段诊断文字精简为一句话原因 + 两个按钮（「去授权」/「重置权限并重启」），详细诊断折叠进「详情」区，完整证据转日志
+            - **授权状态实时翻转**：弹窗每 2 秒轮询一次，在系统设置里勾选授权后，弹窗自动变为「✅ 已授权，点此重启」，无需手动刷新
+            - **启动即预请求授权**：应用启动 3 秒后自动向系统登记屏幕录制权限，首次使用前系统设置列表里就能看到本应用，不用等第一次截图失败
+            - **macOS 14+ 升级 ScreenCaptureKit 引擎**：替代已废弃的 CGWindowListCreateImage 旧接口，截图更准更快；旧系统自动回落原引擎，行为不变
+            - 修复「系统里已授权，应用仍提示无法截图」的双信号判定保持不变（官方预检 或 窗口标题探针可读即放行）
+            - 新增 4 个权限相关 IPC（总数 84→88）：`screenshot_permission_status` / `screenshot_request_permission` / `screenshot_open_permission_settings` / `screenshot_restart_app`
+            - Info.plist 补充 `NSScreenCaptureUsageDescription`（触发屏幕录制授权弹窗的必需键，缺失会被系统直接终止应用）
             #### 📊 包体积
             | 平台 | 产物 | 体积 |
             |---|---|---|

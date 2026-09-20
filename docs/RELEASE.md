@@ -31,10 +31,11 @@
 
 > 目的：定义 **版本号从哪来、发版前改哪些地方、CI 怎么跑、出问题怎么回滚**。
 > 与 README 区别：README 是用户面（去哪下载、每个版本有什么），本文件是维护者面（怎么发出去）。
-> 最后更新：2026-09-20（**v0.9.3 已发布完成**：macOS 截图修复版 —— 屏幕录制授权判定由**单信号改双信号**，
-> 修「系统设置已勾选、应用仍报无权限」；新增 `reset_screen_capture_permission` IPC（83→**84**）与
-> 「重置权限并重启」一键按钮；macOS 截图逻辑独立为 `screenshot/macos.rs`（失败文案按证据分档 +
-> 修 `CFRelease` 泄漏）。发布落点：tag / commit `beb17fd`；CI run `35503786492` 三平台全 success；
+> 最后更新：2026-09-20（**v0.9.4 代码就绪、待发布**：macOS 截图授权 UX 重做 + ScreenCaptureKit 引擎 ——
+> 失败文案精简为一句话 + 紧凑授权弹窗（2s 轮询翻转「已授权点此重启」）+ 启动预请求授权 +
+> macOS 14+ SCK 单帧截图（低版本回落 xcap）；新增权限四件套 IPC（84→**88**）；
+> Info.plist 补 `NSScreenCaptureUsageDescription`。上一版 v0.9.3 已发布：tag / commit `beb17fd`；
+> CI run `35503786492` 三平台全 success；
 > GitHub Release `392387464` **6 资产 / 240.6 MiB**（exe 27.17 / dmg 26.84 / app.tar.gz 25.59 /
 > deb 27.13 / rpm 27.13 / AppImage 106.71 MiB）；Gitee Release `1155845` **5 附件 / 133.9 MiB**
 > （AppImage 106.7 MB 超 Gitee 单文件上限，仅 GitHub 提供）；发版前删除 Gitee 旧版 v0.7.6/7/8
@@ -124,11 +125,12 @@ grep -n 'badge/version' README.md
 `.github/workflows/build.yml` 中三个 job（windows / linux / macos）**各写了一份**
 `releaseBody`，内容是**硬编码的字符串**，不会自动跟着版本变。
 
-**当前仓库的三份 `releaseBody` 已是 v0.9.3 的文案**（v0.7.6 起每版发版时同步改写）。
-v0.9.3 的 body 为三段：「#### 🔴 macOS 截图修复（本版重点）」写**授权判定单信号→双信号**（修「已授权仍报无权限」）、
-**「截出来只有桌面壁纸」的成因说明与处置步骤**、「重置权限并重启」一键按钮（`tccutil reset` + 重启）、
-macOS 截图逻辑独立为 `screenshot/macos.rs` 且失败文案按证据分档、修 `CFRelease` 泄漏、
-新增 `reset_screen_capture_permission` IPC（83→84）；末尾为「#### 📊 包体积」表（三份 body 仍逐字相同）。
+**当前仓库的三份 `releaseBody` 已是 v0.9.4 的文案**（v0.7.6 起每版发版时同步改写）。
+v0.9.4 的 body 为一段：「#### 🟣 macOS 截图体验重做（本版重点）」写**紧凑授权弹窗**（一句话原因 + 两按钮 + 详情折叠）、
+**授权状态实时翻转**（2s 轮询）、**启动即预请求授权**（3s 后台预检）、**macOS 14+ SCK 引擎**（低版本回落 xcap）、
+双信号判定保持不变、新增权限四件套 IPC（84→88）、Info.plist 补 `NSScreenCaptureUsageDescription`；
+末尾为「#### 📊 包体积」表（三份 body 仍逐字相同）。
+上一版 v0.9.3 的 body 为「#### 🔴 macOS 截图修复（本版重点）」（双信号判定 / 壁纸成因 / 重置按钮 / 证据分档 / CFRelease / IPC 83→84）。
 上一版 v0.9.2 的 body 为四段（「🔧 修复」+「🔍 可追溯性（新增）」+「📊 包体积」）。
 历史教训：v0.7.5 及以前长期停留在 v0.7.0 的旧文案（"整合 0.6.2 全部 Beta 修复"、
 日历月视图、喂食系统修复等），与当版内容完全无关。
@@ -335,6 +337,7 @@ echo "   git push origin main && git push origin v$NEW"
 
 | 版本 | 发布时间 | 状态 | 关键说明 |
 |------|----------|------|----------|
+| **v0.9.4** | 2026-09-20 | 🟣 **macOS 截图体验重做版**（待发布） | **授权 UX 重做 + ScreenCaptureKit 引擎**。① **失败提示精简为一句话**——`macos.rs::ensure_ready` 失败返回 `__PERM__:<reason>` 短码（reason ∈ app_translocated / quarantined / adhoc_signature / not_granted），前端按 reason 映射一句话文案，完整证据转 `tracing::warn` 日志。② **紧凑授权弹窗 `PermissionDialog.vue`**——一句话原因 + 「去授权」/「重置权限并重启」两按钮，每 2 秒轮询 `screenshot_permission_status`，勾选后自动翻转「✅ 已授权，点此重启」，详细诊断折叠进「详情」区。③ **启动预请求授权**——`schedule_startup_permission_request` 启动 3 秒后后台预检，未授权则主动触发系统弹窗并 emit `screenshot-permission-changed`，让本应用提前出现在系统设置列表。④ **macOS 14+ SCK 引擎**——`screenshot/macos_sck.rs`：`SCShareableContent::get()` → `SCContentFilter` → `SCScreenshotManager::capture_image` 单帧，替代已废弃的 `CGWindowListCreateImage`（xcap 底层）；低版本自动回落 xcap。⑤ Info.plist 补 `NSScreenCaptureUsageDescription`（SCK 触发 TCC 弹窗必需键，缺失系统直接终止应用）。⑥ 新增权限四件套 IPC（**总数 84→88**）：`screenshot_permission_status` / `screenshot_request_permission` / `screenshot_open_permission_settings` / `screenshot_restart_app`。⚠️ **已知限制不变**：未用 Developer ID 签名（用户无法购买 Apple 证书），每次升级后授权仍可能失效需重新授权。 |
 | **v0.9.3** | 2026-09-20 | 🔴 **macOS 截图修复版** | **macOS 屏幕录制授权判定重写 + 一键重置权限**。① 修复「系统设置里已勾选屏幕录制、应用仍报无法截图」（P0）—— 旧实现只依据 `CGPreflightScreenCaptureAccess()` **单信号**判定，而该系统接口存在**「授权已生效、却持续返回过期 false」**的已知行为（同进程内一旦为 false 可能一直为 false），会把有效授权误判为无权限；现改为**双信号判定**：官方预检为真 **或**「窗口标题探针」可读即放行（`CGWindowListCopyWindowInfo` + `kCGWindowLayer==0`，与窗口**内容**共用同一张 TCC 授权），命中时打 `warn` 日志便于统计复现率。② 修复「截出来只有桌面壁纸」—— 真实成因是**未取得屏幕录制授权**时系统会**主动抹掉其他窗口内容**（并非没截到），失败文案讲清成因并给出可照做的处置步骤（含「完全退出再打开」这一必须步骤）。③ 新增 `reset_screen_capture_permission` IPC（**总数 83→84**）与**「重置权限并重启」一键按钮**（权限弹窗 + 截图失败提示条）：自动执行 `tccutil reset ScreenCapture com.screentime.pro` 清脏授权记录并重启应用。④ macOS 截图逻辑独立为 `src-tauri/src/screenshot/macos.rs`（权限闸门 `ensure_ready` + 证据采集 `collect` + 重置 `reset_permission` 集中一处），失败文案按**实际检测证据分档**（App Translocation / 未签名 ad-hoc / 多副本安装各给处置，并打印运行路径与 codesign 诊断）。⑤ 🐞 修复窗口枚举返回的 `CFArray` 未 `CFRelease` 造成的内存泄漏。⚠️ **已知限制**：未使用 Developer ID 签名（ad-hoc 签名每次构建 cdhash 变化 → 系统视为新应用），**每次升级后授权可能失效**、需重新授权一次，而系统设置开关仍显示为「开」；根治需签名 + 公证。**发布落点**：tag / commit `beb17fd`（轻量 tag `v0.9.3`）；CI run `35503786492` 三平台全 success；GitHub Release `392387464`（**6 资产 / 240.6 MiB**：exe 28.49 / dmg 28.15 / app.tar.gz 26.83 / deb 28.44 / rpm 28.44 MB / AppImage 111.90 MB）；Gitee Release `1155845`（**5 附件 / 133.9 MiB**，AppImage 超 Gitee 单文件 100 MB 上限，仅 GitHub 提供）；发版前删除 Gitee 旧版 v0.7.6 / v0.7.7 / v0.7.8 三个 Release（释放 165.2 MiB），配额现为 868.1 / 1024 MiB。 |
 | **v0.9.2** | 2026-09-20 | 🔍 **可追溯性版** | **日志可追溯性改造 + 截图失败全局提示 + 内存·状态修复**。① 日志**每行带版本戳**（`logging.rs` 的 `VersionWriter` 包装 Writer，行首插 `vX.Y.Z`；前端经 `tauri-plugin-log.format()` 同带戳）——任意一行即可判定来源版本；② 新增**用户行为审计日志** —— `logging::audit(action, detail)` 写 `target="audit"`，落独立 `audit.<date>.log`（主 layer 用 `filter_fn` 排除、audit layer 收），9 处埋点（规则增删改 / 设置保存 / 状态栏配置 / 按设备备份清理 / 保留期清理 / 截图批量删除 / OCR 取字），**不含 window_title**（沿用隐私红线）；③ 保留期 `MAX_LOG_FILES` 3→**14**，清理由「仅启动跑一次」改为**启动 + 运行时每小时**双清理；④ **卸载前自动备份日志**：`src-tauri/windows/hooks.nsh` 的 `NSIS_HOOK_PREUNINSTALL` 把 `logs/` 复制到「文档\ScreenTimePro-Logs」（该宏在卸载器 `RmDir /r "$LOCALAPPDATA\com.screentime.pro"` **之前**执行，失败静默不阻断卸载）；⑤ **截图失败提升为主窗全局提示** —— Rust 侧原已 `emit_to("main","screenshot-error")` 但**前端无人监听**（事件空转），现改由 `App.vue` 全局监听 + 右下角 toast（权限类错误带「打开系统设置 / 重启应用」），Settings 侧重复监听已移除；⑥ 🐞 修复自动分类规则**反向覆盖**用户禁用项（`db::insert_rule` 原为 `ON CONFLICT DO UPDATE SET enabled=1`，改为新增 `db::ensure_rule()` 走 `INSERT OR IGNORE`）、3 处监听器未注销（`usePetHitMask` 2 + `Settings` 1）、选区过小时仍可取字/导出（`selTooSmall` 禁用）；⑦ 补齐 `.shot-toast` 样式（自 v0.8.0 起该提示条**完全没有 CSS**，一直是裸 div）。**IPC 总数 83**（本版未新增命令；上一版 v0.9.1 为 82）。**发布落点**：tag / commit `b5b2ae8`（轻量 tag `v0.9.2`）；CI run `35496168069` 三平台全 success；GitHub Release `392344703`（**6 资产 / 240.6 MiB**：exe 27.19 / dmg 26.87 / app.tar.gz 25.59 / deb 27.13 / rpm 27.13 / AppImage 106.71 MiB）；Gitee Release `1155479`（**5 附件 / 133.9 MiB**，AppImage 超 Gitee 单文件 100 MB 上限，仅 GitHub 提供）；Gitee 全仓附件配额 899.5 / 1024 MiB。 |
 | **v0.9.1** | 2026-09-18 | ✨ 功能版 | **截图历史多选 + macOS 截图权限闸门**。① **修复 macOS「截图后应用全部消失、只剩桌面」（P0）**：根因是截图前未预检系统「屏幕录制」TCC 权限 —— 无权限时 `CGWindowListCreateImage` 只返回桌面壁纸层，现象即「截完应用全不见」。现 `begin_capture` 先 `CGPreflightScreenCaptureAccess` 预检，未授权则 `CGRequestScreenCaptureAccess` 主动请求，仍未授权回**可读中文错误**（经 `screenshot-error` 事件）；设置页弹窗 + 「打开系统设置」直达「隐私与安全性 → 屏幕录制」，`open_privacy_settings` 跳转目标同步改为 `Privacy_ScreenCapture`。② **截图历史支持多选**：新增 `screenshot_delete_many(ids)` IPC（复用单删 + 回收站，返回实际删除条数），前端 `removeMany` + 设置页「选择」工具栏（全选 / 取消全选 / 批量删除），删除项一律进系统回收站。**IPC 总数 81→82**（screenshot/ 14→15）。**发布落点**：tag / commit `9ca1e62`（轻量 tag `v0.9.1`）；CI run `35329358723` 三平台全 success；GitHub Release `391350602`（**6 资产 / 240.5 MiB**：exe 27.17 / dmg 26.83 / app.tar.gz 25.57 / deb 27.12 / rpm 27.13 / AppImage 106.71 MiB）；Gitee Release `1151864`（**5 附件 / 133.8 MiB**，AppImage 超 Gitee 单文件 100 MB 上限，仅 GitHub 提供）；Gitee 全仓附件配额 765.6 / 1024 MiB。 |

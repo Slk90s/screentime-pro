@@ -71,3 +71,9 @@ CHANGELOG.md
 # WorkBuddy / agent 记忆（不随仓库开源）
 .workbuddy/
 .tmp-ocr/
+
+# vue-tsc incremental build artifacts
+*.tsbuildinfo
+# vite.config compiled output (from vue-tsc -b)
+vite.config.d.ts
+vite.config.js

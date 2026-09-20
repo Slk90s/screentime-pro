@@ -81,6 +81,13 @@ objc2-vision = "0.3"
 core-foundation-sys = "0.8"
 core-foundation = "0.10"
 core-graphics = "0.24"
+# v0.9.4（Task 80）：ScreenCaptureKit 安全绑定 —— macOS 14+ 的现代截图引擎。
+# 为什么引入：xcap 底层走 `CGWindowListCreateImage`（Apple 已标记废弃的旧 API），
+# 未授权时不报错只给「壁纸图」；SCK 的 `SCScreenshotManager` 未授权时**真报错**，
+# 且 `SCShareableContent::get()` 是触发系统授权弹窗最可靠的方式。
+# ⚠️ 构建期会跑 swift build（需要 Xcode CLT，macOS CI 自带）；运行期最低 macOS 13，
+#    截图 API 实际要 macOS 14+（运行时检测，低版本自动回落 xcap，见 macos_sck.rs）。
+screencapturekit = { version = "10.0.3", features = ["macos_14_0"] }
 
 # ---- Windows 专属依赖 ----
 [target.'cfg(target_os = "windows")'.dependencies]

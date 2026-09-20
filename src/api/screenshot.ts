@@ -23,6 +23,18 @@ import type {
   ShortcutApplyResult,
 } from "../types";
 
+/** v0.9.4：屏幕录制授权状态快照（与 Rust `ScreenshotPermissionStatus` 字段一致，snake_case） */
+export interface ScreenshotPermissionStatus {
+  /** 官方预检 CGPreflightScreenCaptureAccess()（可能是过期 false，不能单独采信） */
+  preflight: boolean;
+  /** 窗口标题探针：readable / redacted / inconclusive */
+  titles: string;
+  /** 双信号取或后的最终判定：当前进程现在能不能抓屏 */
+  permitted: boolean;
+  /** 结构化原因码：ok / app_translocated / quarantined / adhoc_signature / not_granted */
+  reason: string;
+}
+
 /** v0.8.0 默认配置（与 Rust `ScreenshotConfig::default()` 保持一致，仅用于预览兜底） */
 export const DEFAULT_SCREENSHOT_CONFIG: ScreenshotConfig = {
   enabled: true,
@@ -122,4 +134,31 @@ export const screenshot = {
 
   dir: (): Promise<string> =>
     isTauri ? invoke<string>("screenshot_dir") : Promise.resolve(""),
+
+  // ===== v0.9.4：macOS 屏幕录制授权四件套 =====
+
+  /**
+   * 查询屏幕录制授权状态（紧凑授权弹窗 2s 轮询用）。
+   * 非 macOS 平台恒返回 permitted=true（弹窗永不出现）。
+   */
+  permissionStatus: (): Promise<ScreenshotPermissionStatus> =>
+    isTauri
+      ? invoke<ScreenshotPermissionStatus>("screenshot_permission_status")
+      : Promise.resolve({
+          preflight: true,
+          titles: "readable",
+          permitted: true,
+          reason: "ok",
+        }),
+
+  /** 主动请求屏幕录制授权（弹系统框；Rust 侧 spawn_blocking 包裹，IPC 可直接 await） */
+  requestPermission: (): Promise<ScreenshotPermissionStatus> =>
+    invoke<ScreenshotPermissionStatus>("screenshot_request_permission"),
+
+  /** 打开「系统设置 → 隐私与安全性 → 屏幕录制」面板 */
+  openPermissionSettings: (): Promise<void> =>
+    invoke<void>("screenshot_open_permission_settings"),
+
+  /** 重启应用（TCC 新授权只对新进程生效 —— 轮询发现授权翻转后引导用户点这个） */
+  restartApp: (): Promise<void> => invoke<void>("screenshot_restart_app"),
 };
