@@ -781,6 +781,7 @@ pub fn screenshot_delete_many(
     ids: Vec<i64>,
 ) -> Result<u32, String> {
     let dir = screenshots_dir(&app)?;
+    let requested = ids.len();
     let mut deleted = 0u32;
     for id in ids {
         if let Some(name) = state
@@ -795,6 +796,10 @@ pub fn screenshot_delete_many(
             deleted += 1;
         }
     }
+    crate::logging::audit(
+        "screenshots_deleted",
+        &format!("requested={requested} deleted={deleted}"),
+    );
     Ok(deleted)
 }
 
@@ -894,6 +899,7 @@ pub async fn screenshot_ocr(
 
     // ③ 识别必须离开 async 上下文：WinRT 的 `IAsyncOperation::join()` 是阻塞等待，
     //    且 COM 初始化属线程级状态 —— 两者都要求「初始化与调用在同一线程」。
+    crate::logging::audit("ocr_run", &format!("engine={kind:?} region={width}x{height}"));
     tauri::async_runtime::spawn_blocking(move || ocr_engine::recognize(kind, &paths, &crop))
         .await
         .map_err(|e| format!("取字任务异常：{e}"))?

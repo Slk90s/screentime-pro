@@ -594,6 +594,32 @@ impl AppDb {
         )
     }
 
+    /// 自动建规则专用：**仅当不存在** `(field, match_type, pattern)` 时才插入。
+    ///
+    /// 与 `insert_rule` 的区别（后者是 UPSERT）：
+    /// - 已存在则**完全不动**——不覆盖用户改过的分类，也**不重新启用**用户手动禁用的规则。
+    ///   （旧实现走 `insert_rule` 的 `ON CONFLICT ... DO UPDATE SET enabled=1`，会在
+    ///   进程下次成为前台时把用户禁用过的自动规则又打开，属状态被反向覆盖。）
+    /// - 天然幂等：即便多路并发调用也不会产生重复行、不会互相打架。
+    ///
+    /// 返回 `true` 表示本次真的插入了新行。
+    pub fn ensure_rule(
+        &self,
+        field: &str,
+        match_type: &str,
+        pattern: &str,
+        category_id: &str,
+        priority: i32,
+    ) -> rusqlite::Result<bool> {
+        let conn = self.0.lock().unwrap();
+        let n = conn.execute(
+            "INSERT OR IGNORE INTO classification_rules (field, match_type, pattern, category_id, priority, enabled)
+             VALUES (?1,?2,?3,?4,?5,1)",
+            params![field, match_type, pattern, category_id, priority],
+        )?;
+        Ok(n > 0)
+    }
+
     /// 更新规则（按 id）
     pub fn update_rule(
         &self,

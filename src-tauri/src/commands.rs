@@ -371,6 +371,13 @@ pub fn backup_and_prune_device(app: tauri::AppHandle, device_id: String) -> Resu
     std::fs::write(&backup_path, &json).map_err(|e| e.to_string())?;
     let state = app.state::<Arc<AppState>>();
     let deleted = state.db.delete_all_sessions_for_device(&device_id).map_err(|e| e.to_string())?;
+    crate::logging::audit(
+        "device_backup_purge",
+        &format!(
+            "device_id={device_id} deleted_sessions={deleted} backup={}",
+            backup_path.display()
+        ),
+    );
     Ok(BackupAndPruneResult { backup_path: backup_path.to_string_lossy().to_string(), deleted_count: deleted })
 }
 
@@ -520,6 +527,10 @@ pub fn prune_data(state: tauri::State<'_, Arc<AppState>>, days: u32, device_ids:
     if ids.is_empty() {
         let _ = state.db.set_setting("data_retention_days", &days.to_string());
     }
+    crate::logging::audit(
+        "data_pruned",
+        &format!("days={days} device_scope={} deleted_rows={n}", if ids.is_empty() { "all".to_string() } else { ids.join(",") }),
+    );
     Ok(n)
 }
 
@@ -595,6 +606,7 @@ pub fn get_rules(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<RuleOut>,
 #[tauri::command]
 pub fn add_rule(state: tauri::State<'_, Arc<AppState>>, field: String, match_type: String, pattern: String, category_id: String, priority: i32) -> Result<i64, String> {
     let id = state.db.insert_rule(&field, &match_type, &pattern, &category_id, priority).map_err(|e| e.to_string())?;
+    crate::logging::audit("rule_added", &format!("field={field} match_type={match_type} pattern={pattern} category={category_id}"));
     reload_rules(&state);
     Ok(id)
 }
@@ -602,6 +614,7 @@ pub fn add_rule(state: tauri::State<'_, Arc<AppState>>, field: String, match_typ
 #[tauri::command]
 pub fn update_rule(state: tauri::State<'_, Arc<AppState>>, id: i64, field: String, match_type: String, pattern: String, category_id: String, priority: i32, enabled: bool) -> Result<bool, String> {
     state.db.update_rule(id, &field, &match_type, &pattern, &category_id, priority, enabled).map_err(|e| e.to_string())?;
+    crate::logging::audit("rule_updated", &format!("id={id} field={field} pattern={pattern}"));
     reload_rules(&state);
     Ok(true)
 }
@@ -609,6 +622,7 @@ pub fn update_rule(state: tauri::State<'_, Arc<AppState>>, id: i64, field: Strin
 #[tauri::command]
 pub fn delete_rule(state: tauri::State<'_, Arc<AppState>>, id: i64) -> Result<bool, String> {
     state.db.delete_rule(id).map_err(|e| e.to_string())?;
+    crate::logging::audit("rule_deleted", &format!("id={id}"));
     reload_rules(&state);
     Ok(true)
 }
@@ -691,6 +705,7 @@ pub fn save_settings(state: tauri::State<'_, Arc<AppState>>, idle_threshold: u64
     state.db.set_setting("device_name", &device_name).map_err(|e| e.to_string())?;
     state.db.set_setting(&format!("device_name:{}", state.device_id), &device_name).map_err(|e| e.to_string())?;
     state.db.set_setting("data_retention_days", &data_retention_days.to_string()).map_err(|e| e.to_string())?;
+    crate::logging::audit("settings_saved", &format!("idle_threshold={idle_threshold} data_retention_days={data_retention_days}"));
     Ok(true)
 }
 
@@ -769,11 +784,12 @@ async fn sampling_loop(state: Arc<AppState>) {
                     let pn = process_name.clone();
                     let cat = category.clone();
                     tauri::async_runtime::spawn(async move {
-                        if let Ok(rule_id) = st.db.insert_rule("process_name", "equals", &pn, &cat, 0) {
+                        // v0.9.2：改用 ensure_rule（存在则跳过插入）——
+                        // 既天然幂等（并发也不会重复），又不会把用户手动禁用的自动规则重新启用。
+                        if let Ok(_inserted) = st.db.ensure_rule("process_name", "equals", &pn, &cat, 0) {
                             if let Ok(new_rules) = st.db.load_rules() {
                                 if let Ok(mut guard) = st.rules.lock() { *guard = new_rules; }
                             }
-                            let _ = rule_id;
                         }
                     });
                 }
@@ -1130,6 +1146,7 @@ pub fn set_status_bar_config(
         (c.enabled, c.float_enabled)
     };
     config.save(&state.db).map_err(|e| e.to_string())?;
+    crate::logging::audit("status_bar_config_saved", &format!("enabled={} float={} screenshot={}", config.enabled, config.float_enabled, config.screenshot_enabled));
     *state.status_bar_config.lock().unwrap_or_else(|e| e.into_inner()) = config;
     // v0.8.2：screenshot_enabled 的权威源在截图模块。设置页可能持有打开时的旧快照，
     // 保存状态栏配置时会把旧值回写缓存，导致浮窗按钮显隐与截图实际开关脱节——

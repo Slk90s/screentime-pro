@@ -215,6 +215,93 @@ body {
   text-align: center;
 }
 
+/* 截图结果提示（右下角浮层）。
+   v0.9.2 补齐样式：此前 `.shot-toast` 无任何 CSS，v0.8.0 起的「截图完成」提示
+   是裸 div（挤在文档流里、无定位无配色）；本次一并修复并新增错误变体。 */
+.shot-toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(560px, calc(100vw - 40px));
+  padding: 12px 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--success);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  font-size: 13px;
+  color: var(--text);
+  animation: shot-toast-in 0.18s ease-out;
+}
+.shot-toast-msg {
+  flex: 1;
+  line-height: 1.5;
+  word-break: break-word;
+}
+.shot-toast-icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--success);
+  color: #fff;
+  font-size: 13px;
+  line-height: 20px;
+  text-align: center;
+}
+/* 错误变体：截图失败（如 macOS 缺「屏幕录制」权限）→ 任何页面可见的全局提示 */
+.shot-toast--error {
+  border-left-color: var(--danger);
+  align-items: flex-start;
+}
+.shot-toast-icon--error {
+  background: var(--danger);
+}
+.shot-toast-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+}
+.shot-toast-actions button {
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.shot-toast-close {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.shot-toast-close:hover {
+  background: var(--seg-bg);
+}
+@keyframes shot-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 main {
   padding: 20px 24px;
   max-width: 1100px;

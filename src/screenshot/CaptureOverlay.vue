@@ -133,6 +133,7 @@
         class="tb"
         :class="{ on: activePanel === 'ocr', busy: ocrBusy }"
         :title="t('shot.ocr')"
+        :disabled="selTooSmall"
         @click="runOcr"
       >
         <svg viewBox="0 0 20 20" width="18" height="18">
@@ -155,16 +156,16 @@
       <button class="tb" :title="t('shot.fullscreen')" @click="selectAll">
         <svg viewBox="0 0 20 20" width="18" height="18"><path d="M4 8V4h4M16 12v4h-4M4 12v4h4M16 8V4h-4" /></svg>
       </button>
-      <button class="tb" :title="t('shot.save')" @click="commit(false, true)">
+      <button class="tb" :title="t('shot.save')" :disabled="selTooSmall" @click="commit(false, true)">
         <svg viewBox="0 0 20 20" width="18" height="18"><path d="M10 3v9m0 0l-3.5-3.5M10 12l3.5-3.5M4 16h12" /></svg>
       </button>
-      <button class="tb" :title="t('shot.copy')" @click="commit(true, false)">
+      <button class="tb" :title="t('shot.copy')" :disabled="selTooSmall" @click="commit(true, false)">
         <svg viewBox="0 0 20 20" width="18" height="18"><rect x="7.5" y="7.5" width="9" height="9" rx="1.5" /><path d="M12.5 4.5h-8v9" /></svg>
       </button>
       <button class="tb tb--cancel" :title="t('shot.cancel')" @click="cancel">
         <svg viewBox="0 0 20 20" width="18" height="18"><path d="M6 6l8 8M14 6l-8 8" /></svg>
       </button>
-      <button class="tb tb--ok" :title="t('shot.confirm')" @click="commit(true, autoSave)">
+      <button class="tb tb--ok" :title="t('shot.confirm')" :disabled="selTooSmall" @click="commit(true, autoSave)">
         <svg viewBox="0 0 20 20" width="18" height="18"><path d="M5 10.5l3.5 3.5L15 6.5" /></svg>
       </button>
     </div>
@@ -343,6 +344,18 @@ const k = computed(() => {
 });
 
 const isDrawTool = computed(() => tool.value !== "none" && tool.value !== "text");
+
+/**
+ * 选区是否小到没有意义（物理像素不足 1px）。
+ * v0.9.2：框选过程中 `box` 会短暂为 0×0，此时工具栏已渲染（v-if="box"），
+ * 取字 / 导出都无意义 → 用这个标记禁用对应按钮，并在 runOcr 里再兜一层。
+ */
+const selTooSmall = computed(() => {
+  const b = box.value;
+  if (!b) return true;
+  const s = k.value;
+  return Math.round(b.w * s) < 1 || Math.round(b.h * s) < 1;
+});
 
 const selStyle = computed(() => {
   const b = box.value!;
@@ -822,7 +835,8 @@ function onTextKey(e: KeyboardEvent) {
  */
 async function runOcr() {
   const b = box.value;
-  if (!b || ocrBusy.value) return;
+  // v0.9.2：选区过小时直接不发起（按钮已 disabled，这里再兜一层防误触）
+  if (!b || ocrBusy.value || selTooSmall.value) return;
   activePanel.value = "ocr";
   ocrBusy.value = true;
   ocrErr.value = "";

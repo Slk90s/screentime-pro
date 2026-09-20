@@ -40,6 +40,9 @@ export function usePetHitMask(getRoot: () => HTMLElement | null): UsePetHitMaskR
   let rafId = 0;
   let intervalId: number | null = null;
   let unsubSkin: (() => void) | null = null;
+  // v0.9.2：Tauri 事件监听注销函数（此前 listen 后未保存 unlisten → 监听器泄漏）
+  let unlistenPetShown: (() => void) | null = null;
+  let unlistenPetSkin: (() => void) | null = null;
   let resizeObserver: ResizeObserver | null = null;
   let destroyed = false;
 
@@ -137,8 +140,8 @@ export function usePetHitMask(getRoot: () => HTMLElement | null): UsePetHitMaskR
     // 桌宠重新显示时也重算一次（隐藏期间窗口尺寸可能变过）
     try {
       const { listen } = await import('@tauri-apps/api/event');
-      await listen('pet-shown', () => window.setTimeout(refresh, 300));
-      await listen('pet-skin-changed', () => window.setTimeout(refresh, 300));
+      unlistenPetShown = await listen('pet-shown', () => window.setTimeout(refresh, 300));
+      unlistenPetSkin = await listen('pet-skin-changed', () => window.setTimeout(refresh, 300));
     } catch {
       /* 非 Tauri 环境 */
     }
@@ -149,6 +152,8 @@ export function usePetHitMask(getRoot: () => HTMLElement | null): UsePetHitMaskR
     if (rafId) cancelAnimationFrame(rafId);
     if (intervalId !== null) clearInterval(intervalId);
     unsubSkin?.();
+    unlistenPetShown?.();
+    unlistenPetSkin?.();
     resizeObserver?.disconnect();
     // 清空掩码 → 回到「整窗可交互」的旧行为，避免残留掩码影响下次会话
     if (isTauri) {

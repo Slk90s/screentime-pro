@@ -166,7 +166,20 @@ pub fn run() {
             MacosLauncher::LaunchAgent,
             None,
         ))
-        .plugin(tauri_plugin_log::Builder::default().build())
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .format(|out, message, record| {
+                    // 前端日志（Vue → plugin-log）每行也带版本戳，与后端主日志一致，
+                    // 便于只凭一行日志判断「哪个版本出的问题」。
+                    out.finish(format_args!(
+                        "{} [{}] {}",
+                        crate::logging::app_version(),
+                        record.level(),
+                        message
+                    ))
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         // v0.8.0：全局快捷键（截图触发）。handler 只认「按下」态，
         // 避免 macOS/Windows 一次按键派发 down+up 导致重复截图。
@@ -184,12 +197,12 @@ pub fn run() {
                 .path()
                 .app_log_dir()
                 .unwrap_or_else(|_| dir_for_log_fallback());
-            let log_guard = logging::init(&log_dir, cfg!(debug_assertions))
+            let app_version = app.package_info().version.to_string();
+            let log_guard = logging::init(&log_dir, cfg!(debug_assertions), &app_version)
                 .unwrap_or_else(|e| {
                     eprintln!("[main] 日志初始化失败: {}，降级到 stderr", e);
                     None
                 });
-            let app_version = app.package_info().version.to_string();
             tracing::info!(
                 version = %app_version,
                 debug = cfg!(debug_assertions),
@@ -311,9 +324,7 @@ pub fn run() {
             }
             // 桌宠「按身体 alpha 命中」穿透轮询线程（修透明区点击死区）
             pet::hit_mask::spawn_watcher(app.handle().clone());
-            if let Some(g) = log_guard {
-                app.manage(LogGuardHolder(Some(g)));
-            }
+            app.manage(LogGuardHolder(log_guard.unwrap_or_default()));
             #[cfg(target_os = "macos")]
             {
                 use objc2::MainThreadMarker;
@@ -722,7 +733,7 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-pub struct LogGuardHolder(pub Option<tracing_appender::non_blocking::WorkerGuard>);
+pub struct LogGuardHolder(pub Vec<tracing_appender::non_blocking::WorkerGuard>);
 
 fn dir_for_log_fallback() -> std::path::PathBuf {
     let base = match std::env::var("HOME") {

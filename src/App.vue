@@ -73,7 +73,20 @@
     <!-- v0.8.0：截图完成提示（剪贴板优先，故文案强调「直接粘贴」；落盘则补一句已保存） -->
     <div v-if="shotToast" class="shot-toast">
       <span class="shot-toast-icon">✓</span>
-      <span>{{ shotToast }}</span>
+      <span class="shot-toast-msg">{{ shotToast }}</span>
+    </div>
+
+    <!-- v0.9.2：截图失败全局提示（任何页面可见）。此前失败只在设置页弹错，
+         用户用全局快捷键截图、而人不在设置页时 → 失败是静默的（仅进日志）。
+         权限类错误额外给「打开系统设置 / 重启应用」两个动作（TCC 新授权需重启进程才生效）。 -->
+    <div v-if="shotError" class="shot-toast shot-toast--error" role="alert">
+      <span class="shot-toast-icon shot-toast-icon--error">!</span>
+      <span class="shot-toast-msg">{{ shotError.msg }}</span>
+      <div v-if="shotError.perm" class="shot-toast-actions">
+        <button @click="openShotPermSettings">{{ t("settings.shotPermOpen") }}</button>
+        <button @click="restartApp">{{ t("settings.shotPermRestart") }}</button>
+      </div>
+      <button class="shot-toast-close" @click="shotError = null" :title="t('app.dismissTip')"><AppIcon name="x" /></button>
     </div>
   </div>
 </template>
@@ -141,9 +154,12 @@ const webview2Dismissed = ref(false);
 // v0.8.0：截图完成 toast 文案（空 = 不显示）
 const shotToast = ref("");
 let toastTimer: number | undefined;
+// v0.9.2：截图失败全局提示（msg + 是否权限类，权限类附带「打开设置 / 重启应用」）
+const shotError = ref<{ msg: string; perm: boolean } | null>(null);
+let errTimer: number | undefined;
 let timer: number | undefined;
-// Tauri focus 事件监听器 unlisten 函数
-let unlistenFocus: (() => void) | null = null;
+// 已注册的 Tauri 事件监听器「注销函数」集合，统一在 onBeforeUnmount 注销（防监听器泄漏）
+const unlisteners: Array<() => void> = [];
 
 // 仅当辅助功能未授权时显示横幅（非 macOS 恒为 true，不显示）
 const showPermWarning = computed(() => !perm.value.accessibility);
@@ -169,6 +185,25 @@ function fmtDur(sec: number): string {
 async function openSettings() {
   try {
     await tracker.openPrivacySettings();
+  } catch {
+    /* ignore */
+  }
+}
+
+// 打开「屏幕录制」隐私面板（截图失败全局提示里用）
+async function openShotPermSettings() {
+  try {
+    await tracker.openPrivacySettings("screen_capture");
+  } catch {
+    /* ignore */
+  }
+}
+
+// 重启应用：TCC 新授予的「屏幕录制」权限需重启进程才生效，否则会卡在
+// 「开关已开 → 仍报无权限」的循环里出不来。
+async function restartApp() {
+  try {
+    await tracker.restartApp();
   } catch {
     /* ignore */
   }
@@ -212,36 +247,53 @@ onMounted(async () => {
   // 这样用户授予权限后无需手动重启程序，回到应用即生效
   try {
     const { listen } = await import("@tauri-apps/api/event");
-    unlistenFocus = await listen("tauri://focus", async () => {
-      // 聚焦后延迟 300ms 重检（macOS TCC 状态更新有微小延迟）
-      setTimeout(async () => {
-        try {
-          perm.value = await tracker.checkPermissions();
-          // 如果检测到权限已恢复，重置关闭标记
-          if (perm.value.accessibility) {
-            permDismissed.value = false;
-          }
-        } catch { /* ignore */ }
-      }, 300);
-    });
+    unlisteners.push(
+      await listen("tauri://focus", async () => {
+        // 聚焦后延迟 300ms 重检（macOS TCC 状态更新有微小延迟）
+        setTimeout(async () => {
+          try {
+            perm.value = await tracker.checkPermissions();
+            // 如果检测到权限已恢复，重置关闭标记
+            if (perm.value.accessibility) {
+              permDismissed.value = false;
+            }
+          } catch { /* ignore */ }
+        }, 300);
+      })
+    );
     // 监听「托盘唤起」事件：Rust 端 emit_to("main", "tray-shown")，
     // 唤起后立即拉取一次最新前台应用/已记录时长，避免看到 stale 数据
-    await listen("tray-shown", () => {
-      refreshLive();
-    });
+    unlisteners.push(
+      await listen("tray-shown", () => {
+        refreshLive();
+      })
+    );
     // v0.8.0：截图完成（复制 / 落盘 / 两者）→ 主窗口右下角轻提示，
     // 遮罩窗此刻已收起，用户需要在这里看到「已经进剪贴板了」的确认。
-    await listen<ScreenshotResult>("screenshot-done", (ev) => {
-      const r = ev.payload;
-      shotToast.value =
-        r.copied && r.saved
-          ? t("shot.toastBoth")
-          : r.saved
-            ? t("shot.toastSaved")
-            : t("shot.toastCopied");
-      if (toastTimer) clearTimeout(toastTimer);
-      toastTimer = window.setTimeout(() => (shotToast.value = ""), 2600);
-    });
+    unlisteners.push(
+      await listen<ScreenshotResult>("screenshot-done", (ev) => {
+        const r = ev.payload;
+        shotToast.value =
+          r.copied && r.saved
+            ? t("shot.toastBoth")
+            : r.saved
+              ? t("shot.toastSaved")
+              : t("shot.toastCopied");
+        if (toastTimer) clearTimeout(toastTimer);
+        toastTimer = window.setTimeout(() => (shotToast.value = ""), 2600);
+      })
+    );
+    // v0.9.2：截图失败全局提示（任何页面可见）。此前失败只在设置页弹错，
+    // 用户用快捷键截图、人不在设置页时失败是静默的（仅进日志）。权限类错误
+    // 额外给「打开系统设置 / 重启应用」两个动作（见模板）。
+    unlisteners.push(
+      await listen<string>("screenshot-error", (ev) => {
+        const msg = ev.payload ?? "";
+        shotError.value = { msg, perm: msg.includes("屏幕录制") };
+        if (errTimer) clearTimeout(errTimer);
+        errTimer = window.setTimeout(() => (shotError.value = null), 12000);
+      })
+    );
   } catch { /* 非 Tauri 环境 */ }
 
   // 首次运行默认开启开机自启
@@ -257,6 +309,12 @@ onMounted(async () => {
 });
 onBeforeUnmount(() => {
   if (timer) clearInterval(timer);
-  if (unlistenFocus) unlistenFocus();
+  if (toastTimer) clearTimeout(toastTimer);
+  if (errTimer) clearTimeout(errTimer);
+  // 注销所有 Tauri 事件监听器，防止监听器累积泄漏
+  for (const un of unlisteners) {
+    try { un(); } catch { /* ignore */ }
+  }
+  unlisteners.length = 0;
 });
 </script>

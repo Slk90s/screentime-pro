@@ -890,6 +890,8 @@ let unlistenSkin: (() => void) | null = null;
 let unlistenPetEnabled: (() => void) | null = null;
 // v0.7.6（2026-09-10）：托盘右键快捷开关 ↔ 设置页双向同步
 let unlistenStatusBarCfg: (() => void) | null = null;
+// v0.9.2：截图完成 → 刷新历史列表（注销函数需保存，防监听器泄漏）
+let unlistenShotDone: (() => void) | null = null;
 onMounted(async () => {
   try {
     unlistenSkin = await listen("pet-skin-changed", () => {
@@ -921,6 +923,7 @@ onBeforeUnmount(() => {
   if (unlistenSkin) unlistenSkin();
   if (unlistenPetEnabled) unlistenPetEnabled();
   if (unlistenStatusBarCfg) unlistenStatusBarCfg();
+  if (unlistenShotDone) unlistenShotDone();
 });
 
 // 语言切换
@@ -1520,27 +1523,12 @@ onMounted(async () => {
   await loadOcrEngineInfo();
   await loadShotHistory();
   try {
-    await listen("screenshot-done", () => {
+    unlistenShotDone = await listen("screenshot-done", () => {
       void loadShotHistory();
     });
-    // v0.9.1：截图失败**必须让用户看见原因**。
-    // Rust 侧一直有 `emit_to("main", "screenshot-error", e)`，但前端没有任何监听 →
-    // 失败是静默的。macOS 缺「屏幕录制」权限时表现最典型：用户只看到「截出来只剩桌面」，
-    // 既没有报错，也不知道该去哪里授权。
-    await listen<string>("screenshot-error", (ev) => {
-      const msg = ev.payload ?? "";
-      const isPerm = msg.includes("屏幕录制");
-      showAlert(
-        "warn",
-        isPerm ? t("settings.shotPermTitle") : t("settings.shotTitle"),
-        msg,
-        isPerm ? () => void tracker.openPrivacySettings("screen_capture") : undefined,
-        isPerm ? t("settings.shotPermOpen") : undefined,
-        // 权限类错误多给一个「重启应用」：TCC 新授权要重启进程才生效，
-        // 否则用户会卡在「开关开着 → 一直报没权限」的循环里出不来。
-        isPerm
-      );
-    });
+    // v0.9.2：截图失败提示已统一提升到主窗口 App.vue 的**全局 toast**
+    // （此前只在设置页弹错 → 用户用快捷键截图、人不在设置页时失败是静默的），
+    // 此处不再重复监听，避免同一次失败弹两次提示。
   } catch {
     /* 非 Tauri 环境 */
   }

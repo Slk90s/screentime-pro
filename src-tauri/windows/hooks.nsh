@@ -1,6 +1,11 @@
 ; windows/hooks.nsh
 ; ScreenTime Pro — NSIS 安装器钩子（v0.7.8 新增，2026-09-11）
 ;
+; 修改历史：
+;   - 2026-09-11 @v0.7.8: 新增 - 安装/卸载前静默结束运行中的托盘进程（避免「写入错误」）
+;   - 2026-09-20 @v0.9.2: 新增 - 卸载前把 logs 备份到「文档\ScreenTimePro-Logs」，
+;                          避免用户勾选「删除应用数据」时日志一并被删、事后无法追溯
+;
 ; ─────────────────────────────────────────────────────────────
 ; 为什么需要它（问题现场）
 ; ─────────────────────────────────────────────────────────────
@@ -90,7 +95,35 @@
   !insertmacro SCREENTIME_KILL_APP
 !macroend
 
+; ── 卸载前：把日志备份到「文档」（v0.9.2 新增）─────────────────────
+;
+; 背景：Tauri 默认卸载器在用户勾选「删除应用数据」时执行
+;   RmDir /r "$LOCALAPPDATA\${BUNDLEID}"    ← 日志就在其下的 logs\ 子目录里
+; （见 tauri-bundler 的 installer.nsi；用户不勾选则保留）。
+; 本宏在 PREUNINSTALL 执行（早于上述删除），先把日志复制到
+;   $DOCUMENTS\ScreenTimePro-Logs
+; 于是无论用户是否勾选「删除应用数据」，卸载后都留有一份可用于追溯的日志。
+;
+; 说明：
+; - 日志目录与 Rust 侧 `app_log_dir()` 一致：%LOCALAPPDATA%\com.screentime.pro\logs
+; - 目录不存在 / 创建目标失败 / 复制失败：一律静默跳过，绝不阻断卸载。
+; - CopyFiles 不复制子目录；logs 目录是平铺的（app.YYYY-MM-DD.log / audit.YYYY-MM-DD.log），无影响。
+; - 只用到 $R0/$R1 两个临时寄存器（卸载段开头本就没有跨寄存器状态）。
+!macro SCREENTIME_BACKUP_LOGS
+  StrCpy $R0 "$LOCALAPPDATA\com.screentime.pro\logs"
+  IfFileExists "$R0\*.*" 0 screentime_backup_logs_done
+    StrCpy $R1 "$DOCUMENTS\ScreenTimePro-Logs"
+    ClearErrors
+    CreateDirectory "$R1"
+    IfErrors screentime_backup_logs_done
+    CopyFiles /SILENT "$R0\*.*" "$R1"
+    DetailPrint "${PRODUCTNAME}：日志已备份到 $R1"
+  screentime_backup_logs_done:
+!macroend
+
 ; ── 卸载前（卸载器要删除 $INSTDIR\screentime-pro.exe，同样怕被占用）──
+; 顺序要紧：先结束进程，再把日志复制到一个不会被占用/不会被删的目录。
 !macro NSIS_HOOK_PREUNINSTALL
   !insertmacro SCREENTIME_KILL_APP
+  !insertmacro SCREENTIME_BACKUP_LOGS
 !macroend
