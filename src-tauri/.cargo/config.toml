@@ -1,0 +1,13 @@
+# v0.9.4（重切）：macOS Swift 运行库 rpath 修复
+#
+# 根因：screencapturekit crate（SCK 引擎）底层是 Swift 桥，二进制链接了
+# @rpath/libswift_Concurrency.dylib，但 Tauri bundler 不写 LC_RPATH、也不带该 dylib，
+# dyld 启动时解析 @rpath 失败 → 「Library not loaded ... no LC_RPATH's found」秒崩
+# （真机崩溃报告 2026-09-21 10:22，macOS 15.7.8 / M4）。
+#
+# 修法：给链接器加 rpath 指向系统 Swift 运行库目录。macOS 12+ 系统自带
+# /usr/lib/swift/libswift_Concurrency.dylib，零体积、无需随包分发。
+# 仅影响 macOS 目标，Windows/Linux 构建不受影响。
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-rpath,/usr/lib/swift"]
