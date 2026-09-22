@@ -50,12 +50,12 @@
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-09-22（同步至 **v0.9.5**；Windows 升级卸载修复版 ——
-> 重写 NSIS 卸载钩子 `SCREENTIME_KILL_APP`（轮询 10 轮 kill→500ms→复查，进程消失即继续，
-> 耗尽后 `taskkill /F /T` 强杀兜底）+ 新增 `SCREENTIME_ENSURE_EXE_GONE` 卸载尾部校验
-> （exe 仍在 → `SetErrorLevel 1 + Quit` 显式 rc=1，安装器视为「用户取消」静默返回，
-> 修复「升级时提示无法卸载!」P0）。本版仅改 `src-tauri/windows/hooks.nsh`，应用功能与 v0.9.4 一致。
-> 上一版 v0.9.4 为 macOS 截图**授权 UX 重做 + ScreenCaptureKit 引擎** ——
+> 最后更新：2026-09-22（同步至 **v0.9.6**；弹窗交互修复版 ——
+> 修复设置页弹窗「确定」关不掉（v0.9.4 footer slot 覆盖 Modal 自带按钮时
+> 丢失 close() 行为；`onAlertConfirm` 补回关闭且先关再跑回调）+
+> 「检查更新」标题漏传 `{current}` 插值参数（曾显示「已是最新版本（v）」）。
+> 本版仅改 `src/views/Settings.vue`，应用功能与 v0.9.5 一致。
+> 上一版 v0.9.5 为 Windows 升级卸载修复（NSIS 卸载钩子重写）——
 > 失败文案精简为一句话（`__PERM__:<reason>` 短码，证据转日志）+ 前端紧凑授权弹窗 `PermissionDialog.vue`
 > （2s 轮询翻转「已授权点此重启」+ 详情折叠）+ 启动 3s 后台预请求授权 + macOS 14+ 截图引擎升级 SCK
 > （`screenshot/macos_sck.rs` 单帧，低版本回落 xcap）+ Info.plist 补 `NSScreenCaptureUsageDescription`；

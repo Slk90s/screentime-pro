@@ -31,12 +31,11 @@
 
 > 目的：定义 **版本号从哪来、发版前改哪些地方、CI 怎么跑、出问题怎么回滚**。
 > 与 README 区别：README 是用户面（去哪下载、每个版本有什么），本文件是维护者面（怎么发出去）。
-> 最后更新：2026-09-22（**v0.9.5 发版中**：Windows 升级卸载修复版 —— 重写 NSIS 卸载钩子
-> `SCREENTIME_KILL_APP`（轮询 10 轮 kill→500ms→复查 + `taskkill /F /T` 强杀兜底）+
-> 新增 `SCREENTIME_ENSURE_EXE_GONE` 卸载尾部校验（exe 仍在 → 显式 rc=1 走「用户取消」豁免），
-> 修复「升级时提示无法卸载!」P0（根因：旧钩子固定 3 轮 kill 不复查真退出 + NSIS Delete 静默失败
-> → exe 残留 → 安装器 FileExists 命中弹「无法卸载!」，2026-09-21 两次升级实测复现）。
-> 本版仅改 `src-tauri/windows/hooks.nsh`，应用功能与 v0.9.4 一致。上一版 v0.9.4（二次重切）：
+> 最后更新：2026-09-22（**v0.9.6 发版中**：弹窗交互修复版 —— 修复设置页弹窗「确定」关不掉
+> （v0.9.4 footer slot 覆盖 Modal 自带按钮时丢失 close() 行为；`onAlertConfirm` 补回关闭
+> 且先关再跑回调，避免结果弹窗被误关）+「检查更新」标题漏传 `{current}` 插值参数
+> （曾显示「已是最新版本（v）」）。本版仅改 `src/views/Settings.vue`，应用功能与 v0.9.5 一致。
+> 上一版 v0.9.5：Windows 升级卸载修复（NSIS 卸载钩子重写）。再上一版 v0.9.4（二次重切）：
 > tag / commit `03c676c`；CI run `35560701713` 三平台全 success；GitHub Release `392693550`
 > 6 资产；Gitee Release `1157170` 4 附件；**Gitee 配额 311.9 / 1024 MiB**。
 > CI run `35503786492` 三平台全 success；
@@ -129,11 +128,12 @@ grep -n 'badge/version' README.md
 `.github/workflows/build.yml` 中三个 job（windows / linux / macos）**各写了一份**
 `releaseBody`，内容是**硬编码的字符串**，不会自动跟着版本变。
 
-**当前仓库的三份 `releaseBody` 已是 v0.9.5 的文案**（v0.7.6 起每版发版时同步改写）。
-v0.9.5 的 body 为一段：「#### 🔧 Windows 升级卸载修复（本版重点）」写**「无法卸载!」根因**
-（旧钩子固定 3 轮 kill 不复查真退出 + NSIS Delete 静默失败 → exe 残留 → 安装器 FileExists 命中）、
-**修复内容**（轮询 10 轮 kill→500ms→复查 + taskkill 强杀兜底 + 卸载尾部校验显式 rc=1）、
+**当前仓库的三份 `releaseBody` 已是 v0.9.6 的文案**（v0.7.6 起每版发版时同步改写）。
+v0.9.6 的 body 为一段：「#### 🐞 弹窗交互修复（本版重点）」写**弹窗「确定」关不掉根因**
+（v0.9.4 footer slot 覆盖 Modal 自带按钮时丢失 close() 行为）+ **标题漏传插值参数**
+（「已是最新版本（v）」→ 补 `{current}`）+ **确认链路顺序修正**（先关再跑回调），
 末尾为「#### 📊 包体积」表（三份 body 仍逐字相同）。
+上一版 v0.9.5 的 body 为「#### 🔧 Windows 升级卸载修复（本版重点）」（「无法卸载!」根因 + 轮询杀进程 + 卸载尾部校验）。
 上一版 v0.9.4 的 body 为「#### 🟣 macOS 截图体验重做（本版重点）」（紧凑授权弹窗 / 2s 轮询 / 启动预请求 / SCK 引擎 / 权限四件套 IPC 84→88 / Info.plist）。
 上一版 v0.9.2 的 body 为四段（「🔧 修复」+「🔍 可追溯性（新增）」+「📊 包体积」）。
 历史教训：v0.7.5 及以前长期停留在 v0.7.0 的旧文案（"整合 0.6.2 全部 Beta 修复"、
@@ -341,7 +341,8 @@ echo "   git push origin main && git push origin v$NEW"
 
 | 版本 | 发布时间 | 状态 | 关键说明 |
 |------|----------|------|----------|
-| **v0.9.5** | 2026-09-22 | 🔧 **Windows 升级卸载修复版** | **修复「升级时提示无法卸载!」（P0）**。根因：NSIS 卸载钩子 `SCREENTIME_KILL_APP` 固定 3 轮 kill + 500ms **不复查进程是否真正退出**——安全软件挂钩 / 内核延迟释放 exe 映像句柄时，1.5 秒窗口内进程仍占用主程序文件，NSIS `Delete` **静默失败**（不报错不中断），卸载器 rc=0 返回但 exe 残留，升级安装器 `PageLeaveReinstall` 检测 `${FileExists} exe` 命中即弹「无法卸载!」并中止（2026-09-21 两次升级实测复现，0.9.1 文件/注册表/快捷方式全部原样保留）。修复（仅改 `src-tauri/windows/hooks.nsh`）：① 杀进程重写为**轮询 10 轮「kill → 500ms → 复查」**，进程消失即 `${ExitFor}`，耗尽后 `nsExec taskkill /F /T /IM` 强杀兜底再等 1s；② 新增 `SCREENTIME_ENSURE_EXE_GONE`（POSTUNINSTALL）——exe 仍在 → `SetErrorLevel 1 + Quit` 显式 rc=1，安装器视为「用户取消」走豁免路径静默返回（NSIS `Abort` 实测 rc=2 不在豁免列表，必须用 `SetErrorLevel+Quit`）。本版应用功能与 v0.9.4 完全一致。**发布落点**：（CI 完成后回填） |
+| **v0.9.6** | 2026-09-22 | 🐞 **弹窗交互修复版** | **修复设置页弹窗「确定」关不掉（P1）+「检查更新」标题缺版本号**。根因一：v0.9.4 为 macOS 权限弹窗加「重启应用」按钮时用 footer slot **覆盖**了 Modal 自带按钮，自定义「确定」只执行确认回调、**丢失了 Modal 自带按钮的 close() 行为**——v0.9.4 起设置页所有弹窗点「确定」均无反应（只能右上角 X / 点遮罩 / Esc 关闭）。修复（仅改 `src/views/Settings.vue`）：`onAlertConfirm` 补回 `alertOpen=false`，且**先关弹窗再跑回调**（回调里常再弹「已清理」等结果弹窗，顺序反了会被误关）。根因二：「检查更新」弹窗标题 `t("settings.upToDate")` **漏传 `{current}` 插值参数**，标题渲染成「已是最新版本（v）」；补传后正确显示「已是最新版本（v0.9.6）」。本版应用功能与 v0.9.5 完全一致。**发布落点**：（CI 完成后回填） |
+| **v0.9.5** | 2026-09-22 | 🔧 **Windows 升级卸载修复版** | **修复「升级时提示无法卸载!」（P0）**。根因：NSIS 卸载钩子 `SCREENTIME_KILL_APP` 固定 3 轮 kill + 500ms **不复查进程是否真正退出**——安全软件挂钩 / 内核延迟释放 exe 映像句柄时，1.5 秒窗口内进程仍占用主程序文件，NSIS `Delete` **静默失败**（不报错不中断），卸载器 rc=0 返回但 exe 残留，升级安装器 `PageLeaveReinstall` 检测 `${FileExists} exe` 命中即弹「无法卸载!」并中止（2026-09-21 两次升级实测复现，0.9.1 文件/注册表/快捷方式全部原样保留）。修复（仅改 `src-tauri/windows/hooks.nsh`）：① 杀进程重写为**轮询 10 轮「kill → 500ms → 复查」**，进程消失即 `${ExitFor}`，耗尽后 `nsExec taskkill /F /T /IM` 强杀兜底再等 1s；② 新增 `SCREENTIME_ENSURE_EXE_GONE`（POSTUNINSTALL）——exe 仍在 → `SetErrorLevel 1 + Quit` 显式 rc=1，安装器视为「用户取消」走豁免路径静默返回（NSIS `Abort` 实测 rc=2 不在豁免列表，必须用 `SetErrorLevel+Quit`）。本版应用功能与 v0.9.4 完全一致。**发布落点**：tag / commit `7eb18bf`；CI run `35675298738` 三平台全 success；GitHub Release `393392844`（6 资产）；本机已静默安装验证（注册表 / exe 版本串 / 启动日志均 0.9.5） |
 | **v0.9.4** | 2026-09-20 | 🟣 **macOS 截图体验重做版**（二次重切） | **授权 UX 重做 + ScreenCaptureKit 引擎**。① **失败提示精简为一句话**——`macos.rs::ensure_ready` 失败返回 `__PERM__:<reason>` 短码（reason ∈ app_translocated / quarantined / adhoc_signature / not_granted），前端按 reason 映射一句话文案，完整证据转 `tracing::warn` 日志。② **紧凑授权弹窗 `PermissionDialog.vue`**——一句话原因 + 「去授权」/「重置权限并重启」两按钮，每 2 秒轮询 `screenshot_permission_status`，勾选后自动翻转「✅ 已授权，点此重启」，详细诊断折叠进「详情」区。③ **启动预请求授权**——`schedule_startup_permission_request` 启动 3 秒后后台预检，未授权则主动触发系统弹窗并 emit `screenshot-permission-changed`，让本应用提前出现在系统设置列表。④ **macOS 14+ SCK 引擎**——`screenshot/macos_sck.rs`：`SCShareableContent::get()` → `SCContentFilter` → `SCScreenshotManager::capture_image` 单帧，替代已废弃的 `CGWindowListCreateImage`（xcap 底层）；低版本自动回落 xcap。⑤ Info.plist 补 `NSScreenCaptureUsageDescription`（SCK 触发 TCC 弹窗必需键，缺失系统直接终止应用）。⑥ 新增权限四件套 IPC（**总数 84→88**）：`screenshot_permission_status` / `screenshot_request_permission` / `screenshot_open_permission_settings` / `screenshot_restart_app`。⑦ **P0×2 修复 macOS 启动秒崩**：SCK 链强链接 `@rpath/libswift_Concurrency.dylib` 但产物无 LC_RPATH → dyld SIGABRT。首次重切用 `src-tauri/.cargo/config.toml` 的 `[target.aarch64-apple-darwin] rustflags`——**复查证实无效**（tauri CLI 在仓库根 spawn cargo，cargo 配置发现只从 cwd 向上找，永远看不到 src-tauri/.cargo/）；二次重切改 **`build.rs` 注入 `cargo:rustc-link-arg-bins`**（cwd 无关，构建脚本直传 cargo，100% 生效），Windows 本地已验证指令输出。⑧ macOS `minimumSystemVersion` 10.15→**12.0**（`libswift_Concurrency.dylib` 为 macOS 12+ 系统组件，强链接下 10.15/11 无法启动）。⚠️ **已知限制不变**：未用 Developer ID 签名（用户无法购买 Apple 证书），每次升级后授权仍可能失效需重新授权。**发布落点（二次重切）**：commit 见 git log；**一次重切落点**：tag / commit `521b61f`；CI run `35554355978`；GitHub Release `392659386`；Gitee Release 重建。**首发落点（已删）**：commit `3395626`；CI run `35513505604`；GitHub Release `392440742`（6 资产 / 252.7 MiB）；Gitee Release `1156204`（5 附件 / 134.4 MiB）。 |
 | **v0.9.3** | 2026-09-20 | 🔴 **macOS 截图修复版** | **macOS 屏幕录制授权判定重写 + 一键重置权限**。① 修复「系统设置里已勾选屏幕录制、应用仍报无法截图」（P0）—— 旧实现只依据 `CGPreflightScreenCaptureAccess()` **单信号**判定，而该系统接口存在**「授权已生效、却持续返回过期 false」**的已知行为（同进程内一旦为 false 可能一直为 false），会把有效授权误判为无权限；现改为**双信号判定**：官方预检为真 **或**「窗口标题探针」可读即放行（`CGWindowListCopyWindowInfo` + `kCGWindowLayer==0`，与窗口**内容**共用同一张 TCC 授权），命中时打 `warn` 日志便于统计复现率。② 修复「截出来只有桌面壁纸」—— 真实成因是**未取得屏幕录制授权**时系统会**主动抹掉其他窗口内容**（并非没截到），失败文案讲清成因并给出可照做的处置步骤（含「完全退出再打开」这一必须步骤）。③ 新增 `reset_screen_capture_permission` IPC（**总数 83→84**）与**「重置权限并重启」一键按钮**（权限弹窗 + 截图失败提示条）：自动执行 `tccutil reset ScreenCapture com.screentime.pro` 清脏授权记录并重启应用。④ macOS 截图逻辑独立为 `src-tauri/src/screenshot/macos.rs`（权限闸门 `ensure_ready` + 证据采集 `collect` + 重置 `reset_permission` 集中一处），失败文案按**实际检测证据分档**（App Translocation / 未签名 ad-hoc / 多副本安装各给处置，并打印运行路径与 codesign 诊断）。⑤ 🐞 修复窗口枚举返回的 `CFArray` 未 `CFRelease` 造成的内存泄漏。⚠️ **已知限制**：未使用 Developer ID 签名（ad-hoc 签名每次构建 cdhash 变化 → 系统视为新应用），**每次升级后授权可能失效**、需重新授权一次，而系统设置开关仍显示为「开」；根治需签名 + 公证。**发布落点**：tag / commit `beb17fd`（轻量 tag `v0.9.3`）；CI run `35503786492` 三平台全 success；GitHub Release `392387464`（**6 资产 / 240.6 MiB**：exe 28.49 / dmg 28.15 / app.tar.gz 26.83 / deb 28.44 / rpm 28.44 MB / AppImage 111.90 MB）；Gitee Release `1155845`（**5 附件 / 133.9 MiB**，AppImage 超 Gitee 单文件 100 MB 上限，仅 GitHub 提供）；发版前删除 Gitee 旧版 v0.7.6 / v0.7.7 / v0.7.8 三个 Release（释放 165.2 MiB），配额现为 868.1 / 1024 MiB。 |
 | **v0.9.2** | 2026-09-20 | 🔍 **可追溯性版** | **日志可追溯性改造 + 截图失败全局提示 + 内存·状态修复**。① 日志**每行带版本戳**（`logging.rs` 的 `VersionWriter` 包装 Writer，行首插 `vX.Y.Z`；前端经 `tauri-plugin-log.format()` 同带戳）——任意一行即可判定来源版本；② 新增**用户行为审计日志** —— `logging::audit(action, detail)` 写 `target="audit"`，落独立 `audit.<date>.log`（主 layer 用 `filter_fn` 排除、audit layer 收），9 处埋点（规则增删改 / 设置保存 / 状态栏配置 / 按设备备份清理 / 保留期清理 / 截图批量删除 / OCR 取字），**不含 window_title**（沿用隐私红线）；③ 保留期 `MAX_LOG_FILES` 3→**14**，清理由「仅启动跑一次」改为**启动 + 运行时每小时**双清理；④ **卸载前自动备份日志**：`src-tauri/windows/hooks.nsh` 的 `NSIS_HOOK_PREUNINSTALL` 把 `logs/` 复制到「文档\ScreenTimePro-Logs」（该宏在卸载器 `RmDir /r "$LOCALAPPDATA\com.screentime.pro"` **之前**执行，失败静默不阻断卸载）；⑤ **截图失败提升为主窗全局提示** —— Rust 侧原已 `emit_to("main","screenshot-error")` 但**前端无人监听**（事件空转），现改由 `App.vue` 全局监听 + 右下角 toast（权限类错误带「打开系统设置 / 重启应用」），Settings 侧重复监听已移除；⑥ 🐞 修复自动分类规则**反向覆盖**用户禁用项（`db::insert_rule` 原为 `ON CONFLICT DO UPDATE SET enabled=1`，改为新增 `db::ensure_rule()` 走 `INSERT OR IGNORE`）、3 处监听器未注销（`usePetHitMask` 2 + `Settings` 1）、选区过小时仍可取字/导出（`selTooSmall` 禁用）；⑦ 补齐 `.shot-toast` 样式（自 v0.8.0 起该提示条**完全没有 CSS**，一直是裸 div）。**IPC 总数 83**（本版未新增命令；上一版 v0.9.1 为 82）。**发布落点**：tag / commit `b5b2ae8`（轻量 tag `v0.9.2`）；CI run `35496168069` 三平台全 success；GitHub Release `392344703`（**6 资产 / 240.6 MiB**：exe 27.19 / dmg 26.87 / app.tar.gz 25.59 / deb 27.13 / rpm 27.13 / AppImage 106.71 MiB）；Gitee Release `1155479`（**5 附件 / 133.9 MiB**，AppImage 超 Gitee 单文件 100 MB 上限，仅 GitHub 提供）；Gitee 全仓附件配额 899.5 / 1024 MiB。 |
