@@ -33,7 +33,7 @@ use core_foundation_sys::string::{
 };
 use core_graphics::window::{
     CGWindowListCopyWindowInfo, CGWindowListOption, kCGNullWindowID, kCGWindowListExcludeDesktopElements,
-    kCGWindowListOptionOnScreenOnly, kCGWindowName, kCGWindowOwnerPID,
+    kCGWindowListOptionOnScreenOnly, kCGWindowLayer, kCGWindowName, kCGWindowOwnerPID,
 };
 
 /// macOS 采集器：基于 NSWorkspace 前台应用 + CoreGraphics 空闲检测
@@ -131,6 +131,15 @@ pub fn get_foreground_window_title(pid: i32) -> Option<String> {
             if owner_pid as i32 != pid {
                 continue;
             }
+            // v0.9.7：只认普通层级（layer 0）的窗口。状态栏项（NSStatusItem）等
+            // 悬浮窗口在其它 layer 上，系统给它们生成的 kCGWindowName 是「Item-0」
+            // 这类占位标题 —— 前台应用带状态栏项时，旧实现会把「Item-0」当成
+            // 窗口标题记进库（用户看到「App · Item-0」）。与
+            // `screenshot::macos::probe_foreign_titles` 的 layer==0 口径保持一致。
+            match dict_i64_of(dict, kCGWindowLayer as *const c_void) {
+                Some(0) => {}
+                _ => continue,
+            }
             // 命中后取窗口标题
             let name_value: CFTypeRef = CFDictionaryGetValue(dict, kCGWindowName as *const c_void);
             if name_value.is_null() {
@@ -158,6 +167,26 @@ pub fn get_foreground_window_title(pid: i32) -> Option<String> {
                 }
             }
         }
+        None
+    }
+}
+
+/// 从窗口信息字典里取一个整数字段（v0.9.7，配合 layer 过滤）。
+///
+/// 与 `screenshot::macos::dict_i64` 同型但独立实现：先 `CFGetTypeID` 校验再强转，
+/// 避免类型不符时裸转指针是 UB。tracker 模块不依赖 screenshot 模块（后者是
+/// `#[cfg(target_os = "macos")]` 的 pub(crate)，且职责上采集器应自洽）。
+unsafe fn dict_i64_of(dict: core_foundation_sys::dictionary::CFDictionaryRef, key: *const c_void) -> Option<i64> {
+    use core_foundation_sys::base::{CFGetTypeID, CFTypeRef};
+    use core_foundation_sys::number::{CFNumberGetTypeID, CFNumberGetValue, CFNumberRef, kCFNumberSInt64Type};
+    let value: CFTypeRef = core_foundation_sys::dictionary::CFDictionaryGetValue(dict, key);
+    if value.is_null() || CFGetTypeID(value) != CFNumberGetTypeID() {
+        return None;
+    }
+    let mut out: i64 = 0;
+    if CFNumberGetValue(value as CFNumberRef, kCFNumberSInt64Type, &mut out as *mut i64 as *mut c_void) {
+        Some(out)
+    } else {
         None
     }
 }

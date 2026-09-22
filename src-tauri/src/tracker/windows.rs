@@ -47,11 +47,15 @@ impl PlatformTracker for WindowsTracker {
             // 获取 exe 全路径 + 进程名
             let (exe_path, process_name) = get_process_path(pid);
 
-            // 展示名优先用窗口标题，否则进程名
-            let name = window_title
-                .clone()
-                .filter(|t| !t.is_empty())
-                .unwrap_or_else(|| process_name.clone());
+            // 展示名用进程名（v0.9.7 修复：原实现 name=window_title，而 UI 渲染
+            // 「name · window_title」，窗口有标题时两者必然相同 → 「ScreenTime Pro ·
+            // ScreenTime Pro」式重复。窗口标题的匹配职责已由 window_title 字段承担，
+            // name 只需是稳定的「应用名」；取 exe 文件名并去掉 .exe 后缀更友好，
+            // 拿不到 exe 路径时回退 get_process_path 给出的 pid-N）。
+            let name = process_name
+                .trim_end_matches(".exe")
+                .trim_end_matches(".EXE")
+                .to_string();
 
             Ok(RawApp {
                 name,

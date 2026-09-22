@@ -5,7 +5,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](https://github.com/)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-0.9.6-blue)](./release)
+[![Version](https://img.shields.io/badge/version-0.9.7-blue)](./release)
 
 ---
 
@@ -89,6 +89,7 @@
 
 | 版本 | 发布时间 | 状态 | 关键说明 |
 |------|----------|------|----------|
+| **v0.9.7** | 2026-09-22 | 🐞 **四缺陷修复版** | **修复 Windows 应用名重复 + macOS「Item-0」+ 截图重入 + 截图历史单选失效**（四项均为用户实测反馈）。① **Windows 录制应用名重复**：列表显示「ScreenTime Pro · ScreenTime Pro」——根因 `windows.rs` 把 `name` 填成窗口标题，而 UI 渲染「name · 窗口标题」，两者必然相同；现 `name` 改用进程名（去 `.exe` 后缀），窗口标题匹配职责由 `window_title` 字段独立承担（分类器匹配 5 字段，规则不受影响）。② **macOS 状态栏「Item-0」**：前台应用带 NSStatusItem 时，系统给状态栏项生成的占位标题「Item-0」被当成窗口标题记进库；现 `get_foreground_window_title` 加 `kCGWindowLayer==0` 过滤（与 `probe_foreign_titles` 口径一致）。③ **截图重入工具条入镜**：遮罩亮着时再按快捷键，旧冻结帧的工具条被截进新图；现 `begin_capture` 加 `CAPTURE_IN_FLIGHT` RAII 重入闸门 + `SELF_OVERLAY_LABELS` 纳入 `capture` 窗口。④ **截图历史单选失效**：`.shot-check` 是 `position:absolute` 但 `.shot-item` 漏 `position:relative`，勾选框全部脱锚到页面左上角叠成一团；补锚 + 整卡可点 |
 | **v0.9.6** | 2026-09-22 | 🐞 **弹窗交互修复版** | **修复设置页弹窗「确定」关不掉（P1）+「检查更新」标题缺版本号**。根因一：v0.9.4 为 macOS 权限弹窗加「重启应用」按钮时用 footer slot **覆盖**了 Modal 自带按钮，自定义「确定」只执行确认回调、**丢失了 Modal 自带按钮的 close() 行为**——v0.9.4 起设置页所有弹窗点「确定」均无反应（只能右上角 X / 点遮罩 / Esc 关闭）。修复：`onAlertConfirm` 补回 `alertOpen=false`，且**先关弹窗再跑回调**（回调里常再弹「已清理」等结果弹窗，顺序反了会被误关）。根因二：「检查更新」弹窗标题 `t("settings.upToDate")` **漏传 `{current}` 插值参数**，标题渲染成「已是最新版本（v）」；补传后正确显示「已是最新版本（v0.9.6）」。⚠️ 本版仅改前端交互，应用功能与 v0.9.5 完全一致 |
 | **v0.9.5** | 2026-09-22 | 🔧 **Windows 升级卸载修复版** | **修复「升级时提示无法卸载!」（P0）**。根因：NSIS 卸载钩子 `SCREENTIME_KILL_APP` 固定 3 轮 kill + 500ms **不复查进程是否真正退出**——在安全软件挂钩 / 内核延迟释放 exe 映像句柄的机器上，1.5 秒窗口内进程仍占用主程序文件，NSIS `Delete` **静默失败**（不报错不中断），卸载器 rc=0「正常」返回但 exe 残留，升级安装器检测到 exe 仍存在即弹「无法卸载!」并中止。修复：① 杀进程改为**轮询 10 轮「kill → 500ms → 复查」**，进程一消失立即继续，轮询耗尽后 `taskkill /F /T` 强杀兜底；② 新增 `SCREENTIME_ENSURE_EXE_GONE` 卸载尾部校验——exe 仍在时显式返回 rc=1（安装器视为「用户取消」静默返回，不再弹错误框），用户可直接重试。⚠️ 本版仅改 NSIS 安装钩子，应用功能与 v0.9.4 完全一致 |
 | **v0.9.4** | 2026-09-20 | 🟣 **macOS 截图体验重做版** | **授权 UX 重做 + ScreenCaptureKit 引擎**。① **失败提示精简为一句话**——v0.9.3 那一大段诊断文字改为「一句话原因 + 两个按钮」（「去授权」/「重置权限并重启」），完整证据（运行路径 / Translocation / quarantine / 签名状态）转日志；② **紧凑授权弹窗 `PermissionDialog`**——每 2 秒轮询权限状态，在系统设置勾选后弹窗自动翻转为「✅ 已授权，点此重启」，详细诊断折叠进「详情」区；③ **启动即预请求授权**——应用启动 3 秒后后台预检，未授权则主动触发系统弹窗，让本应用提前出现在系统设置的屏幕录制列表里，不用等第一次截图失败；④ **macOS 14+ 截图引擎升级 ScreenCaptureKit**（`SCScreenshotManager` 单帧，替代已废弃的 `CGWindowListCreateImage`），旧系统自动回落原引擎；⑤ Info.plist 补 `NSScreenCaptureUsageDescription`（SCK 触发屏幕录制授权弹窗的必需键，缺失会被系统直接终止应用）；⑥ 新增权限四件套 IPC（总数 84→**88**）：`screenshot_permission_status` / `screenshot_request_permission` / `screenshot_open_permission_settings` / `screenshot_restart_app`。⚠️ **已知限制不变**：未用 Developer ID 签名（用户无法购买 Apple 证书），每次升级后系统授权仍可能失效需重新授权。⚠️ **macOS 最低系统版本 10.15 → 12.0**：SCK 链强链接 `libswift_Concurrency.dylib`（Swift 并发运行库，macOS 12+ 才有），macOS 10.15/11 无法启动本版 |

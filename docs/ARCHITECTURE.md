@@ -50,11 +50,13 @@
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-09-22（同步至 **v0.9.6**；弹窗交互修复版 ——
-> 修复设置页弹窗「确定」关不掉（v0.9.4 footer slot 覆盖 Modal 自带按钮时
-> 丢失 close() 行为；`onAlertConfirm` 补回关闭且先关再跑回调）+
-> 「检查更新」标题漏传 `{current}` 插值参数（曾显示「已是最新版本（v）」）。
-> 本版仅改 `src/views/Settings.vue`，应用功能与 v0.9.5 一致。
+> 最后更新：2026-09-22（同步至 **v0.9.7**；四缺陷修复版（用户实测反馈）——
+> ① Windows 录制应用名重复（`windows.rs` 的 name 曾填窗口标题，与 UI「name · 窗口标题」
+> 拼接必然重复；改用进程名去 `.exe`）② macOS 状态栏「Item-0」入镜（NSStatusItem 占位标题
+> 被当窗口标题记库；`get_foreground_window_title` 加 `kCGWindowLayer==0` 过滤）
+> ③ 截图重入工具条入镜（`begin_capture` 加 `CAPTURE_IN_FLIGHT` RAII 闸门 +
+> `SELF_OVERLAY_LABELS` 纳入 `capture`）④ 截图历史单选失效（`.shot-item` 漏
+> `position:relative` 致勾选框脱锚；补锚 + 整卡可点）。上一版 v0.9.6 为弹窗交互修复版。
 > 上一版 v0.9.5 为 Windows 升级卸载修复（NSIS 卸载钩子重写）——
 > 失败文案精简为一句话（`__PERM__:<reason>` 短码，证据转日志）+ 前端紧凑授权弹窗 `PermissionDialog.vue`
 > （2s 轮询翻转「已授权点此重启」+ 详情折叠）+ 启动 3s 后台预请求授权 + macOS 14+ 截图引擎升级 SCK

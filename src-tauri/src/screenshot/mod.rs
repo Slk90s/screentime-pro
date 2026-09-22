@@ -101,7 +101,11 @@ use tauri::{
 pub const CAPTURE_WINDOW_LABEL: &str = "capture";
 
 /// 自家需要「截图时临时隐藏」的置顶窗 label
-const SELF_OVERLAY_LABELS: [&str; 2] = ["pet", "float"];
+///
+/// v0.9.7：加入 `capture`（遮罩窗自身）。原名单只有 pet/float，遮罩窗开着时
+/// 再次触发截图（快捷键仍全局生效），第二次抓屏会把第一次的工具条/选区拍进
+/// 新冻结帧 —— 用户看到「点截图后有个小窗口被截下来了」。
+const SELF_OVERLAY_LABELS: [&str; 3] = ["pet", "float", CAPTURE_WINDOW_LABEL];
 
 /// 缓存的整屏帧（物理像素 RGBA8），确认时按选区裁剪
 pub struct CachedFrame {
@@ -385,15 +389,53 @@ fn hide_capture_window(app: &AppHandle) {
 
 // ===== 截图主流程 =====
 
+/// 截图会话进行中的闸门（v0.9.7）。
+///
+/// `begin_capture` 的三个入口（全局快捷键 / 托盘菜单 / 前端按钮）都是异步派发，
+/// 遮罩窗亮着的时候快捷键依然全局生效 —— 旧实现没有任何重入保护，第二次触发
+/// 会重新抓屏（把第一次的工具条拍进冻结帧）并重置遮罩窗状态。
+/// RAII 守卫保证任何失败路径都会复位（手动复位在 panic 时会永久锁死）。
+static CAPTURE_IN_FLIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+struct CaptureInFlightGuard;
+
+impl CaptureInFlightGuard {
+    fn acquire() -> Option<Self> {
+        use std::sync::atomic::Ordering;
+        CAPTURE_IN_FLIGHT
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+            .then_some(Self)
+    }
+}
+
+impl Drop for CaptureInFlightGuard {
+    fn drop(&mut self) {
+        CAPTURE_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 /// 触发一次截图（全局快捷键 / 托盘菜单 / 前端调用共用）。
 /// 整体异步执行：隐藏自家窗 → 等一帧 → 抓屏 → 亮遮罩。
 pub fn begin_capture(app: &AppHandle) {
+    // v0.9.7：重入保护 —— 已有一次截图会话在跑（遮罩窗亮着 / 抓屏进行中）时，
+    // 忽略本次触发。修复「遮罩窗开着再按快捷键 → 工具条被截进新冻结帧」。
+    let Some(_guard) = CaptureInFlightGuard::acquire() else {
+        tracing::debug!("截图会话进行中，忽略重入触发");
+        return;
+    };
     // v0.9.0：选了增强引擎就在后台先把模型加载好（~2.5s）。
     // 用户框完选区再点「取字」通常要好几秒，这段时间足够把加载摊掉；
     // 不预热的话第一次取字要多等一次模型加载（3.1s → 体感「卡住」）。
     warm_ocr_engine(app);
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move {
+        // 守卫 move 进任务：无论 begin_capture_inner 成功 / 失败 / 提前 return，
+        // 任务结束时 Drop 都会把闸门复位。守卫覆盖的是**启动阶段**（权限闸门 +
+        // 抓屏 + 亮遮罩，mac 首次授权时可达数秒）—— 这是重入最危险的窗口；
+        // 遮罩亮起后的框选期间再触发，靠 SELF_OVERLAY_LABELS 含 capture 兜底
+        //（hide-self 先把旧遮罩藏掉再抓屏，新冻结帧必然干净）。
+        let _guard = _guard;
         if let Err(e) = begin_capture_inner(&app2).await {
             tracing::error!(error = %e, "启动截图失败");
             // 失败路径：遮罩窗不亮，但必须把 hide-self 隐藏的窗还回去

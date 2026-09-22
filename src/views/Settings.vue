@@ -392,7 +392,8 @@
               v-for="s in shotHistory"
               :key="s.id"
               class="shot-item"
-              :class="{ selected: shotSelecting && selectedShotIds.includes(s.id) }"
+              :class="{ selected: shotSelecting && selectedShotIds.includes(s.id), selectable: shotSelecting }"
+              @click="shotSelecting && toggleShotSelect(s.id)"
             >
               <label v-if="shotSelecting" class="shot-check" @click.prevent="toggleShotSelect(s.id)">
                 <input type="checkbox" :checked="selectedShotIds.includes(s.id)" />
@@ -2467,6 +2468,10 @@ async function onCheckUpdate() {
   margin-top: 8px;
 }
 .shot-item {
+  /* v0.9.7 修复：勾选框 .shot-check 是 absolute 定位，锚点必须是卡片自身。
+     原实现漏了这行 → 勾选框全部脱锚到页面左上角叠成一团，
+     卡片上「看起来该点的位置」什么都没有 → 单选点不动、只有全选能用。 */
+  position: relative;
   margin: 0;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -2527,6 +2532,10 @@ async function onCheckUpdate() {
 .shot-item.selected {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent) inset;
+}
+/* v0.9.7：多选模式下整卡可点（点图片任意位置 = 切换勾选），光标给提示 */
+.shot-item.selectable {
+  cursor: pointer;
 }
 .shot-check {
   position: absolute;

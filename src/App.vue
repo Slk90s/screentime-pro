@@ -40,7 +40,7 @@
         <span class="live-name">{{ live.name || "—" }}</span>
         <!-- 字段名与 Rust 返回值一致（snake_case）：Tauri v2 仅转换命令参数为 camelCase，
              返回值原样序列化，故此处读 window_title / session_seconds / idle_seconds -->
-        <span class="live-title" v-if="live.window_title">· {{ live.window_title }}</span>
+        <span class="live-title" v-if="live.window_title && live.window_title !== live.name">· {{ live.window_title }}</span>
         <span class="live-session" v-if="tracking && (live.session_seconds ?? 0) > 0">{{ t("app.recorded", { dur: fmtDur(live.session_seconds ?? 0) }) }}</span>
         <span class="live-idle" v-if="tracking">{{ t("app.idle", { n: live.idle_seconds ?? 0 }) }}</span>
       </div>
