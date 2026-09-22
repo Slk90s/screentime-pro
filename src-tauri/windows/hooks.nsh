@@ -5,6 +5,10 @@
 ;   - 2026-09-11 @v0.7.8: 新增 - 安装/卸载前静默结束运行中的托盘进程（避免「写入错误」）
 ;   - 2026-09-20 @v0.9.2: 新增 - 卸载前把 logs 备份到「文档\ScreenTimePro-Logs」，
 ;                          避免用户勾选「删除应用数据」时日志一并被删、事后无法追溯
+;   - 2026-09-21 @v0.9.5: 重写 SCREENTIME_KILL_APP（轮询等待真退出 + nsExec 强杀兜底），
+;                          新增 SCREENTIME_ENSURE_EXE_GONE（卸载段尾部校验 exe 已删除，
+;                          失败时 SetErrorLevel 1 + Quit —— 把「静默失败」变成「显式 rc=1」，
+;                          让升级安装器走「用户取消」豁免路径静默返回，不再弹「无法卸载!」）
 ;
 ; ─────────────────────────────────────────────────────────────
 ; 为什么需要它（问题现场）
@@ -44,15 +48,24 @@
 
 ; ── 结束正在运行的 ScreenTime Pro，并等待其真正退出 ──────────────
 ;
-; 策略：检测到在跑时，做 3 轮「结束 → 等 500ms」，累计等待窗口 1.5s，最后再确认一次。
-; 之所以要重复且要等：原「写入错误」的根因就是 Tauri 内置逻辑只 Kill 一次 + Sleep 500，
-; 在内核（或被 EDR 挂钩的文件系统）尚未释放 `screentime-pro.exe` 映像句柄时，
-; 紧接着的 `File "${MAINBINARYSRCPATH}"` 就会写失败。
+; v0.9.5 策略（重写）：
+;   1. 检测到进程在跑 → 轮询「结束 → 等 500ms → 复查」，最多 10 轮（累计 ~5s+），
+;      进程一消失立即 ${ExitFor}，不空等；
+;   2. 轮询耗尽仍在跑 → nsExec::Exec `taskkill /F /T /IM` 强杀兜底（含子进程树），
+;      再等 1s 复查；nsExec 不弹窗、不依赖控制台；
+;   3. 最终确认：仍在跑只 DetailPrint 警告（交由 Tauri 内置 CheckIfAppIsRunning 处理）。
 ;
-; 只使用 tauri-bundler 随包提供、官方模板已在用的 `nsis_tauri_utils` 插件，
-; 不引入 `nsExec` 等额外插件依赖，避免插件缺失导致 CI 构建或安装器运行期出错。
-; LogicLib 由 MUI2.nsh 在本文件之前引入（模板第 226 行起即在用 `${If}`），
-; 而宏体在 `!insertmacro` 展开时求值，因此 `${If}` / `${For}` 必然可用。
+; v0.7.8 旧版缺陷（本次修复的根因）：
+;   旧版固定 3 轮 kill + 各 500ms，**不复查进程是否真的退出**就继续往下走。
+;   在 EDR 挂钩 / 内核延迟释放映像句柄的机器上，1.5s 窗口内进程可能还活着，
+;   卸载段 `Delete "$INSTDIR\screentime-pro.exe"` 因映像占用**静默失败**
+;   （NSIS Delete 不置错误也不中断），卸载器 rc=0 正常返回；
+;   升级安装器随后 `${FileExists} exe` 命中 → 弹「无法卸载!」。
+;   （2026-09-21 v0.9.4 升级实测复现：两次尝试后 exe/注册表/快捷方式全部原样保留。）
+;
+; 只使用 tauri-bundler 随包提供、官方模板已在用的 `nsis_tauri_utils` 插件 +
+; NSIS 自带 nsExec 插件（tauri NSIS 发行版 Plugins/x86-unicode/nsExec.dll 实存），
+; LogicLib 的 ${For}/${ExitFor} 在本机 tauri NSIS Include/LogicLib.nsh 实存（L603）。
 !macro SCREENTIME_KILL_APP
   !if "${INSTALLMODE}" == "currentUser"
     nsis_tauri_utils::FindProcessCurrentUser "${MAINBINARYNAME}.exe"
@@ -63,24 +76,40 @@
 
   ${If} $R9 = 0
     DetailPrint "检测到 ${PRODUCTNAME} 正在运行，准备结束进程..."
-    ${For} $R8 1 3
+    ; 轮询最多 10 轮：kill → 500ms → 复查，进程消失立即退出循环
+    ${For} $R8 1 10
       !if "${INSTALLMODE}" == "currentUser"
         nsis_tauri_utils::KillProcessCurrentUser "${MAINBINARYNAME}.exe"
       !else
         nsis_tauri_utils::KillProcess "${MAINBINARYNAME}.exe"
       !endif
       Pop $R9
-      ; 给内核时间释放 exe 映像文件句柄（这一步是原「写入错误」的关键）
       Sleep 500
+
+      !if "${INSTALLMODE}" == "currentUser"
+        nsis_tauri_utils::FindProcessCurrentUser "${MAINBINARYNAME}.exe"
+      !else
+        nsis_tauri_utils::FindProcess "${MAINBINARYNAME}.exe"
+      !endif
+      Pop $R9
+      ${If} $R9 <> 0
+        ${ExitFor}   ; 进程已消失（Find 返回非 0 = 未找到）
+      ${EndIf}
     ${Next}
 
-    ; 最终确认进程已消失
-    !if "${INSTALLMODE}" == "currentUser"
-      nsis_tauri_utils::FindProcessCurrentUser "${MAINBINARYNAME}.exe"
-    !else
-      nsis_tauri_utils::FindProcess "${MAINBINARYNAME}.exe"
-    !endif
-    Pop $R9
+    ; 轮询耗尽仍在跑 → taskkill /F /T 强杀兜底（含子进程树），再等 1s
+    ${If} $R9 = 0
+      DetailPrint "常规结束超时，尝试强制结束进程树..."
+      nsExec::Exec `taskkill /F /T /IM "${MAINBINARYNAME}.exe"`
+      Pop $R9
+      Sleep 1000
+      !if "${INSTALLMODE}" == "currentUser"
+        nsis_tauri_utils::FindProcessCurrentUser "${MAINBINARYNAME}.exe"
+      !else
+        nsis_tauri_utils::FindProcess "${MAINBINARYNAME}.exe"
+      !endif
+      Pop $R9
+    ${EndIf}
 
     ${If} $R9 = 0
       ; 仍未能结束：留日志，交由 Tauri 内置的 CheckIfAppIsRunning 提示用户手动关闭，
@@ -126,4 +155,32 @@
 !macro NSIS_HOOK_PREUNINSTALL
   !insertmacro SCREENTIME_KILL_APP
   !insertmacro SCREENTIME_BACKUP_LOGS
+!macroend
+
+; ── 卸载段尾部：校验主程序 exe 确实已删除（v0.9.5 新增）──────────
+;
+; 背景（2026-09-21 v0.9.4 升级「无法卸载!」根因）：
+;   NSIS 的 `Delete` 失败是**静默的**（不置错误标志、不中断），卸载器照常 rc=0 返回。
+;   升级安装器 PageLeaveReinstall 在 ExecWait 卸载器之后检查
+;   `${If} $0 <> 0 ${OrIf} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"`，
+;   命中即弹「无法卸载!」并中止升级。实测 NSIS 探针：`Abort` 退出码=2，
+;   模板只豁免 rc=1（用户取消）——所以任何 Abort 都会弹「无法卸载!」。
+;
+; 本宏在 POSTUNINSTALL（所有文件删除之后）执行：
+;   - exe 已删干净 → 正常返回（rc=0），升级安装器继续；
+;   - exe 仍在（映像占用/EDR 拦截等）→ SetErrorLevel 1 + Quit：
+;     把「静默失败」变成**显式 rc=1**，升级安装器将其视为「用户取消」
+;     走豁免路径静默返回重装选择页（不弹「无法卸载!」），用户可重试。
+;   注意：用 Quit 而非 Abort —— Abort 退出码是 2（本机 makensis v3.08 实测），
+;   2 不在豁免列表内，会再次触发「无法卸载!」。
+!macro SCREENTIME_ENSURE_EXE_GONE
+  ${If} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
+    DetailPrint "警告：${MAINBINARYNAME}.exe 未能删除（可能被占用），中止卸载以便重试。"
+    SetErrorLevel 1
+    Quit
+  ${EndIf}
+!macroend
+
+!macro NSIS_HOOK_POSTUNINSTALL
+  !insertmacro SCREENTIME_ENSURE_EXE_GONE
 !macroend
