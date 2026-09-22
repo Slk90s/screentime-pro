@@ -1123,6 +1123,11 @@ async function onAlertRestart() {
   }
 }
 function onAlertConfirm() {
+  // v0.9.5 修复：footer slot 覆盖了 Modal 自带按钮后，自带按钮的 close() 行为也一并丢失
+  //（v0.9.4 起「确定」点了没反应，只能 X / 遮罩 / Esc 关闭）。这里补上关闭动作。
+  // 注意顺序：先关再跑回调 —— 回调里常会再 showAlert 弹「结果弹窗」
+  //（如确认清理 → 弹「已清理」），若先跑回调，后执行的 alertOpen=false 会把结果弹窗误关。
+  alertOpen.value = false;
   if (pendingConfirm) {
     const cb = pendingConfirm;
     pendingConfirm = null;
@@ -1781,7 +1786,7 @@ async function onCheckUpdate() {
     if (updateResult.value.has_update) {
       showAlert("info", t("settings.foundNew"), t("settings.newVersionMsg", { current: updateResult.value.current, latest: updateResult.value.latest }));
     } else {
-      showAlert("info", t("settings.upToDate"), t("settings.upToDateMsg", { current: updateResult.value.current }));
+      showAlert("info", t("settings.upToDate", { current: updateResult.value.current }), t("settings.upToDateMsg", { current: updateResult.value.current }));
     }
   } catch (e: any) {
     console.error("检查更新失败", e);
