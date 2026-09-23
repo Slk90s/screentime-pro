@@ -13,16 +13,6 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize)]
-#[allow(dead_code)]
-pub struct AppInfoOut {
-    pub id: i64,
-    pub name: String,
-    pub process_name: String,
-    pub category_id: String,
-    pub icon_base64: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct SessionOut {
     pub id: i64,
     pub app_id: i64,

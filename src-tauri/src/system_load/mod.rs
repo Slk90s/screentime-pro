@@ -42,8 +42,10 @@ mod windows;
 mod linux;
 
 mod network;
-// MetricsSampler 自 v0.7.6 起跨平台存在；macOS-only 字段（mem/disk FFI）以 cfg 门控制
+// MetricsSampler 自 v0.7.6 起跨平台存在；平台差异（mem/disk FFI）抽到 platform/ 下
 mod metrics;
+// v0.9.7：跨平台指标后端（macOS/Windows/Linux 各自实现 MetricsBackend）
+pub(crate) mod platform;
 // v0.7.6：前台窗口全屏检测（悬浮指标条「全屏自动隐藏」用；Windows 实装，其余平台 stub）
 pub mod fullscreen;
 

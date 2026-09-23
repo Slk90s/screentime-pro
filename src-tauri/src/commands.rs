@@ -9,7 +9,7 @@ use crate::db::{
 };
 use crate::error::AppError;
 use crate::tracker::{platform_name, RawApp};
-use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, Weekday};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
@@ -866,9 +866,6 @@ fn today_str() -> String {
     let d = Local::now();
     format!("{}-{:02}-{:02}", d.year(), d.month(), d.day())
 }
-
-#[allow(dead_code)]
-fn _weekday_marker(_: Weekday) {}
 
 #[derive(serde::Serialize, Clone)]
 pub struct Webview2Status {

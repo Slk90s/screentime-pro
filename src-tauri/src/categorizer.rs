@@ -17,7 +17,6 @@
 //!   - 2026-07-09 @v0.4.0: 初始创建（async 版本） - 本地字典 + Wikipedia API + LRU 缓存
 //!   - 2026-07-09 @v0.4.1: 修复 - 改为同步实现，避免 block_on 嵌套死锁（关键 bugfix）
 
-use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -338,10 +337,4 @@ pub fn lookup_category(
     let fallback = "other".to_string();
     cache.put(cache_key, fallback.clone());
     fallback
-}
-
-// 抑制 unused warning（保留给未来扩展）
-#[allow(dead_code)]
-fn _unused_hashmap_marker() -> HashMap<String, String> {
-    HashMap::new()
 }

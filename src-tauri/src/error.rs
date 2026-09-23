@@ -30,6 +30,3 @@ impl From<String> for AppError {
         AppError::Msg(s)
     }
 }
-
-#[allow(dead_code)]
-pub type AppResult<T> = Result<T, AppError>;
