@@ -85,6 +85,11 @@ mod ocr_onnx;
 #[cfg(target_os = "macos")]
 mod ocr_vision;
 
+/// 截图子系统跨平台分支（reveal / 权限 IPC / 抓屏）统一收口层。
+/// 各平台实现见 `platform/{macos,windows,linux}.rs`，宿主只调 `Backend::*`。
+pub(crate) mod platform;
+use crate::screenshot::platform::{CaptureBackend, PermissionBackend, RevealBackend};
+
 use crate::AppState;
 use base64::Engine as _;
 use image::codecs::png::PngEncoder;
@@ -509,28 +514,25 @@ async fn begin_capture_inner(app: &AppHandle) -> Result<(), String> {
     // `screenshot-error` 事件 —— 那条链路弹的是「错误 toast」，而权限未授权是**常态
     // 引导**而非错误：前端收到原因码后亮紧凑授权弹窗（轮询 + 引导重启，Task 81）。
     // 非权限失败（线程异常等）仍走原 toast 链路。
-    #[cfg(target_os = "macos")]
+    // v0.9.4：macOS「屏幕录制」权限闸门（P0）—— 收口到 `platform::Backend::ensure_ready`。
+    // 宿主负责把它挪到阻塞线程：首次授权会弹系统授权框并同步等用户点击，
+    // 直接跑在 async 任务里会占住 runtime 线程。非 macOS 平台恒 Ok（无 TCC 概念）。
+    if let Err(reason_code) = tauri::async_runtime::spawn_blocking(crate::screenshot::platform::Backend::ensure_ready)
+        .await
+        .unwrap_or_else(|e| Err(format!("__THREAD__:{e}")))
     {
-        // 闸门逻辑收在 `screenshot/macos.rs`（纯 mac 模块，可被交叉编译探针覆盖：
-        // `cargo check --target aarch64-apple-darwin`）；这里只负责把它挪到阻塞线程 ——
-        // 首次授权会弹系统授权框并同步等用户点击，直接跑在 async 任务里会占住 runtime 线程。
-        if let Err(reason_code) = tauri::async_runtime::spawn_blocking(macos::ensure_ready)
-            .await
-            .unwrap_or_else(|e| Err(format!("__THREAD__:{e}")))
-        {
-            if let Some(reason) = reason_code.strip_prefix("__PERM__:") {
-                // 权限未授权：发结构化事件给主窗，紧凑授权弹窗据此渲染（Task 81）
-                tracing::info!(reason, "截图被权限闸门拦下，已通知前端亮授权引导弹窗");
-                let _ = app.emit_to("main", "screenshot-permission-blocked", reason);
-            } else {
-                // 线程异常等真错误：仍走错误 toast
-                return Err(reason_code
-                    .strip_prefix("__THREAD__:")
-                    .map(|e| format!("屏幕录制权限检查线程异常: {e}"))
-                    .unwrap_or(reason_code));
-            }
-            return Ok(()); // 权限引导已交给前端，本次截图流程到此为止（不算错误）
+        if let Some(reason) = reason_code.strip_prefix("__PERM__:") {
+            // 权限未授权：发结构化事件给主窗，紧凑授权弹窗据此渲染（Task 81）
+            tracing::info!(reason, "截图被权限闸门拦下，已通知前端亮授权引导弹窗");
+            let _ = app.emit_to("main", "screenshot-permission-blocked", reason);
+        } else {
+            // 线程异常等真错误：仍走错误 toast
+            return Err(reason_code
+                .strip_prefix("__THREAD__:")
+                .map(|e| format!("屏幕录制权限检查线程异常: {e}"))
+                .unwrap_or(reason_code));
         }
+        return Ok(()); // 权限引导已交给前端，本次截图流程到此为止（不算错误）
     }
 
     // ① 先隐藏自家置顶窗（pet/float），等合成器稳定后再抓屏
@@ -540,36 +542,12 @@ async fn begin_capture_inner(app: &AppHandle) -> Result<(), String> {
     // ② 抓主显示器整屏（物理像素）
     //
     // v0.9.4（Task 80）：macOS 优先走 SCK 引擎（ScreenCaptureKit，macOS 14+），
-    // 失败或低版本回落 xcap。为什么优先 SCK：
-    //   - xcap 底层 `CGWindowListCreateImage` 已被 Apple 废弃，且未授权时**不报错**
-    //     （返回壁纸图，隐私软化）—— 这正是 v0.9.3 之前「截完应用全消失」的根源；
-    //   - SCK 未授权时**真报错**，错误能明确归因到权限，而不是产出一张坏图。
-    // Windows / Linux 不受影响，仍走 xcap。
-    #[cfg(target_os = "macos")]
-    let (img, mx, my, mw, mh, scale) = {
-        // SCK 在 spawn_blocking 里跑（capture_image 内部同步等待回调）
-        let sck = tauri::async_runtime::spawn_blocking(macos_sck::capture_main_display)
-            .await
-            .unwrap_or_else(|e| Err(format!("SCK 截图线程异常: {e}")));
-        match sck {
-            Ok(img) => {
-                let (w, h) = (img.width(), img.height());
-                tracing::info!(w, h, "整屏已抓取（SCK 引擎）");
-                // SCK 单显示器路径：显示器原点即 (0,0)，逻辑尺寸按 1.0 缩放占位，
-                // 遮罩窗定位/尺寸用物理像素（mw/mh），逻辑值由 scale=1 推出。
-                // ⚠️ scale 影响 CaptureReadyPayload 的逻辑尺寸 —— SCK 路径下
-                // 前端拿到的逻辑尺寸 = 物理尺寸，框选坐标换算仍自洽
-                // （前端用 physical_width/physical_height 做比例换算，不依赖 scale）。
-                (img, 0i32, 0i32, w as i32, h as i32, 1.0f64)
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "SCK 截图失败，回落 xcap");
-                capture_with_xcap()?
-            }
-        }
-    };
-    #[cfg(not(target_os = "macos"))]
-    let (img, mx, my, mw, mh, scale) = capture_with_xcap()?;
+    // 失败或低版本回落 xcap；Windows / Linux 直走 xcap。抓屏逻辑收口到
+    // `platform::Backend::capture`（在阻塞线程跑，SCK 内部同步等回调）。
+    let captured = tauri::async_runtime::spawn_blocking(crate::screenshot::platform::Backend::capture)
+        .await
+        .map_err(|e| format!("截图线程异常: {e}"))??;
+    let (img, mx, my, mw, mh, scale) = captured;
 
     tracing::info!(w = img.width(), h = img.height(), x = mx, y = my, "整屏已抓取");
     let phys_w = img.width();
@@ -1077,62 +1055,22 @@ pub struct ScreenshotPermissionStatus {
 /// ① 查询屏幕录制授权状态（前端紧凑弹窗 2s 轮询用）
 #[tauri::command]
 pub fn screenshot_permission_status() -> ScreenshotPermissionStatus {
-    #[cfg(target_os = "macos")]
-    {
-        let s = macos::status_snapshot();
-        ScreenshotPermissionStatus {
-            preflight: s.preflight,
-            titles: s.titles.to_string(),
-            permitted: s.permitted,
-            reason: s.reason.to_string(),
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        ScreenshotPermissionStatus {
-            preflight: true,
-            titles: "readable".into(),
-            permitted: true,
-            reason: "ok".into(),
-        }
-    }
+    crate::screenshot::platform::Backend::status_snapshot()
 }
 
 /// ② 主动请求屏幕录制授权（弹系统框；**阻塞** → spawn_blocking 包裹）
 #[tauri::command]
 pub async fn screenshot_request_permission() -> Result<ScreenshotPermissionStatus, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let s = tauri::async_runtime::spawn_blocking(macos::request_permission)
-            .await
-            .map_err(|e| format!("权限请求线程异常: {e}"))?;
-        Ok(ScreenshotPermissionStatus {
-            preflight: s.preflight,
-            titles: s.titles.to_string(),
-            permitted: s.permitted,
-            reason: s.reason.to_string(),
-        })
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Ok(ScreenshotPermissionStatus {
-            preflight: true,
-            titles: "readable".into(),
-            permitted: true,
-            reason: "ok".into(),
-        })
-    }
+    let s = tauri::async_runtime::spawn_blocking(crate::screenshot::platform::Backend::request_permission)
+        .await
+        .map_err(|e| format!("权限请求线程异常: {e}"))?;
+    Ok(s)
 }
 
 /// ③ 打开「系统设置 → 隐私与安全性 → 屏幕录制」面板
 #[tauri::command]
 pub fn screenshot_open_permission_settings() {
-    #[cfg(target_os = "macos")]
-    {
-        macos::open_permission_settings();
-    }
-    #[cfg(not(target_os = "macos"))]
-    {}
+    crate::screenshot::platform::Backend::open_settings();
 }
 
 /// ④ 重启应用（TCC 新授权只对新进程生效 —— 轮询发现授权翻转后引导用户点这个）
@@ -1155,25 +1093,7 @@ pub fn screenshot_copy_text(text: String) -> Result<(), String> {
 
 /// 各平台「在文件管理器中选中文件」
 fn reveal_in_file_manager(path: &str) {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = crate::proc::hidden("open").args(["-R", path]).status();
-    }
-    #[cfg(target_os = "windows")]
-    {
-        let _ = crate::proc::hidden("explorer")
-            .arg(format!("/select,{path}"))
-            .status();
-    }
-    #[cfg(target_os = "linux")]
-    {
-        // Linux 无跨 DE 的「选中文件」标准，退化为打开所在目录
-        let dir = std::path::Path::new(path)
-            .parent()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| path.to_string());
-        let _ = crate::proc::hidden("xdg-open").arg(dir).status();
-    }
+    crate::screenshot::platform::Backend::reveal(path);
 }
 
 // ===== 全局快捷键注册 =====

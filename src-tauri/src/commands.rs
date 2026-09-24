@@ -16,6 +16,11 @@ use std::time::Duration as StdDuration;
 use tauri::Manager;
 use tauri_plugin_autostart::ManagerExt;
 
+/// 命令层跨平台分支（reveal / open_url / 权限 / WebView2）统一收口层。
+/// 各平台实现见 `platform/{macos,windows,linux}.rs`，宿主命令只调 `Backend::*`。
+mod platform;
+use crate::commands::platform::{OsOpenBackend, PermissionBackend, Webview2Backend};
+
 const SAMPLE_INTERVAL: u64 = 2;
 const MIN_SESSION_SECS: i64 = 10;
 
@@ -199,20 +204,7 @@ pub fn get_month_summary(
 
 #[tauri::command]
 pub fn reveal_path(path: String) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open").arg("-R").arg(&path).status().map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer").arg(format!("/select,{}", path)).status().map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let dir = std::path::Path::new(&path).parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| path.clone());
-        std::process::Command::new("xdg-open").arg(dir).status().map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    crate::commands::platform::Backend::reveal(&path)
 }
 
 #[tauri::command]
@@ -543,17 +535,7 @@ pub fn list_devices_with_stats(state: tauri::State<'_, Arc<AppState>>) -> Result
 
 #[tauri::command]
 pub fn check_permissions() -> PermissionStatus {
-    #[cfg(target_os = "macos")]
-    {
-        PermissionStatus {
-            accessibility: crate::tracker::macos::is_accessibility_trusted(),
-            screen_capture: crate::tracker::macos::is_screen_capture_trusted(),
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        PermissionStatus { accessibility: true, screen_capture: true }
-    }
+    crate::commands::platform::Backend::check_permissions()
 }
 
 /// 打开 macOS「隐私与安全性」中的指定面板。
@@ -565,22 +547,7 @@ pub fn check_permissions() -> PermissionStatus {
 /// 用户在那个页面里怎么找都找不到本应用。
 #[tauri::command]
 pub fn open_privacy_settings(pane: Option<String>) {
-    #[cfg(target_os = "macos")]
-    {
-        let anchor = match pane.as_deref() {
-            Some("screen_capture") => "Privacy_ScreenCapture",
-            _ => "Privacy_Accessibility",
-        };
-        let _ = std::process::Command::new("open")
-            .arg(format!(
-                "x-apple.systempreferences:com.apple.preference.security?{anchor}"
-            ))
-            .spawn();
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = pane;
-    }
+    crate::commands::platform::Backend::open_privacy_settings(pane)
 }
 
 /// 重启本应用（退出并重新拉起进程）。
@@ -610,14 +577,7 @@ pub fn restart_app(app: tauri::AppHandle) {
 /// 前端把它和「重启应用」串成一个按钮 —— 重置后必须重启进程，新授权才对运行中的进程生效。
 #[tauri::command]
 pub fn reset_screen_capture_permission() -> Result<String, String> {
-    #[cfg(target_os = "macos")]
-    {
-        crate::screenshot::macos::reset_permission()
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Err("仅 macOS 需要「屏幕录制」授权".to_string())
-    }
+    crate::commands::platform::Backend::reset_screen_capture_permission()
 }
 
 #[tauri::command]
@@ -877,62 +837,12 @@ pub struct Webview2Status {
 
 #[tauri::command]
 pub fn check_webview2(app: tauri::AppHandle) -> Webview2Status {
-    #[cfg(target_os = "windows")]
-    {
-        let _ = app;
-        let version = read_webview2_version();
-        if let Some(v) = version {
-            return Webview2Status { os: "windows".to_string(), available: true, version: v, hint: String::new() };
-        }
-        Webview2Status { os: "windows".to_string(), available: false, version: String::new(), hint: "未检测到 WebView2 运行时，请先安装 Microsoft Edge WebView2 Runtime（永驻版）后再运行本应用：\nhttps://developer.microsoft.com/en-us/microsoft-edge/webview2/".to_string() }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = app;
-        Webview2Status { os: std::env::consts::OS.to_string(), available: true, version: "n/a".to_string(), hint: String::new() }
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn read_webview2_version() -> Option<String> {
-    let keys = [
-        r"HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\ClientState\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
-        r"HKLM\SOFTWARE\Microsoft\EdgeUpdate\ClientState\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
-    ];
-    for key in keys {
-        // v0.7.7：全部走 proc::hidden——否则首次启动会连续闪 3 个 reg 控制台黑框
-        let output = crate::proc::hidden("reg")
-            .args(["query", key, "/v", "pv"])
-            .output()
-            .ok()?;
-        if !output.status.success() { continue; }
-        let text = String::from_utf8_lossy(&output.stdout);
-        for line in text.lines() {
-            if line.trim_start().starts_with("pv") {
-                if let Some(v) = line.split_whitespace().nth(2) { return Some(v.to_string()); }
-            }
-        }
-    }
-    let output = crate::proc::hidden("reg")
-        .args(["query", r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Edge\BLBeacon", "/v", "version"])
-        .output()
-        .ok()?;
-    if output.status.success() {
-        let text = String::from_utf8_lossy(&output.stdout);
-        for line in text.lines() {
-            if line.trim_start().starts_with("version") {
-                if let Some(v) = line.split_whitespace().nth(2) { return Some(v.to_string()); }
-            }
-        }
-    }
-    None
+    crate::commands::platform::Backend::check(&app)
 }
 
 #[tauri::command]
 pub fn open_webview2_download() -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    { open::that("https://developer.microsoft.com/en-us/microsoft-edge/webview2/").map_err(|e| e.to_string())?; }
-    Ok(())
+    crate::commands::platform::Backend::open_download()
 }
 
 #[tauri::command]
@@ -940,12 +850,7 @@ pub fn open_url(url: String) -> Result<(), String> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err(format!("不允许的 URL 协议：{}", url));
     }
-    #[cfg(target_os = "windows")]
-    { open::that(&url).map_err(|e| format!("打开 URL 失败：{}", e)) }
-    #[cfg(target_os = "macos")]
-    { std::process::Command::new("open").arg(&url).spawn().map_err(|e| format!("打开 URL 失败：{}", e))?; Ok(()) }
-    #[cfg(target_os = "linux")]
-    { std::process::Command::new("xdg-open").arg(&url).spawn().map_err(|e| format!("打开 URL 失败：{}", e))?; Ok(()) }
+    crate::commands::platform::Backend::open_url(&url)
 }
 
 #[derive(serde::Serialize, Clone)]
