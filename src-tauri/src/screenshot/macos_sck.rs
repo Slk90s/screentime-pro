@@ -45,7 +45,7 @@ pub type SckResult<T> = Result<T, String>;
 
 /// 本机 macOS 版本是否 ≥ 14.0（SCK 截图 API 的最低运行版本）。
 ///
-/// 用 `std::process::Command` 查 `sw_vers -productVersion` 而不是链接
+/// 用子进程查 `sw_vers -productVersion`（走 `crate::proc::hidden`，与全库约定一致）而不是链接
 /// `NSProcessInfo.operatingSystemVersion`：后者要引 objc2-app-kit 的运行时调用，
 /// 而这里只在**截图入口**跑一次（进程生命周期内缓存），子进程开销可忽略。
 ///
@@ -53,7 +53,7 @@ pub type SckResult<T> = Result<T, String>;
 fn is_macos_14_plus() -> bool {
     static CACHE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *CACHE.get_or_init(|| {
-        let v = std::process::Command::new("/usr/bin/sw_vers")
+        let v = crate::proc::hidden("/usr/bin/sw_vers")
             .arg("-productVersion")
             .output()
             .ok()

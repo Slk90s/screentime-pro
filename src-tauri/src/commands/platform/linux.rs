@@ -14,7 +14,7 @@ impl OsOpenBackend for Backend {
             .parent()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| path.to_string());
-        std::process::Command::new("xdg-open")
+        crate::proc::hidden("xdg-open")
             .arg(dir)
             .status()
             .map_err(|e| e.to_string())?;
@@ -22,7 +22,7 @@ impl OsOpenBackend for Backend {
     }
 
     fn open_url(url: &str) -> Result<(), String> {
-        std::process::Command::new("xdg-open")
+        crate::proc::hidden("xdg-open")
             .arg(url)
             .spawn()
             .map_err(|e| format!("打开 URL 失败：{}", e))?;

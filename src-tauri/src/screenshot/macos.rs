@@ -296,7 +296,7 @@ fn signature_info(bundle: Option<&str>) -> (Option<bool>, String) {
     let Some(bundle) = bundle else {
         return (None, "开发态运行（非 .app 包），跳过签名检查".to_string());
     };
-    let out = std::process::Command::new("/usr/bin/codesign")
+    let out = crate::proc::hidden("/usr/bin/codesign")
         .args(["-dvvv", bundle])
         .output();
     let Ok(out) = out else {
@@ -340,7 +340,7 @@ fn signature_info(bundle: Option<&str>) -> (Option<bool>, String) {
 
 /// `.app` 是否带下载隔离标记（浏览器下载的包默认会带，会触发 App Translocation）
 fn has_quarantine(bundle: &str) -> bool {
-    std::process::Command::new("/usr/bin/xattr")
+    crate::proc::hidden("/usr/bin/xattr")
         .args(["-p", "com.apple.quarantine", bundle])
         .output()
         .map(|o| o.status.success())
@@ -524,7 +524,7 @@ pub fn request_permission() -> PermissionStatusSnapshot {
 
 /// 打开「系统设置 → 隐私与安全性 → 屏幕录制」面板。
 pub fn open_permission_settings() {
-    let _ = std::process::Command::new("open")
+    let _ = crate::proc::hidden("open")
         .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
         .spawn();
     crate::logging::audit("open_screen_capture_settings", "Privacy_ScreenCapture");
@@ -589,7 +589,7 @@ pub fn schedule_startup_permission_request(handle: AppHandle) {
 /// ⚠️ 只重置**本应用**的条目（传了 bundle id），不会影响其它 App。
 /// 正常情况不需要 sudo（用户级 TCC 条目）；失败时把原因原样返回给界面。
 pub fn reset_permission() -> Result<String, String> {
-    let out = std::process::Command::new("/usr/bin/tccutil")
+    let out = crate::proc::hidden("/usr/bin/tccutil")
         .args(["reset", "ScreenCapture", BUNDLE_ID])
         .output()
         .map_err(|e| format!("无法执行 tccutil: {e}"))?;

@@ -10,7 +10,7 @@ pub(crate) struct Backend;
 
 impl OsOpenBackend for Backend {
     fn reveal(path: &str) -> Result<(), String> {
-        std::process::Command::new("open")
+        crate::proc::hidden("open")
             .arg("-R")
             .arg(path)
             .status()
@@ -19,7 +19,7 @@ impl OsOpenBackend for Backend {
     }
 
     fn open_url(url: &str) -> Result<(), String> {
-        std::process::Command::new("open")
+        crate::proc::hidden("open")
             .arg(url)
             .spawn()
             .map_err(|e| format!("打开 URL 失败：{}", e))?;
@@ -40,7 +40,7 @@ impl PermissionBackend for Backend {
             Some("screen_capture") => "Privacy_ScreenCapture",
             _ => "Privacy_Accessibility",
         };
-        let _ = std::process::Command::new("open")
+        let _ = crate::proc::hidden("open")
             .arg(format!(
                 "x-apple.systempreferences:com.apple.preference.security?{anchor}"
             ))

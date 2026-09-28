@@ -10,7 +10,7 @@ pub(crate) struct Backend;
 
 impl OsOpenBackend for Backend {
     fn reveal(path: &str) -> Result<(), String> {
-        std::process::Command::new("explorer")
+        crate::proc::hidden("explorer")
             .arg(format!("/select,{path}"))
             .status()
             .map_err(|e| e.to_string())?;

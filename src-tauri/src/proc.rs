@@ -22,13 +22,18 @@
 //! - Windows：设置 `CREATE_NO_WINDOW`
 //! - macOS / Linux：直通 `Command::new`，行为与之前完全一致（无控制台概念）
 //!
-//! ## 使用约定（重要）
-//! 本程序内**所有**启动短命系统命令（`reg` / `tasklist` / `netstat` / `ioreg` …）的地方
-//! 都应走 `proc::hidden()`；只有「用户主动触发的、需要终端窗口或与用户交互的」命令
-//! （如 `explorer /select,` 定位文件、`open` 打开 URL）可以继续用裸 `Command::new`。
+//! ## 使用约定（重要，v0.9.7 收紧为「一律走 hidden」）
+//! 本程序内**所有**启动子进程的地方（`reg` / `tasklist` / `ioreg` / `open` /
+//! `explorer /select,` / `xdg-open` / `codesign` / `tccutil` / `sw_vers` …）
+//! **一律走 `proc::hidden()`**，不再豁免「用户主动触发」的命令：
+//! - Windows：统一防控制台黑框（explorer/open 等 GUI 程序本就不分配控制台，
+//!   加 `CREATE_NO_WINDOW` 无副作用，纯保险）
+//! - macOS / Linux：`hidden` 直通 `Command::new`，行为与裸用完全一致
 //!
 //! ## 修改历史
 //!   - 2026-09-10 @v0.7.7: 初始创建 - 修复 Windows 首次启动控制台黑框闪烁
+//!   - 2026-09-28 @v0.9.7: 修订 - 使用约定从「交互命令可豁免」收紧为「一律走 hidden」，
+//!     全库裸 `Command::new` 清零（commands/platform + screenshot/macos 系列）
 
 use std::process::Command;
 
