@@ -32,12 +32,15 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v0.9.7
-            #### 🐞 四缺陷修复（本版重点）
-            - **修复 Windows 录制应用名重复**：列表曾显示「ScreenTime Pro · ScreenTime Pro」——根因是 name 字段被填成窗口标题，与 UI 的「name · 窗口标题」拼接必然重复；现 name 改用进程名（去 .exe 后缀）
-            - **修复 macOS 状态栏「Item-0」入镜**：前台应用带状态栏项时，系统给 NSStatusItem 生成的占位标题「Item-0」曾被当成窗口标题记进库；现只认普通层级（layer 0）的窗口
-            - **修复截图重入工具条入镜**：遮罩亮着时再按快捷键，旧冻结帧的工具条会被截进新图；现加重入闸门（RAII 守卫）+ 隐藏自身 capture 窗口
-            - **修复截图历史单选失效**：勾选框因父容器缺 position:relative 全部脱锚到页面左上角，单选点不中；补锚后整卡可点
+            ### 屏幕时间管家 ScreenTime Pro — v1.0.0
+            #### ✨ 新功能（本版重点）
+            - **滑动截长图**：截图工具条新增「长图」模式——框选后进入长图面板，手动滚动页面并逐屏续捕，自动按重叠检测拼接成一整张长图；键盘 Enter=续捕、Shift+Enter=完成、Esc=退出；支持复制/保存/取字全链路
+            - **macOS 截图画中画修复**：Retina 屏幕下框选几何换算错位（逻辑像素 ↔ 物理像素 2x 混用）导致画中画偏移；现统一换算后再落帧
+            - **文字标注敲定后可再拖动**：双击敲定文字后不再锁死，可继续拖动调整位置
+            #### 🧹 工程收口
+            - 子进程创建统一走 `proc::hidden`（裸 Command::new 清零，防控制台闪窗）
+            - 跨平台 cfg 代码收口到 `system_load/platform` 与 `screenshot/platform`（metrics / mac / win / linux 四向拆分）
+            - IPC 88 → **92**（长图会话四件套）
             #### 📊 包体积
             | 平台 | 产物 | 体积 |
             |---|---|---|
@@ -85,12 +88,15 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v0.9.7
-            #### 🐞 四缺陷修复（本版重点）
-            - **修复 Windows 录制应用名重复**：列表曾显示「ScreenTime Pro · ScreenTime Pro」——根因是 name 字段被填成窗口标题，与 UI 的「name · 窗口标题」拼接必然重复；现 name 改用进程名（去 .exe 后缀）
-            - **修复 macOS 状态栏「Item-0」入镜**：前台应用带状态栏项时，系统给 NSStatusItem 生成的占位标题「Item-0」曾被当成窗口标题记进库；现只认普通层级（layer 0）的窗口
-            - **修复截图重入工具条入镜**：遮罩亮着时再按快捷键，旧冻结帧的工具条会被截进新图；现加重入闸门（RAII 守卫）+ 隐藏自身 capture 窗口
-            - **修复截图历史单选失效**：勾选框因父容器缺 position:relative 全部脱锚到页面左上角，单选点不中；补锚后整卡可点
+            ### 屏幕时间管家 ScreenTime Pro — v1.0.0
+            #### ✨ 新功能（本版重点）
+            - **滑动截长图**：截图工具条新增「长图」模式——框选后进入长图面板，手动滚动页面并逐屏续捕，自动按重叠检测拼接成一整张长图；键盘 Enter=续捕、Shift+Enter=完成、Esc=退出；支持复制/保存/取字全链路
+            - **macOS 截图画中画修复**：Retina 屏幕下框选几何换算错位（逻辑像素 ↔ 物理像素 2x 混用）导致画中画偏移；现统一换算后再落帧
+            - **文字标注敲定后可再拖动**：双击敲定文字后不再锁死，可继续拖动调整位置
+            #### 🧹 工程收口
+            - 子进程创建统一走 `proc::hidden`（裸 Command::new 清零，防控制台闪窗）
+            - 跨平台 cfg 代码收口到 `system_load/platform` 与 `screenshot/platform`（metrics / mac / win / linux 四向拆分）
+            - IPC 88 → **92**（长图会话四件套）
             #### 📊 包体积
             | 平台 | 产物 | 体积 |
             |---|---|---|
@@ -132,12 +138,15 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v0.9.7
-            #### 🐞 四缺陷修复（本版重点）
-            - **修复 Windows 录制应用名重复**：列表曾显示「ScreenTime Pro · ScreenTime Pro」——根因是 name 字段被填成窗口标题，与 UI 的「name · 窗口标题」拼接必然重复；现 name 改用进程名（去 .exe 后缀）
-            - **修复 macOS 状态栏「Item-0」入镜**：前台应用带状态栏项时，系统给 NSStatusItem 生成的占位标题「Item-0」曾被当成窗口标题记进库；现只认普通层级（layer 0）的窗口
-            - **修复截图重入工具条入镜**：遮罩亮着时再按快捷键，旧冻结帧的工具条会被截进新图；现加重入闸门（RAII 守卫）+ 隐藏自身 capture 窗口
-            - **修复截图历史单选失效**：勾选框因父容器缺 position:relative 全部脱锚到页面左上角，单选点不中；补锚后整卡可点
+            ### 屏幕时间管家 ScreenTime Pro — v1.0.0
+            #### ✨ 新功能（本版重点）
+            - **滑动截长图**：截图工具条新增「长图」模式——框选后进入长图面板，手动滚动页面并逐屏续捕，自动按重叠检测拼接成一整张长图；键盘 Enter=续捕、Shift+Enter=完成、Esc=退出；支持复制/保存/取字全链路
+            - **macOS 截图画中画修复**：Retina 屏幕下框选几何换算错位（逻辑像素 ↔ 物理像素 2x 混用）导致画中画偏移；现统一换算后再落帧
+            - **文字标注敲定后可再拖动**：双击敲定文字后不再锁死，可继续拖动调整位置
+            #### 🧹 工程收口
+            - 子进程创建统一走 `proc::hidden`（裸 Command::new 清零，防控制台闪窗）
+            - 跨平台 cfg 代码收口到 `system_load/platform` 与 `screenshot/platform`（metrics / mac / win / linux 四向拆分）
+            - IPC 88 → **92**（长图会话四件套）
             #### 📊 包体积
             | 平台 | 产物 | 体积 |
             |---|---|---|

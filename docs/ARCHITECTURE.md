@@ -50,7 +50,14 @@
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-09-22（同步至 **v0.9.7**；四缺陷修复版（用户实测反馈）——
+> 最后更新：2026-09-29（同步至 **v1.0.0**；首个正式版——
+> ① 滑动截长图（`screenshot/long.rs`：Rust 侧长图会话 `LongShotState` + 重叠检测拼接
+> [探针行=新图顶 1/8、底图底部 600px 带内滑动、列采样 8px、通道容差 12、取最低匹配]；
+> 四件套 IPC `screenshot_long_start/capture/finish/cancel`，88→**92**；首屏必须用冻结帧，
+> 完成复用 `screenshot_commit`；前端 Enter=续捕 / Shift+Enter=完成 / Esc=退出）
+> ② macOS 截图画中画 Retina 几何换算修复（逻辑像素↔物理像素 2x 混用）③ 文字标注敲定后可再拖动
+> ④ 工程收口：子进程统一 `proc::hidden`；跨平台 cfg 收口到 `system_load/platform` 与
+> `screenshot/platform`。上一版 v0.9.7 为四缺陷修复版（用户实测反馈）——
 > ① Windows 录制应用名重复（`windows.rs` 的 name 曾填窗口标题，与 UI「name · 窗口标题」
 > 拼接必然重复；改用进程名去 `.exe`）② macOS 状态栏「Item-0」入镜（NSStatusItem 占位标题
 > 被当窗口标题记库；`get_foreground_window_title` 加 `kCGWindowLayer==0` 过滤）
@@ -82,7 +89,7 @@
 
 跨平台应用使用时长追踪（macOS / Windows / Linux），对标 iOS「屏幕使用时间」。**数据 100% 本地（SQLite bundled），零上传，隐私优先**。
 
-栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v0.9.3**（已发布，详见 [`RELEASE.md`](RELEASE.md)）。
+栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v1.0.0**（首个正式版，详见 [`RELEASE.md`](RELEASE.md)）。
 
 > ⚠️ 本节版本号在 v0.7.0 → v0.7.5 期间**长期未更新**（曾停留在 v0.7.0），与 `tauri.conf.json` 脱节。
 > 版本号唯一真实来源是 **`src-tauri/tauri.conf.json` 的 `version`**，改版本时务必回来同步本节。
