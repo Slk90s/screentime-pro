@@ -71,6 +71,17 @@
 #[cfg(target_os = "macos")]
 pub(crate) mod macos;
 
+/// 滑动截长图（v0.9.7 Unreleased）：会话状态 + 重叠检测拼接 + 4 个 IPC 命令。
+/// 详见模块头注释 —— 关键约束：首屏必须用冻结帧（遮罩亮着时实时抓屏会拍到自家遮罩），
+/// 后续每屏先隐藏遮罩再抓。
+///
+/// ⚠️ `pub use long::*;` 必须保留：`#[tauri::command]` 在子模块内生成的
+/// `__cmd__<name>` 处理器常量只在 `long` 模块内可见，`lib.rs` 的
+/// `generate_handler![screenshot::screenshot_long_*]` 依赖本条 re-export
+/// 才能解析到（与 `pet/mod.rs` 的 `pub use hit_mask::*;` 同一套机制）。
+pub(crate) mod long;
+pub use long::*;
+
 /// macOS SCK 截图引擎（ScreenCaptureKit 单帧截图，macOS 14+；低版本回落 xcap）。
 /// 仅在 macOS 上编译。为什么引入见模块头注释 —— 核心是旧 API「未授权不报错」
 /// 而 SCK「未授权真报错」，且 `SCShareableContent::get()` 是触发授权弹窗最可靠的方式。
@@ -389,6 +400,14 @@ fn ensure_capture_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String
 fn hide_capture_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window(CAPTURE_WINDOW_LABEL) {
         let _ = w.hide();
+    }
+}
+
+/// 长图模式用：把遮罩窗还回来（截完一屏后恢复 UI）。
+/// 与 hide_capture_window 成对出现，供 `long::screenshot_long_capture` 在阻塞线程里调用。
+fn show_capture_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window(CAPTURE_WINDOW_LABEL) {
+        let _ = w.show();
     }
 }
 

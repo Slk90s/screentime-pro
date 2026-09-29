@@ -150,6 +150,16 @@ export default {
     toastCopied: "已复制到剪贴板，Ctrl+V 直接粘贴",
     toastSaved: "已保存到截图历史",
     toastBoth: "已复制到剪贴板，并保存到截图历史",
+    // v0.9.7 Unreleased（2026-09-22）：滑动截长图
+    longEnter: "滑动截长图",
+    longTitle: "截长图",
+    longHint:
+      "已截取第 1 屏。向下滚动页面，让新画面与上一次截取的内容有部分重合，然后点「继续截取」（或按 Enter）。完成后点「完成」（或 Shift+Enter）。",
+    longCapture: "继续截取",
+    longDone: "完成",
+    longCancel: "取消长图",
+    longBusy: "正在截取拼接…",
+    longProgress: "已截 {n} 屏 · 高 {h}px",
   },
   settings: {
     deviceData: "设备与数据",

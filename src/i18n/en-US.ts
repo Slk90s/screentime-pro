@@ -149,6 +149,16 @@ export default {
     toastCopied: "Copied to clipboard — paste with Ctrl+V",
     toastSaved: "Saved to screenshot history",
     toastBoth: "Copied to clipboard and saved to history",
+    // v0.9.7 Unreleased (2026-09-22): scrolling long screenshot
+    longEnter: "Scrolling long screenshot",
+    longTitle: "Long screenshot",
+    longHint:
+      "First shot captured. Scroll the page down so the new view overlaps the previous capture, then click Continue (or press Enter). Click Finish when done (or Shift+Enter).",
+    longCapture: "Continue",
+    longDone: "Finish",
+    longCancel: "Cancel",
+    longBusy: "Capturing and stitching…",
+    longProgress: "{n} shots · {h}px tall",
   },
   settings: {
     deviceData: "Device & data",
