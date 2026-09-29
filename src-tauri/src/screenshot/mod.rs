@@ -99,7 +99,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{
-    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
 };
 
 /// 遮罩窗固定 label（同时声明在 tauri.conf.json 的 windows[]，保证权限与幂等复用）
@@ -558,11 +558,41 @@ async fn begin_capture_inner(app: &AppHandle) -> Result<(), String> {
     *state.frame.lock().unwrap_or_else(|e| e.into_inner()) = Some(CachedFrame { img });
 
     // ③ 亮遮罩窗，覆盖整个显示器
+    //
+    // ⚠️ macOS Retina 坐标陷阱（v0.9.8 修复「截图变成画中画」）：
+    // tao 在 macOS 上对 `set_outer_position(Physical)` / `set_inner_size(Physical)`
+    // 的处理是 **`to_logical(window.scale_factor())`** —— 即先除以「窗口当前」的
+    // scale_factor 再交给 AppKit。而窗口此时是新建的（还停在 800×600 默认尺寸、
+    // 未上屏），它的 scale_factor 不一定等于目标显示器的真实缩放（新建瞬间读到 1.0
+    // 或旧屏值都会发生）。物理值被错除后又×2 还原 → 窗口只有屏幕一半大，
+    // 且缩在左上角 —— 用户看到的是「全屏画中画，框选只能在画中画上框」。
+    //
+    // 解法：取**目标显示器的** scale_factor，把物理几何转成逻辑值，
+    // 用 `LogicalPosition` / `LogicalSize` 显式传入，绕开 tao 的隐式换算。
+    // 逻辑值在任何 scale_factor 下语义唯一（AppKit 再按显示器真实缩放还原），
+    // Windows/Linux 上 `to_logical(s)` 用同显示器 scale 除回再乘，逐值等价，不受影响。
     let win = ensure_capture_window(app)?;
-    win.set_position(PhysicalPosition::new(mx, my))
-        .map_err(|e| format!("定位遮罩窗失败: {e}"))?;
-    win.set_size(PhysicalSize::new(mw, mh))
-        .map_err(|e| format!("调整遮罩窗尺寸失败: {e}"))?;
+    let scale = win
+        .current_monitor()
+        .ok()
+        .flatten()
+        .map(|m| m.scale_factor())
+        .unwrap_or(1.0);
+    tracing::info!(
+        scale,
+        phys = format!("{}x{}", mw, mh),
+        "遮罩窗几何：显示器 scale_factor"
+    );
+    win.set_position(tauri::LogicalPosition::new(
+        mx as f64 / scale,
+        my as f64 / scale,
+    ))
+    .map_err(|e| format!("定位遮罩窗失败: {e}"))?;
+    win.set_size(tauri::LogicalSize::new(
+        mw as f64 / scale,
+        mh as f64 / scale,
+    ))
+    .map_err(|e| format!("调整遮罩窗尺寸失败: {e}"))?;
     win.show().map_err(|e| format!("显示遮罩窗失败: {e}"))?;
     let _ = win.set_focus();
     // 事件只带元信息（尺寸/DPI/默认样式），整屏图由前端在收到事件后调

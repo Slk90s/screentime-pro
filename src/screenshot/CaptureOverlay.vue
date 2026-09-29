@@ -29,11 +29,16 @@
     - 2026-09-17 @v0.9.0: 新增 - 取字结果面板显示**本次生效的引擎徽标**（标准引擎显示系统语言标签，
       增强引擎显示「本地增强引擎 · N 行」）。引擎由设置页决定，遮罩窗只负责如实展示，
       失败时清空徽标只留错误原因（避免"引擎写着增强、其实报错了"的误导）
--->。
+    - 2026-09-29 @v0.9.8: 新增 - **文字标注敲定后可再选中拖动**。原实现 Enter/blur 即固化进 ops，
+      此后无任何交互路径能再碰到它（用户反馈 v0.9.7）。现「文字」工具下点击已敲定的文字
+      → 命中检测（逐条 measureText 包围盒，倒序取最上层）→ 整条 op 摘出跟随指针
+      → 松手/Enter 落回。文字工具原本「点空白=新建」的语义保留：未命中才走新建。
+      命中框同时给出手型光标反馈（hitText 时 cursor: grab）。
+-->
 <template>
   <div
     class="cap-root"
-    :class="{ 'cap-root--draw': tool !== 'none' }"
+    :class="{ 'cap-root--draw': tool !== 'none', 'cap-root--grab-text': textHover || textDragIndex >= 0 }"
     @pointerdown="onDown"
     @pointermove="onMove"
     @pointerup="onUp"
@@ -267,6 +272,7 @@ type Drag =
   | { kind: "move"; sx: number; sy: number; from: Box }
   | { kind: "resize"; handle: Handle; sx: number; sy: number; from: Box }
   | { kind: "draw"; sx: number; sy: number; op: Op }
+  | { kind: "text-move"; index: number; sx: number; sy: number; from: Op }
   | null;
 
 const HANDLES: Handle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
@@ -323,6 +329,10 @@ const ocrBadge = computed(() => {
   return ocrLang.value;
 });
 const textSize = 20;
+/** 拖动中的文字标注索引（-1 = 无）；光标与重绘排除用 */
+const textDragIndex = ref(-1);
+/** 「文字」工具下指针是否悬在已敲定文字上（命中框反馈：grab 光标） */
+const textHover = ref(false);
 const vw = ref(window.innerWidth);
 const vh = ref(window.innerHeight);
 
@@ -639,6 +649,30 @@ function inBox(p: { x: number; y: number }) {
   return !!b && p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h;
 }
 
+/**
+ * 文字标注命中检测（v0.9.8：敲定后的文字要能再选中拖动）。
+ * 倒序遍历（最上层优先）；包围盒 = fillText 起点 + measureText 宽 × 字高。
+ * 与绘制同源：`600 ${size}px -apple-system, ...`，保证测量与显示逐像素一致。
+ * 返回 ops 里的下标，未命中返回 -1。
+ */
+function hitTextOp(p: { x: number; y: number }): number {
+  const c = annoEl.value;
+  if (!c) return -1;
+  const g = c.getContext("2d");
+  if (!g) return -1;
+  for (let i = ops.value.length - 1; i >= 0; i--) {
+    const op = ops.value[i];
+    if (op.k !== "text") continue;
+    g.font = `600 ${op.size}px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif`;
+    const w = g.measureText(op.text).width;
+    const h = op.size * 1.3; // 与 textBaseline=top 的字形实际占高对齐（含下延部）
+    if (p.x >= op.x && p.x <= op.x + w && p.y >= op.y && p.y <= op.y + h) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 function onDown(e: PointerEvent) {
   if (e.button !== 0) return;
   const p = localPoint(e);
@@ -652,6 +686,17 @@ function onDown(e: PointerEvent) {
 
   if (tool.value === "text") {
     if (!inBox(p)) return;
+    // v0.9.8：先做命中检测 —— 点到已敲定的文字 = 拖动它（倒序取最上层）；
+    // 未命中才走「点空白新建」。修复「文字敲定后无法再次移动」。
+    const hit = hitTextOp(p);
+    if (hit >= 0) {
+      const op = ops.value[hit];
+      if (op.k === "text") {
+        drag = { kind: "text-move", index: hit, sx: p.x, sy: p.y, from: { ...op } };
+        textDragIndex.value = hit;
+        return;
+      }
+    }
     // 掐掉 pointerdown 的默认行为：否则浏览器会在同一轮里把焦点挪到 body，
     // 让 nextTick 刚聚焦的输入框立刻 blur → commitText（空文本）→ 编辑器凭空消失。
     e.preventDefault();
@@ -694,6 +739,10 @@ function beginOp(toolName: Tool, p: { x: number; y: number }): Op | null {
 }
 
 function onMove(e: PointerEvent) {
+  // 文字工具下的悬停反馈：指针压在已敲定文字上 → grab 光标（无拖拽时也要给）
+  if (!drag && tool.value === "text") {
+    textHover.value = hitTextOp(localPoint(e)) >= 0;
+  }
   if (!drag) return;
   const p = localPoint(e);
   if (drag.kind === "new") {
@@ -703,6 +752,19 @@ function onMove(e: PointerEvent) {
       w: Math.abs(p.x - drag.sx),
       h: Math.abs(p.y - drag.sy),
     };
+    return;
+  }
+  if (drag.kind === "text-move") {
+    // v0.9.8：拖动已敲定的文字 —— 原 op 摘出、按指针位移改坐标后放回原层。
+    // 用 splice 原位替换（不是 filter+push），保持 z 序与撤销语义不漂移。
+    const op = drag.from;
+    if (op.k !== "text") return;
+    const nx = clamp(op.x + (p.x - drag.sx), 0, vw.value);
+    const ny = clamp(op.y + (p.y - drag.sy), 0, vh.value);
+    const moved: Op = { ...op, x: nx, y: ny };
+    const list = [...ops.value];
+    list[drag.index] = moved;
+    ops.value = list;
     return;
   }
   if (drag.kind === "move") {
@@ -736,6 +798,7 @@ function onUp() {
   if (!drag) return;
   const d = drag;
   drag = null;
+  textDragIndex.value = -1;
 
   if (d.kind === "new") {
     const b = box.value;
@@ -978,6 +1041,8 @@ function reset() {
   activePanel.value = null;
   textEdit.value = null;
   textValue.value = "";
+  textDragIndex.value = -1;
+  textHover.value = false;
   ocrBusy.value = false;
   ocrText.value = "";
   ocrErr.value = "";
@@ -1084,6 +1149,13 @@ onBeforeUnmount(() => {
   cursor: crosshair;
   user-select: none;
   overflow: hidden;
+}
+/* v0.9.8：文字工具下指针压在已敲定文字上（或拖动中）→ 抓手光标 */
+.cap-root--grab-text {
+  cursor: grab;
+}
+.cap-root--grab-text:active {
+  cursor: grabbing;
 }
 .shot {
   position: absolute;
