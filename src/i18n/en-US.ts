@@ -49,6 +49,8 @@ export default {
     webview2Download: "Download",
     permWarning:
       "The \"Accessibility\" permission is not granted; idle detection and some collection may be inaccurate. Please enable it in System Settings and restart the app.",
+    permWarningInvalidated:
+      "The \"Accessibility\" grant appears to have been invalidated (often after an app update, due to signature changes — System Settings may still show it as enabled). Toggle the app off and back on in System Settings, then restart this app.",
     openSettings: "Open System Settings",
     dismissTip: "Dismiss",
   },
@@ -159,6 +161,11 @@ export default {
     longCancel: "Cancel",
     longBusy: "Capturing and stitching…",
     longProgress: "{n} shots · {h}px tall",
+    // v1.1.0: low-confidence stitch warning (multi-row hit, verified/rolled back on next capture or finish)
+    longTentative:
+      "The last stitch was low-confidence (repetitive layout). Scroll and capture one more frame to verify; it is checked on Finish and rolled back if wrong.",
+    countdownTip: "s until capture",
+    countdownCancel: "Cancel (Esc)",
   },
   settings: {
     deviceData: "Device & data",
@@ -219,6 +226,11 @@ export default {
     shotDir: "Screenshots folder",
     shotOpenDir: "Open folder",
     shotNow: "Capture now",
+    shotRepeat: "Repeat last region",
+    shotRepeatHint: "Capture the last selected region again and copy it to the clipboard, skipping region selection. Available after one capture.",
+    shotRepeatNone: "No region to repeat yet: take a normal capture first",
+    shotDelay: "Delayed capture",
+    shotDelayHint: "Starts capture after a countdown. The countdown never steals focus, so you can arrange menus or windows first (cancel via the floating badge or Esc).",
     shotHistory: "Screenshot history",
     shotHistoryEmpty: "No screenshots yet",
     shotDelete: "Delete",

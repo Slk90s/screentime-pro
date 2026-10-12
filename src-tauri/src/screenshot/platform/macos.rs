@@ -44,11 +44,18 @@ impl CaptureBackend for Backend {
 
     fn capture() -> Result<(image::RgbaImage, i32, i32, i32, i32, f64), String> {
         // 优先 SCK（macOS 14+）；未授权 / 低版本回落 xcap。
+        //
+        // v1.0.1 修复「画中画」：旧代码把 scale 硬编码 1.0 —— SCK 出图尺寸随系统
+        // 行为漂移（有的版本回逻辑尺寸），上层按物理像素处理再被显示器 scale 二次
+        // 缩放 → 遮罩窗只盖半屏。现在 SCK 路径回传 `SCContentFilter::point_pixel_scale()`
+        // （macOS 14+ 权威点→像素比，Retina = 2.0；SCDisplay 宽/frame 宽同为「点」，
+        // 相除恒 1.0，不可用来自算，详见 macos_sck.rs）；xcap 回落路径本就返回
+        // 真实 scale，行为不变。
         match crate::screenshot::macos_sck::capture_main_display() {
-            Ok(img) => {
+            Ok((img, scale)) => {
                 let (w, h) = (img.width(), img.height());
-                tracing::info!(w, h, "整屏已抓取（SCK 引擎）");
-                Ok((img, 0i32, 0i32, w as i32, h as i32, 1.0f64))
+                tracing::info!(w, h, scale, "整屏已抓取（SCK 引擎）");
+                Ok((img, 0i32, 0i32, w as i32, h as i32, scale))
             }
             Err(e) => {
                 tracing::warn!(error = %e, "SCK 截图失败，回落 xcap");

@@ -364,6 +364,28 @@
               {{ t("settings.shotNow") }}
             </button>
           </div>
+          <!-- v1.1.0：重复区域截图（借鉴 Snapzy）——对上次框选区域一键重截 -->
+          <div class="form-row row between">
+            <label :title="t('settings.shotRepeatHint')">{{ t("settings.shotRepeat") }}</label>
+            <button class="ghost-btn" :disabled="!shotConfig.enabled" @click="onShotRepeat">
+              {{ t("settings.shotRepeat") }}
+            </button>
+          </div>
+          <!-- v1.1.0：延时截图（借鉴 Snapzy）——倒计时后进入正常截图，可先摆好界面 -->
+          <div class="form-row row between">
+            <label :title="t('settings.shotDelayHint')">{{ t("settings.shotDelay") }}</label>
+            <div class="btn-row">
+              <button
+                v-for="sec in [3, 5, 10]"
+                :key="sec"
+                class="ghost-btn"
+                :disabled="!shotConfig.enabled"
+                @click="onShotDelayed(sec)"
+              >
+                {{ sec }}s
+              </button>
+            </div>
+          </div>
         </div>
 
         <!-- 截图历史（缩略图按需拉取，避免一次把 200 张全读进内存） -->
@@ -1458,6 +1480,30 @@ async function onShotNow() {
   }
 }
 
+// v1.1.0：重复区域截图（借鉴 Snapzy）。无历史区域/区域失效时后端 reject，
+// 把可读文案直接弹给用户；成功时复制结果走后端 screenshot-done 全局 toast，无需重复提示。
+async function onShotRepeat() {
+  try {
+    await screenshot.repeatRegion(false);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const readable = /还没有可重复的区域|已失效/.test(msg)
+      ? msg
+      : t("settings.shotRepeatNone");
+    showAlert("warn", t("settings.shotTitle"), readable);
+  }
+}
+
+// v1.1.0：延时截图（借鉴 Snapzy）。倒计时渲染与取消入口在 main 窗的悬浮倒计时组件
+//（监听 screenshot-countdown 事件），本函数只负责发起。
+async function onShotDelayed(seconds: number) {
+  try {
+    await screenshot.triggerDelayed(seconds);
+  } catch (err) {
+    showAlert("warn", t("settings.shotTitle"), err instanceof Error ? err.message : String(err));
+  }
+}
+
 async function openShotDir() {
   if (!shotDir.value) return;
   try {
@@ -2210,10 +2256,7 @@ async function onCheckUpdate() {
   font-size: 12.5px;
 }
 
-/* 桌宠卡（粉色高亮） */
-.pet-card {
-  border-left: 3px solid #ff6b9d;
-}
+/* 桌宠卡 */
 .pet-hungry {
   color: var(--accent, #ff7e27);
   font-weight: 500;

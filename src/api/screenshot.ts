@@ -60,6 +60,11 @@ export interface CommitArgs {
   copy: boolean;
   /** 落盘到截图历史 */
   save: boolean;
+  /**
+   * v1.1.0：选区在冻结帧上的物理像素矩形 [x, y, w, h]。
+   * 传入后 Rust 记为「上次区域」，供 repeatRegion 重复截图；缺省不记录。
+   */
+  region?: [number, number, number, number];
 }
 
 export const screenshot = {
@@ -74,6 +79,25 @@ export const screenshot = {
 
   /** 手动触发一次截图（等价于按全局快捷键） */
   trigger: (): Promise<boolean> => invoke<boolean>("screenshot_trigger"),
+
+  /**
+   * v1.1.0：延时截图（借鉴 Snapzy）——倒计时 seconds 秒后进入正常截图流程。
+   * 不抢焦点（可先摆好目标界面/菜单）；期间监听 screenshot-countdown 事件渲染倒计时，
+   * 事件载荷为剩余秒数，收到 0 表示结束或取消。后端会把 seconds 钳制到 1..=30。
+   */
+  triggerDelayed: (seconds: number): Promise<boolean> =>
+    invoke<boolean>("screenshot_trigger_delayed", { seconds }),
+
+  /** v1.1.0：取消进行中的延时截图倒计时（无倒计时时为 no-op，返回 true 表示已置位） */
+  cancelCountdown: (): Promise<boolean> => invoke<boolean>("screenshot_cancel_countdown"),
+
+  /**
+   * v1.1.0：对上次框选的区域直接重新截图（跳过框选，直接进剪贴板）。
+   * 从未截过图或屏幕分辨率变化时 reject，错误文案可直接 toast 给用户。
+   * save=true 时同时落盘进历史。
+   */
+  repeatRegion: (save = false): Promise<ScreenshotResult> =>
+    invoke<ScreenshotResult>("screenshot_repeat_region", { save }),
 
   /**
    * 取本次截图会话的整屏冻结帧（PNG data URL，物理像素原始分辨率）。
@@ -196,4 +220,6 @@ export interface LongShotInfo {
   height: number;
   /** 宽度（物理像素，恒 = 首屏选区宽） */
   width: number;
+  /** v1.1.0：当前处于低置信（tentative，多行命中待下一屏验证）状态的段计数，0 或 1 */
+  tentative: number;
 }

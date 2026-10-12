@@ -162,6 +162,19 @@ fn linux_machine_id() -> Option<String> {
 pub fn run() {
     let tracker = create_tracker();
     tauri::Builder::default()
+        // v1.0.1：单实例锁 —— 修复 macOS「关机自启动已拉起实例后，用户再手动点
+        // 图标又起一个 → 两个进程同时记录、时长翻倍」。⚠️ 官方要求本插件必须
+        // **第一个**注册（在其他插件/setup 之前），它内部在初始化时做进程互斥，
+        // 重复启动的进程会直接退出，并把已运行实例的参数转发过去。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // 第二实例启动时走到这里的是**第一实例**：把主窗从托盘/菜单栏拉回前台。
+            // mac 上是 Accessory 激活策略（无 Dock 图标），show + set_focus 足够。
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.unminimize();
+                let _ = win.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             None,
@@ -706,6 +719,9 @@ pub fn run() {
             screenshot::screenshot_get_config,
             screenshot::screenshot_set_config,
             screenshot::screenshot_trigger,
+            screenshot::screenshot_trigger_delayed,
+            screenshot::screenshot_cancel_countdown,
+            screenshot::screenshot_repeat_region,
             screenshot::screenshot_frame,
             screenshot::screenshot_commit,
             screenshot::screenshot_cancel,

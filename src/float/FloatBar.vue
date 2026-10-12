@@ -74,6 +74,21 @@
           <circle cx="8" cy="8" r="2.4" />
         </svg>
       </button>
+      <!-- v1.1.0：重复上次区域截图（借鉴 Snapzy）。点此图标 = 一键重截同一区域；
+           无历史区域时静默失败（浮窗不适合弹 toast，用户第一次点没反应就再正常截一次） -->
+      <button
+        type="button"
+        class="f-shot"
+        :title="t('settings.shotRepeat')"
+        @pointerdown.stop
+        @click="onShotRepeat"
+      >
+        <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+          <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" />
+          <path d="M13.6 1.6v3h-3" />
+          <circle cx="8" cy="8" r="1.8" />
+        </svg>
+      </button>
     </template>
     <span v-if="!hasAny && !shotEnabled" class="f-item"><b class="f-dim">ScreenTime Pro</b></span>
   </div>
@@ -161,6 +176,19 @@ async function onShot(): Promise<void> {
     await screenshot.trigger();
   } catch {
     /* 应用退出中偶发失败，忽略 */
+  }
+}
+
+/**
+ * v1.1.0：重复上次区域截图（借鉴 Snapzy）。与设置页 onShotRepeat 同一后端命令。
+ * 失败静默：浮窗没有 toast 通道，且「还没有上次区域」属常态（第一次点必然如此），
+ * 弹窗反而打扰；用户会自然退回普通截图路径。
+ */
+async function onShotRepeat(): Promise<void> {
+  try {
+    await screenshot.repeatRegion(false);
+  } catch {
+    /* 无历史区域 / 区域失效 / 会话进行中 —— 一律静默 */
   }
 }
 

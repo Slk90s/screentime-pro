@@ -77,3 +77,6 @@ CHANGELOG.md
 # vite.config compiled output (from vue-tsc -b)
 vite.config.d.ts
 vite.config.js
+
+# 内部调研/提案文档（不随仓库开源）
+SNAPZY-*

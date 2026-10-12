@@ -258,6 +258,10 @@
         </span>
       </div>
       <p class="ocr-hint">{{ t("shot.longHint") }}</p>
+      <!-- v1.1.0：上一屏为低置信拼接（多行命中）时提示用户多截一屏复核，完成前会自动验证/回滚 -->
+      <p v-if="longTentative && !longErr" class="ocr-hint ocr-hint--warn">
+        {{ t("shot.longTentative") }}
+      </p>
       <p v-if="longErr" class="ocr-hint ocr-hint--err">{{ longErr }}</p>
       <p v-else-if="longBusy" class="ocr-hint">{{ t("shot.longBusy") }}</p>
       <div class="ocr-actions">
@@ -1013,6 +1017,8 @@ const longBusy = ref(false);
 const longErr = ref("");
 const longShots = ref(0);
 const longHeight = ref(0);
+// v1.1.0：最近一次拼接是否为低置信（tentative，多行命中待下一屏验证）——透出面板提示
+const longTentative = ref(false);
 const longRect = ref<{ x: number; y: number; w: number; h: number } | null>(null);
 
 /** 长图面板落点：固定在选区下方（长图模式没有工具栏，直接用选区底边） */
@@ -1062,6 +1068,8 @@ async function longCaptureStep() {
     const info = await screenshot.longCapture();
     longShots.value += 1;
     longHeight.value = info.height;
+    // v1.1.0：本屏若为低置信拼接，提示用户「滚动后多截一屏」让 Rust 侧复核/回滚
+    longTentative.value = info.tentative > 0;
   } catch (err) {
     // 拼接失败（滚动太快/无新内容）不算致命：保留会话，用户可调整后再试
     longErr.value = err instanceof Error ? err.message : String(err);
@@ -1075,16 +1083,23 @@ async function longFinishStep() {
   if (!longMode.value || longBusy.value) return;
   longBusy.value = true;
   longErr.value = "";
+  // v1.1.0 审计修复配套：区分两段失败——
+  // ① longFinish 失败：Rust 侧编码失败时会话**还回**（可重试），保留长图模式；
+  // ② commit 失败：longFinish 已成功（会话已消费，take 语义），退出长图模式。
+  let finished = false;
   try {
     const png = await screenshot.longFinish();
+    finished = true;
     await screenshot.commit({ pngBase64: png, copy: true, save: autoSave.value });
     longMode.value = false;
     reset();
     await getCurrentWindow().hide();
   } catch (err) {
     longErr.value = err instanceof Error ? err.message : String(err);
-    // finish 失败会话已被 Rust 清掉（take 语义）→ 同步退出长图模式
-    longMode.value = false;
+    if (finished) {
+      longMode.value = false;
+    }
+    // finished === false：长图会话仍在，面板保留，用户可直接再点「完成」重试
   } finally {
     longBusy.value = false;
   }
@@ -1100,6 +1115,7 @@ async function longCancelStep() {
     longErr.value = "";
     longShots.value = 0;
     longHeight.value = 0;
+    longTentative.value = false;
     longRect.value = null;
   }
 }
@@ -1171,8 +1187,20 @@ async function cancel() {
 async function commit(copy: boolean, save: boolean) {
   const png = compose();
   if (!png) return;
+  // v1.1.0：把选区的物理像素矩形交给后端记录（「重复区域截图」的数据源）。
+  // box 是窗口内 CSS 像素，×k（= 物理宽 / CSS 宽）换算成冻结帧上的物理像素。
+  // 投影 pad 是导出图上的装饰，不属于屏幕区域，故不参与矩形计算。
+  let region: [number, number, number, number] | undefined;
+  if (box.value && meta.value) {
+    const s = k.value;
+    const x = Math.round(box.value.x * s);
+    const y = Math.round(box.value.y * s);
+    const w = Math.round(box.value.w * s);
+    const h = Math.round(box.value.h * s);
+    if (w > 0 && h > 0) region = [x, y, w, h];
+  }
   try {
-    await screenshot.commit({ pngBase64: png, copy, save });
+    await screenshot.commit({ pngBase64: png, copy, save, region });
   } finally {
     reset();
     await getCurrentWindow().hide();
@@ -1203,6 +1231,7 @@ function reset() {
   longErr.value = "";
   longShots.value = 0;
   longHeight.value = 0;
+  longTentative.value = false;
   longRect.value = null;
   base = null;
   drag = null;
@@ -1516,6 +1545,10 @@ onBeforeUnmount(() => {
 }
 .ocr-hint--err {
   color: #f7c1c1;
+}
+/* v1.1.0：长图 tentative（低置信拼接）提示——琥珀色，介于正常灰与错误红之间 */
+.ocr-hint--warn {
+  color: #fbd38d;
 }
 .ocr-text {
   height: 108px;

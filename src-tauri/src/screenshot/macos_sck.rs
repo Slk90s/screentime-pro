@@ -82,7 +82,7 @@ pub fn sck_available() -> bool {
     is_macos_14_plus()
 }
 
-/// 用 SCK 抓取**主显示器**整屏，返回物理像素 RGBA8 图。
+/// 用 SCK 抓取**主显示器**整屏，返回物理像素 RGBA8 图与该显示器的真实缩放因子。
 ///
 /// 流程：`SCShareableContent::get()`（枚举显示器；未授权时这里报错）→
 /// 选主显示器（displays()[0]；SCK 返回顺序即系统顺序，第一块即主屏）→
@@ -95,7 +95,16 @@ pub fn sck_available() -> bool {
 /// 尺寸说明：`SCStreamConfiguration` 的宽高**不设**时 SCK 默认按显示器原生
 /// 分辨率出图（Retina 下即物理像素）；显式设宽高反而可能触发缩放。
 /// 这里只设 `capture_resolution_type(Best)` 保证拿最高分辨率。
-pub fn capture_main_display() -> SckResult<image::RgbaImage> {
+///
+/// v1.0.1 修复「画中画」：返回值从 `RgbaImage` 改为 `(RgbaImage, f64)` ——
+/// 旧实现上层（platform/macos.rs）把 scale 硬编码成 1.0，而 SCK 的出图尺寸
+/// 随系统行为漂移（有的版本回逻辑尺寸），上层按「物理像素 ÷ 显示器 scale」
+/// 转逻辑几何时窗口只盖住半屏（用户看到的全屏画中画）。
+/// 缩放因子取 `SCContentFilter::point_pixel_scale()`（macOS 14+ 权威的
+/// 点→像素比，Retina = 2.0）。**注意**：不能拿 `SCDisplay.width()` 除以
+/// `frame().size.width` 自算 —— Apple 文档明确两者单位都是**点**，比值恒 1.0
+/// （crate 文档声称 width 是像素属于错误文档，审计时已核实）。
+pub fn capture_main_display() -> SckResult<(image::RgbaImage, f64)> {
     if !sck_available() {
         return Err("SCK 需要 macOS 14+，本机版本较低".into());
     }
@@ -113,6 +122,20 @@ pub fn capture_main_display() -> SckResult<image::RgbaImage> {
         .with_display(display)
         .with_excluding_windows(&[])
         .build();
+
+    // ①' 权威缩放因子（v1.0.1 审计返工）：改用 SCK 自己的
+    //     `point_pixel_scale()`（macOS 14+，与截图路径版本要求一致）。
+    //     ⚠️ 旧实现 `display.width() / frame.size.width` 是错的：
+    //     Apple 官方文档明确 SCDisplay.width 的单位是**点**（不是
+    //     crate 文档声称的像素），frame 也是点 —— 两点相除恒得 1.0，
+    //     等于没修。`point_pixel_scale()` 由系统返回真实的点→像素比
+    //     （Retina = 2.0），才是权威来源。
+    //     异常（≤0）时回落 1.0 —— 此时出图大概率就是逻辑尺寸，
+    //     与旧行为一致，不会更糟。
+    let scale = {
+        let s = filter.point_pixel_scale() as f64;
+        if (1.0..=4.0).contains(&s) { s } else { 1.0 }
+    };
 
     // ③ 配置：原生分辨率 + 最高质量；宽高不设 = 按显示器原生出图
     let config = SCStreamConfiguration::new()
@@ -141,8 +164,9 @@ pub fn capture_main_display() -> SckResult<image::RgbaImage> {
         ));
     }
 
-    image::RgbaImage::from_raw(w as u32, h as u32, rgba)
-        .ok_or_else(|| "SCK 像素数据无法组装为图像".to_string())
+    let img = image::RgbaImage::from_raw(w as u32, h as u32, rgba)
+        .ok_or_else(|| "SCK 像素数据无法组装为图像".to_string())?;
+    Ok((img, scale))
 }
 
 #[cfg(test)]

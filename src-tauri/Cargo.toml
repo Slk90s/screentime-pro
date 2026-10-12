@@ -27,6 +27,9 @@ regex = "1"
 gethostname = "0.5"
 # 开机自启插件（跨平台：macOS LaunchAgent / Windows 注册表 / Linux systemd --user）
 tauri-plugin-autostart = "2"
+# v1.0.1：单实例锁 —— 修复 macOS「关机自启动后又手动打开 → 两个实例同时记录」。
+# 必须在 Builder 上**第一个**注册（官方要求），重复启动时新进程退出、把已运行实例主窗拉到前台。
+tauri-plugin-single-instance = "2"
 # 跨平台后台定时任务（采样循环）
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 # 检查更新：拉取 GitHub Releases API（用 rustls 避开 native openssl 依赖）

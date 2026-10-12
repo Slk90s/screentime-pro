@@ -24,6 +24,8 @@ use std::sync::OnceLock;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::Rotation;
 use tracing_subscriber::filter::filter_fn;
+// MakeWriter trait 必须在作用域内：VersionWriter/AuditWriter 构造时调 `.make_writer()`
+// （组合 writer 与 non_blocking writer 都靠它把引用态转成实体 writer）。
 use tracing_subscriber::fmt::writer::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -332,30 +334,4 @@ pub fn dir_size(dir: &Path) -> std::io::Result<u64> {
         }
     }
     Ok(total)
-}
-
-/// 空 writer（保留供未来扩展使用，目前 release 模式也挂 stderr，因为
-/// GUI 应用没有终端，stderr 自动丢失，无需特殊处理）
-#[allow(dead_code)]
-pub struct NopWriter;
-
-#[allow(dead_code)]
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for NopWriter {
-    type Writer = NopWriterImpl;
-    fn make_writer(&'a self) -> Self::Writer {
-        NopWriterImpl
-    }
-}
-
-#[allow(dead_code)]
-pub struct NopWriterImpl;
-
-#[allow(dead_code)]
-impl std::io::Write for NopWriterImpl {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
 }

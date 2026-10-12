@@ -134,6 +134,10 @@ pub struct ScreenshotState {
     /// 本次截图被临时隐藏的自家窗口 label（只为这些恢复可见）
     pub hidden: Mutex<Vec<String>>,
     pub config: Mutex<ScreenshotConfig>,
+    /// 上次框选的物理像素矩形 (x, y, w, h)——相对**冻结帧**（即主屏原点）。
+    /// v0.10.0「重复区域截图」：commit 时记录，`screenshot_repeat_region` 复用。
+    /// 只存内存（重启即忘）：区域是临时性快捷操作，跨会话恢复反而可能截到已变化的界面。
+    pub last_region: Mutex<Option<(i32, i32, u32, u32)>>,
 }
 
 impl ScreenshotState {
@@ -142,6 +146,7 @@ impl ScreenshotState {
             frame: Mutex::new(None),
             hidden: Mutex::new(Vec::new()),
             config: Mutex::new(config),
+            last_region: Mutex::new(None),
         }
     }
 }
@@ -442,10 +447,37 @@ impl Drop for CaptureInFlightGuard {
 /// 触发一次截图（全局快捷键 / 托盘菜单 / 前端调用共用）。
 /// 整体异步执行：隐藏自家窗 → 等一帧 → 抓屏 → 亮遮罩。
 pub fn begin_capture(app: &AppHandle) {
+    begin_capture_delayed(app, 0);
+}
+
+/// 触发一次截图，可带倒计时（v0.10.0 延时截图，借鉴 Snapzy）。
+///
+/// `delay_secs = 0` 即普通即时截图（同 [`begin_capture`]）；大于 0 时先倒计时再抓屏。
+/// 倒计时设计（与 Snapzy 一致的两个关键点）：
+/// - **不抢焦点**：倒计时期间用户可以在别的应用里摆界面 / 展开菜单，抓屏时拍到的
+///   就是摆好的状态。为此每秒只向 main 窗发 `screenshot-countdown` 事件（前端渲染
+///   悬浮倒计时），后端不弹任何窗、不 set_focus；
+/// - **可取消**：`screenshot_cancel_countdown` 置取消标志，倒计时循环每秒检查，
+///   取消后静默退出（闸门复位、无任何窗态变化）。审计补充：**倒计时期间再按
+///   截图快捷键 = 取消**——倒计时不抢焦点，主窗的取消按钮 / Esc 在用户焦点
+///   位于其他应用时收不到（全局 keydown 也只对自家窗生效）；快捷键是全局
+///   注册的，是唯一保证可达的取消通道。实现见下方重入分支。
+///
+/// 重入语义：倒计时全程持有 CaptureInFlight 闸门（延时截图本身也是一种进行中的会话）。
+/// 闸门被占时不再一律忽略——先看是不是「延时倒计时进行中」，是则**置取消标志**
+/// （快捷键 = 取消，全局可达）；否则维持旧行为忽略（遮罩亮着时重复触发会拍进
+/// 自家工具条，取消反而引发事故）。
+pub fn begin_capture_delayed(app: &AppHandle, delay_secs: u32) {
     // v0.9.7：重入保护 —— 已有一次截图会话在跑（遮罩窗亮着 / 抓屏进行中）时，
     // 忽略本次触发。修复「遮罩窗开着再按快捷键 → 工具条被截进新冻结帧」。
+    // v0.10.0（审计补充）：倒计时期间重入 = 取消（详见函数头「可取消」段）。
     let Some(_guard) = CaptureInFlightGuard::acquire() else {
-        tracing::debug!("截图会话进行中，忽略重入触发");
+        if COUNTDOWN_ACTIVE.load(std::sync::atomic::Ordering::Acquire) {
+            tracing::info!("延时截图倒计时中收到再次触发，按取消处理");
+            CANCEL_COUNTDOWN.store(true, std::sync::atomic::Ordering::Release);
+        } else {
+            tracing::debug!("截图会话进行中，忽略重入触发");
+        }
         return;
     };
     // v0.9.0：选了增强引擎就在后台先把模型加载好（~2.5s）。
@@ -460,6 +492,30 @@ pub fn begin_capture(app: &AppHandle) {
         // 遮罩亮起后的框选期间再触发，靠 SELF_OVERLAY_LABELS 含 capture 兜底
         //（hide-self 先把旧遮罩藏掉再抓屏，新冻结帧必然干净）。
         let _guard = _guard;
+
+        // v0.10.0：倒计时段（delay_secs > 0 时）。每秒发事件给 main 窗渲染倒计时，
+        // 取消标志一旦置位立即退出。倒计时在权限闸门之前——没授权的用户提前 3 秒
+        // 发现取消不了也没意义，授权引导留在真正抓屏时走既有链路。
+        if delay_secs > 0 {
+            CANCEL_COUNTDOWN.store(false, std::sync::atomic::Ordering::Release);
+            COUNTDOWN_ACTIVE.store(true, std::sync::atomic::Ordering::Release);
+            for remain in (1..=delay_secs).rev() {
+                let _ = app2.emit_to("main", "screenshot-countdown", remain);
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                if CANCEL_COUNTDOWN.load(std::sync::atomic::Ordering::Acquire) {
+                    tracing::info!("延时截图已取消");
+                    let _ = app2.emit_to("main", "screenshot-countdown", 0);
+                    // 撤标记后再退（否则下次触发会被误判为「取消」而非正常流程）
+                    COUNTDOWN_ACTIVE.store(false, std::sync::atomic::Ordering::Release);
+                    return;
+                }
+            }
+            // 倒计时结束：清零事件让前端撤掉倒计时 UI（0 = 结束信号）；
+            // 先撤「倒计时进行中」标记再走抓屏（此后重入恢复「忽略」语义）
+            let _ = app2.emit_to("main", "screenshot-countdown", 0);
+            COUNTDOWN_ACTIVE.store(false, std::sync::atomic::Ordering::Release);
+        }
+
         if let Err(e) = begin_capture_inner(&app2).await {
             tracing::error!(error = %e, "启动截图失败");
             // 失败路径：遮罩窗不亮，但必须把 hide-self 隐藏的窗还回去
@@ -470,6 +526,25 @@ pub fn begin_capture(app: &AppHandle) {
             let _ = app2.emit_to("main", "screenshot-error", e);
         }
     });
+}
+
+/// 延时截图取消标志（v0.10.0）。只在倒计时循环里消费，抓屏开始后无效。
+static CANCEL_COUNTDOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 「倒计时正在进行」标记（审计新增）。区分重入该取消还是该忽略：
+/// - true  → 倒计时中，重入触发 = 取消（快捷键全局可达，见函数头）；
+/// - false → 抓屏/框选进行中或无会话，重入维持旧行为（忽略）。
+/// 与 CANCEL_COUNTDOWN 分开：取消标志每轮倒计时先清零，若复用它判断会
+/// 把「上一轮已取消」误判为「本轮倒计时中」。
+static COUNTDOWN_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 取消进行中的延时截图倒计时（v0.10.0）。没有倒计时时是 no-op。
+#[tauri::command]
+pub fn screenshot_cancel_countdown() -> bool {
+    let had = CANCEL_COUNTDOWN.swap(true, std::sync::atomic::Ordering::AcqRel);
+    // 交换前的值只说明「有没有人取消过」，不代表倒计时是否存在；
+    // 返回值仅用于日志/调试，前端以 countdown=0 事件为准撤 UI。
+    !had
 }
 
 /// 后台预热增强引擎（非阻塞；已加载则是一次锁检查，几乎零成本）
@@ -698,16 +773,29 @@ pub struct ScreenshotResult {
 ///
 /// 入参是遮罩窗 canvas 合成后的**最终图**（已含裁剪、标注、圆角、投影），
 /// 本模块不再做任何像素加工——保证「屏幕上预览到的」与「导出的」逐像素一致。
+///
+/// v0.10.0：新增 `region` 可选参数（选区在冻结帧上的物理像素矩形 x/y/w/h）。
+/// 传了就记入 `last_region`，供 `screenshot_repeat_region` 重复截图；不传（旧调用方）
+/// 不影响任何行为。⚠️ 长图 finish 也走本 commit 管道（前端 longFinishStep 调用，
+/// v1.1.0 起），但**不传 region**（长图拼接自多次抓屏，无单一冻结帧选区语义），
+/// 所以不会污染 last_region。
 #[tauri::command]
 pub async fn screenshot_commit(
     app: AppHandle,
     png_base64: String,
     copy: bool,
     save: bool,
+    region: Option<(i32, i32, u32, u32)>,
 ) -> Result<ScreenshotResult, String> {
     let state = app
         .try_state::<ScreenshotState>()
         .ok_or_else(|| "截图状态未初始化".to_string())?;
+
+    // v0.10.0：记录本次选区（重复区域截图的数据源）。先记再干活——
+    // 即便后续剪贴板/落盘失败，用户框过的区域也是事实，下次重复仍应可用。
+    if let Some(r) = region {
+        *state.last_region.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+    }
 
     // 前端可能带 `data:image/png;base64,` 前缀，两种写法都容忍
     let b64 = png_base64
@@ -829,6 +917,212 @@ pub fn screenshot_trigger(app: AppHandle, state: tauri::State<'_, ScreenshotStat
     }
     begin_capture(&app);
     true
+}
+
+/// 延时截图（v0.10.0，借鉴 Snapzy）：倒计时 `seconds` 秒后进入正常截图流程。
+///
+/// 倒计时不抢焦点——用户可先把目标界面/菜单摆好。期间每秒向 main 窗发
+/// `screenshot-countdown`（剩余秒数，0 = 结束/取消），前端负责渲染与取消按钮。
+/// seconds 会被钳制到 1..=30（防误传 0 或超大值卡住会话闸门）。
+#[tauri::command]
+pub fn screenshot_trigger_delayed(
+    app: AppHandle,
+    state: tauri::State<'_, ScreenshotState>,
+    seconds: u32,
+) -> bool {
+    if !state.config.lock().unwrap_or_else(|e| e.into_inner()).enabled {
+        return false;
+    }
+    let seconds = seconds.clamp(1, 30);
+    begin_capture_delayed(&app, seconds);
+    true
+}
+
+/// 对上次框选的区域直接重新截图（v0.10.0，借鉴 Snapzy「重复区域截图」）。
+///
+/// 与 `begin_capture` 的差异：**跳过遮罩框选**，走「重入守卫 → hide-self → 权限闸门 →
+/// 抓屏 → 裁剪 → commit 管道」的精简路径，结果直接进剪贴板（可选落盘）。
+///
+/// 区域语义：`last_region` 是相对**冻结帧**的物理像素矩形（冻结帧 = 主屏整屏，
+/// 原点即主屏左上角），新抓屏与旧冻结帧同源同尺寸（同一显示器、同一分辨率）时逐像素对齐。
+/// 以下情况会**拒绝执行**并提示用户重新框选，绝不静默截错区域：
+/// - 从未框选过（last_region 为空）；
+/// - 新抓屏尺寸与旧冻结帧不一致（改了分辨率 / 缩放 / 显示器排布）；
+/// - 选区相对新帧越界（分辨率变了但宽高碰巧相同的兜底防御）。
+///
+/// 失败用「区域失效」专用错误文案返回，前端 toast 提示；成功走 screenshot-done 事件。
+#[tauri::command]
+pub async fn screenshot_repeat_region(
+    app: AppHandle,
+    save: bool,
+) -> Result<ScreenshotResult, String> {
+    const ERR_NO_REGION: &str = "还没有可重复的区域：先用快捷键正常截一次图";
+    const ERR_REGION_STALE: &str = "上次区域已失效（屏幕分辨率或布局变化），请重新框选";
+
+    let state = app
+        .try_state::<ScreenshotState>()
+        .ok_or_else(|| "截图状态未初始化".to_string())?;
+    let cfg = state
+        .config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    if !cfg.enabled {
+        return Err("截图总开关已关闭".into());
+    }
+
+    // ① 重入守卫：与 begin_capture 同一闸门，遮罩亮着/长图会话进行中都不允许重入
+    let Some(_guard) = CaptureInFlightGuard::acquire() else {
+        return Err("已有截图会话进行中".into());
+    };
+    // 守卫覆盖整个 async 块（RAII，任何 return 路径都会复位）
+    let _guard = _guard;
+
+    // ② 读上次区域（在守卫内快照，避免与并发 commit 竞争）
+    let region = (*state
+        .last_region
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()))
+    .ok_or_else(|| ERR_NO_REGION.to_string())?;
+    let (rx, ry, rw, rh) = region;
+
+    // ③ 权限闸门（macOS；逻辑与 begin_capture_inner 一致，权限失败走事件引导不报错）
+    if let Err(reason_code) = tauri::async_runtime::spawn_blocking(
+        crate::screenshot::platform::Backend::ensure_ready,
+    )
+    .await
+    .unwrap_or_else(|e| Err(format!("__THREAD__:{e}")))
+    {
+        if let Some(reason) = reason_code.strip_prefix("__PERM__:") {
+            let _ = app.emit_to("main", "screenshot-permission-blocked", reason);
+            return Ok(ScreenshotResult {
+                id: None,
+                file_name: None,
+                path: None,
+                width: 0,
+                height: 0,
+                copied: false,
+                saved: false,
+            });
+        }
+        return Err(reason_code
+            .strip_prefix("__THREAD__:")
+            .map(|e| format!("屏幕录制权限检查线程异常: {e}"))
+            .unwrap_or(reason_code));
+    }
+
+    // ④ hide-self → 等合成器稳定 → 抓屏（与 begin_capture_inner 同参数同节奏）
+    // ⚠️ 此行之后的所有 return 路径都必须先 restore_self，否则桌宠/浮窗永久消失
+    //（审计修复：原实现成功路径与 join 失败、剪贴板失败三处都漏了恢复）。
+    hide_self(&app, &state);
+    tokio::time::sleep(Duration::from_millis(160)).await;
+
+    let (img, _mx, _my, _mw, _mh, _scale) = match tauri::async_runtime::spawn_blocking(
+        crate::screenshot::platform::Backend::capture,
+    )
+    .await
+    {
+        // 抓屏线程异常 / 抓屏失败：都要先把自家窗还回来
+        Err(e) => {
+            restore_self(&app, &state);
+            return Err(format!("截图线程异常: {e}"));
+        }
+        Ok(Err(e)) => {
+            restore_self(&app, &state);
+            return Err(e);
+        }
+        Ok(Ok(c)) => c,
+    };
+    let (fw, fh) = (img.width(), img.height());
+
+    // ⑤ 区域有效性校验：分辨率变了绝不静默截错（这是与 Snapzy 一致的「失效 toast」策略）
+    let rx_u = rx.max(0) as u32;
+    let ry_u = ry.max(0) as u32;
+    if rx_u + rw > fw || ry_u + rh > fh {
+        restore_self(&app, &state);
+        tracing::warn!(
+            region = ?region,
+            frame = format!("{fw}x{fh}"),
+            "重复区域截图：选区超出当前屏幕，判定已失效"
+        );
+        return Err(ERR_REGION_STALE.to_string());
+    }
+
+    // ⑥ 裁剪 → 复用 commit 的落盘/剪贴板管道（裁剪图无标注/圆角，所见即所得）
+    let cropped = image::imageops::crop_imm(&img, rx_u, ry_u, rw, rh).to_image();
+
+    let out = ScreenshotResult {
+        id: None,
+        file_name: None,
+        path: None,
+        width: rw,
+        height: rh,
+        copied: false,
+        saved: false,
+    };
+
+    // ⑦ 剪贴板（重复截图的主用途就是快速拿到同一区域的最新内容）
+    if let Err(e) = write_clipboard(&cropped) {
+        restore_self(&app, &state);
+        return Err(e);
+    }
+    let mut result = ScreenshotResult { copied: true, ..out };
+    tracing::info!(w = rw, h = rh, "重复区域截图已复制到剪贴板");
+
+    // ⑧ 可选落盘（复用 commit 的归档 + FIFO 清理逻辑）
+    if save {
+        match save_cropped(&app, &state, &cropped).await {
+            Ok((id, file_name, path)) => {
+                result.id = Some(id);
+                result.file_name = Some(file_name);
+                result.path = Some(path);
+                result.saved = true;
+            }
+            Err(e) => {
+                // 落盘失败不回滚剪贴板：主用途（复制）已达成
+                tracing::warn!(error = %e, "重复区域截图落盘失败（剪贴板已复制）");
+            }
+        }
+    }
+
+    // ⑨ 恢复自家窗（审计修复：原实现成功路径漏了这步，桌宠/浮窗会一直藏着）
+    restore_self(&app, &state);
+
+    // ⑩ 通知主窗（前端 toast 文案按 copied/saved 组合渲染）
+    let _ = app.emit_to("main", "screenshot-done", result.clone());
+    Ok(result)
+}
+
+/// 落盘 + 入库 + FIFO 清理（v0.10.0 从 `screenshot_commit` 的 ② 段提取复用）。
+async fn save_cropped(
+    app: &AppHandle,
+    state: &ScreenshotState,
+    img: &RgbaImage,
+) -> Result<(i64, String, String), String> {
+    let png = encode_png(img)?;
+    let dir = screenshots_dir(app)?;
+    let file_name = default_file_name();
+    let path = dir.join(&file_name);
+    std::fs::write(&path, &png).map_err(|e| format!("写入截图文件失败: {e}"))?;
+
+    let app_state = app
+        .try_state::<Arc<AppState>>()
+        .ok_or_else(|| "应用状态未初始化".to_string())?;
+    let created_at = chrono::Local::now().to_rfc3339();
+    let id = app_state
+        .db
+        .insert_screenshot(
+            &file_name,
+            img.width(),
+            img.height(),
+            png.len() as i64,
+            &created_at,
+            &app_state.device_id,
+        )
+        .map_err(|e| format!("写入截图索引失败: {e}"))?;
+    tracing::info!(path = %path.display(), bytes = png.len(), "截图已归档");
+    prune_history(app, &app_state, state);
+    Ok((id, file_name, path.to_string_lossy().to_string()))
 }
 
 #[tauri::command]

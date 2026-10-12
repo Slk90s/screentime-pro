@@ -57,11 +57,11 @@
 
     <!-- 权限引导横幅：macOS 未授予辅助功能权限时提示（空闲检测需要） -->
     <!-- v-show 而非 v-if：关闭后仍保留 DOM，重新检测到未授权时可再次显示 -->
-    <div v-if="showPermWarning && !permDismissed" class="perm-banner">
-      <span>{{ t("app.permWarning") }}</span>
+    <div v-if="showPermWarning" class="perm-banner">
+      <span>{{ accessibilityNeverGranted ? t("app.permWarning") : t("app.permWarningInvalidated") }}</span>
       <div class="perm-actions">
         <button @click="openSettings">{{ t("app.openSettings") }}</button>
-        <button class="perm-dismiss" @click="permDismissed = true" :title="t('app.dismissTip')"><AppIcon name="x" /></button>
+        <button class="perm-dismiss" @click="accessibilityNeverGranted ? (permDismissed = true) : (permInvalidDismissed = true)" :title="t('app.dismissTip')"><AppIcon name="x" /></button>
       </div>
     </div>
 
@@ -95,6 +95,15 @@
       :reason="permDialogReason"
       @close="permDialogReason = null"
     />
+
+    <!-- v1.1.0：延时截图悬浮倒计时（借鉴 Snapzy）。小巧不遮挡，Esc 可取消 -->
+    <div v-if="countdown > 0" class="shot-countdown">
+      <span class="shot-countdown-num">{{ countdown }}</span>
+      <span class="shot-countdown-label">{{ t("shot.countdownTip") }}</span>
+      <button class="shot-countdown-cancel" @click="onCountdownCancel" :title="t('app.dismissTip')">
+        {{ t("shot.countdownCancel") }}
+      </button>
+    </div>
   </div>
 </template>
 
@@ -106,7 +115,7 @@
 // 3. 首次运行默认开启「开机自启」
 // 4. macOS 权限缺失时弹出引导横幅
 
-import { ref, onMounted, onBeforeUnmount, computed } from "vue";
+import { ref, onMounted, onBeforeUnmount, computed, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { isTauri } from "./api/tracker";
@@ -156,6 +165,11 @@ const live = ref<CurrentForegroundOut>({
 const perm = ref<PermissionStatus>({ accessibility: true, screen_capture: true });
 // 用户手动关闭了权限横幅（关闭后不再显示，除非页面重新加载）
 const permDismissed = ref(false);
+// v1.0.1：授权失效横幅只提示一次（用户关闭后不再骚扰）。
+// 「失效」= 屏幕录制已授权但辅助功能未授权 —— 这是升级后 TCC 身份漂移的典型特征
+// （ad-hoc 签名每次重建指纹都变，旧授权对新版二进制失效，系统设置开关看着还开着）。
+// 与「从未授权」不同：用户大概率以前授权过，只是需要关掉再重开一次，常驻横幅只会造成困扰。
+const permInvalidDismissed = ref(false);
 // WebView2 检测结果（仅 Windows 真正生效）
 const webview2 = ref<{ os: string; available: boolean; version: string; hint: string } | null>(null);
 // 用户手动关闭了 WebView2 横幅
@@ -171,11 +185,25 @@ let errTimer: number | undefined;
 // screenshot-permission-blocked（截图被闸门拦）/ screenshot-permission-changed（启动预请求后仍未授权）
 const permDialogReason = ref<string | null>(null);
 let timer: number | undefined;
+// v1.1.0：延时截图倒计时剩余秒数（0 = 无倒计时）。由 Rust screenshot-countdown 事件驱动
+const countdown = ref(0);
+let countdownKeys: { remove: () => void } | null = null;
 // 已注册的 Tauri 事件监听器「注销函数」集合，统一在 onBeforeUnmount 注销（防监听器泄漏）
 const unlisteners: Array<() => void> = [];
 
 // 仅当辅助功能未授权时显示横幅（非 macOS 恒为 true，不显示）
-const showPermWarning = computed(() => !perm.value.accessibility);
+// v1.0.1：区分「从未授权」（screen_capture 也没授权，常驻可关）与
+// 「升级后失效」（screen_capture 已授权 = 用户以前授权过，是 TCC 漂移特征）——
+// 失效横幅文案不同，且关闭后不再重复弹出。
+const accessibilityNeverGranted = computed(
+  () => !perm.value.accessibility && !perm.value.screen_capture
+);
+const showPermWarning = computed(() => {
+  if (perm.value.accessibility) return false;
+  return accessibilityNeverGranted.value
+    ? !permDismissed.value
+    : !permInvalidDismissed.value;
+});
 // WebView2 缺失横幅（仅 Windows + 未安装时显示）
 const showWebview2Warning = computed(() => webview2.value !== null && webview2.value.os === "windows" && !webview2.value.available);
 
@@ -211,6 +239,40 @@ async function openWebview2Download() {
     /* ignore */
   }
 }
+
+// v1.1.0：取消延时截图倒计时（按钮点击 / Esc 共用）。后端置取消标志 →
+// 倒计时循环下秒退出并发 countdown=0 → 本组件收到 0 后自动收起 UI。
+async function onCountdownCancel() {
+  countdown.value = 0;
+  removeCountdownKey();
+  try {
+    const { screenshot } = await import("./api/screenshot");
+    await screenshot.cancelCountdown();
+  } catch {
+    /* 非 Tauri 环境忽略 */
+  }
+}
+
+// v1.1.0：倒计时期间挂 Esc 取消（document 级，capture 窗口不接管时也能生效）
+function removeCountdownKey() {
+  if (countdownKeys) {
+    countdownKeys.remove();
+    countdownKeys = null;
+  }
+}
+watch(countdown, (v) => {
+  if (v > 0 && !countdownKeys) {
+    const down = (e: KeyboardEvent) => {
+      if (e.key === "Escape") void onCountdownCancel();
+    };
+    document.addEventListener("keydown", down, true);
+    countdownKeys = {
+      remove: () => document.removeEventListener("keydown", down, true),
+    };
+  } else if (v === 0) {
+    removeCountdownKey();
+  }
+});
 
 // 首次运行默认开启「开机自启」：若本地无偏好记录，则开启并保存
 async function ensureAutostart() {
@@ -250,6 +312,7 @@ onMounted(async () => {
             // 如果检测到权限已恢复，重置关闭标记
             if (perm.value.accessibility) {
               permDismissed.value = false;
+              permInvalidDismissed.value = false;
             }
           } catch { /* ignore */ }
         }, 300);
@@ -308,6 +371,20 @@ onMounted(async () => {
         }
       )
     );
+    // v1.1.0：延时截图倒计时（Rust begin_capture_delayed 每秒发出，payload = 剩余秒数；
+    // 0 = 结束或取消）。>0 显示悬浮倒计时，0 收起。Esc 可取消（见下方keydown）。
+    unlisteners.push(
+      await listen<number>("screenshot-countdown", (ev) => {
+        const remain = ev.payload ?? 0;
+        if (remain > 0) {
+          countdown.value = remain;
+        } else {
+          countdown.value = 0;
+          // 结束时同步撤掉 keydown 监听
+          removeCountdownKey();
+        }
+      })
+    );
   } catch { /* 非 Tauri 环境 */ }
 
   // 首次运行默认开启开机自启
@@ -325,6 +402,7 @@ onBeforeUnmount(() => {
   if (timer) clearInterval(timer);
   if (toastTimer) clearTimeout(toastTimer);
   if (errTimer) clearTimeout(errTimer);
+  removeCountdownKey();
   // 注销所有 Tauri 事件监听器，防止监听器累积泄漏
   for (const un of unlisteners) {
     try { un(); } catch { /* ignore */ }

@@ -1,13 +1,5 @@
 // 与后端 src-tauri/src/db/models.rs 中的 serde 结构一一对应
 
-export interface AppInfoOut {
-  id: number;
-  name: string;
-  process_name: string;
-  category_id: string;
-  icon_base64?: string | null;
-}
-
 export interface SessionOut {
   id: number;
   app_id: number;
@@ -171,30 +163,8 @@ export interface SettingsOut {
   autostart: boolean;
 }
 
-export interface ExportApp {
-  name: string;
-  process_name: string;
-  exe_path: string;
-  category_id: string;
-  platform: string;
-}
-export interface ExportSession {
-  app_process: string;
-  app_platform: string;
-  start_at: string;
-  end_at: string;
-  duration_seconds: number;
-  date: string;
-  window_title: string;
-  device: string;
-}
-export interface ExportBundle {
-  version: number;
-  exported_at: string;
-  devices: Record<string, string>;
-  apps: ExportApp[];
-  sessions: ExportSession[];
-}
+// ===== 备份 JSON 结构（后端 ExportBundle serde 对应；前端 Settings 备份导入按
+// 字符串透传给 Rust 解析，不在 TS 侧解构，故仅保留 ExportResult）=====
 
 // ===== v0.7.6：状态栏配置（取代 v0.7.5 单字段 metrics_enabled）=====
 

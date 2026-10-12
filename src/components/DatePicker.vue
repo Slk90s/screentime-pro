@@ -1,3 +1,16 @@
+<!--
+  src/components/DatePicker.vue
+  纯 CSS 日历选择器（v0.7.0 引入）：月视图 + 本月概况（活跃天数/月总时长/日均/最常使用）。
+
+  设计思路：
+  - 组件在 Dashboard 中**无条件渲染**（仅内部浮层用 v-if="visible" 控制显隐），
+    setup/onMounted 只跑一次——依赖 onMounted 拉数据的功能在「重开日历」时不会刷新。
+  - 数据刷新锚点：visible watch（打开即拉 + 开启 60s 静默定时器，关闭即清）+ 切月 watch。
+
+  修改历史：
+  - 2026-10-12 @v1.1.0: 修复 - 活跃天数/月概况不刷新（常驻实例只拉一次）；visible watch + 60s 定时器
+  - 2026-09-14 @v0.7.0: 初始 - 日历选择器 + 本月概况卡片
+-->
 <template>
   <!-- 纯 CSS 日历选择器，无需第三方依赖 -->
   <div class="date-picker-overlay" v-if="visible" @click.self="$emit('close')">
@@ -281,7 +294,29 @@ watch([viewYear, viewMonth], () => {
   void loadMonthSummary();
 });
 
-// v0.7.0：打开日历 / 外部选中日期变化时，视图同步跳到对应月份
+// v1.1.0 修复「活跃天数不刷新」：DatePicker 在 Dashboard 中是无条件渲染的常驻
+// 组件实例（仅内部浮层用 v-if="visible" 控制显隐），setup/onMounted 只跑一次——
+// 此前只在 onMounted + 切月时拉取，日历开着不动时本月概况（活跃天数/月总时长/
+// 日均）就永远是打开那一刻的快照，当天持续记录也不会更新，看起来像「要重启才刷新」。
+// 现在每次打开日历（visible 变 true）都重新拉取，打开期间每 60s 静默刷新一次
+// （日历是短生命周期浮层，60s 足够跟手；关闭时清掉定时器）。
+let summaryTimer: number | null = null;
+
+function startSummaryRefresh(): void {
+  stopSummaryRefresh();
+  summaryTimer = window.setInterval(() => {
+    void loadMonthSummary();
+  }, 60_000);
+}
+
+function stopSummaryRefresh(): void {
+  if (summaryTimer !== null) {
+    window.clearInterval(summaryTimer);
+    summaryTimer = null;
+  }
+}
+
+// 打开日历 / 外部选中日期变化时，视图同步跳到对应月份
 // （覆盖「回到今天」「点柱状图选历史日期」等场景，让所选日期始终在可视月内）
 function syncViewToValue(): void {
   const ym = parseYM(props.value);
@@ -297,7 +332,13 @@ watch(
 watch(
   () => props.visible,
   (v) => {
-    if (v) syncViewToValue();
+    if (v) {
+      syncViewToValue();
+      void loadMonthSummary();
+      startSummaryRefresh();
+    } else {
+      stopSummaryRefresh();
+    }
   },
 );
 

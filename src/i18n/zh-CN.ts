@@ -50,6 +50,8 @@ export default {
     webview2Download: "去下载",
     permWarning:
       "未授予「辅助功能」权限，空闲检测与部分采集可能不准确。请到系统设置开启后重启本程序。",
+    permWarningInvalidated:
+      "检测到「辅助功能」授权已失效（多为升级后签名变化所致，系统设置里可能仍显示已开启）。请在系统设置中把本应用关掉再重新打开，然后重启本程序。",
     openSettings: "前往系统设置",
     dismissTip: "暂时关闭提示",
   },
@@ -160,6 +162,11 @@ export default {
     longCancel: "取消长图",
     longBusy: "正在截取拼接…",
     longProgress: "已截 {n} 屏 · 高 {h}px",
+    // v1.1.0：低置信拼接提示（多行命中待下一屏验证，完成前会自动复核/回滚）
+    longTentative: "上一屏拼接为低置信（页面版式重复），建议滚动后再截一屏以复核；完成时会自动校验，如拼错会回滚。",
+    // v1.1.0：延时截图悬浮倒计时（主窗右下角）
+    countdownTip: "秒后开始截图",
+    countdownCancel: "取消 (Esc)",
   },
   settings: {
     deviceData: "设备与数据",
@@ -205,6 +212,12 @@ export default {
     shotDir: "截图目录",
     shotOpenDir: "打开目录",
     shotNow: "立即截图",
+    // v1.1.0：重复区域截图（借鉴 Snapzy）——对上次框选的区域一键重截，跳过框选流程
+    shotRepeat: "重复上次区域",
+    shotRepeatHint: "对上次框选的区域直接重新截图并复制到剪贴板，不再进入框选流程。截过一次图后可用。",
+    shotRepeatNone: "还没有可重复的区域：先用快捷键正常截一次图",
+    shotDelay: "延时截图",
+    shotDelayHint: "倒计时结束后自动进入截图流程。倒计时不抢焦点，可以先摆好目标界面或展开菜单（悬浮倒计时可点取消或按 Esc 中止）。",
     shotHistory: "截图历史",
     shotHistoryEmpty: "还没有截图记录",
     shotDelete: "删除",
