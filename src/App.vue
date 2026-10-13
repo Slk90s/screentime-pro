@@ -13,7 +13,7 @@
     - 2026-07-24 @v0.6.1-beta.1: 修复 - 顶部实时栏 IPC 字段名 bug（camelCase → snake_case，与 Rust 返回值对齐）
     - 2026-07-25 @v0.6.2-beta.17: 新增 - 桌宠右键菜单独立 webview 分支
     - 2026-08-05 @v0.6.2-beta.26: 修复 - 浏览器预览时 getCurrentWebviewWindow() 抛错导致白屏
-    - 2026-09-10 @Unreleased: 新增 - 悬浮指标条独立 webview 分支（FloatBar，label='float'）
+    - 2026-09-10 @v0.7.6: 新增 - 悬浮指标条独立 webview 分支（FloatBar，label='float'）
 -->
 <template>
   <!-- v0.6.0-beta 桌宠窗口分支：独立 webview 渲染 PetWindow（透明/置顶/无主 UI） -->

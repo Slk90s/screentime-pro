@@ -5,7 +5,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](https://github.com/)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0-blue)](./release)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue)](./release)
 
 ---
 
@@ -89,6 +89,7 @@
 
 | 版本 | 发布时间 | 状态 | 关键说明 |
 |------|----------|------|----------|
+| **v1.1.0** | 2026-10-13 | ✨ **功能增强版（重复区域截图 + 延时截图）** | **新增重复区域截图与延时截图 + 长图置信分级与三处开关体验修复**。① **重复区域截图**：截图工具条新增「再次截取」按钮——复用上一次截图的选区矩形一键重截（悬浮窗/监控面板等位置固定的区域重复采集），分辨率或 DPI 变化时显式报错而非错位截取（`frame_size` 守卫）。② **延时截图**：工具条新增 3/5/10 秒倒计时——先框选再延迟抓屏，留出时间展开菜单/切换到待截界面；倒计时期间重按快捷键即取消。③ **长图置信分级**：重叠检测命中多段时标记「低置信」并以琥珀色提示条透出（建议滚动后再截一屏复核），覆盖不足时不再静默定案（Confirmed/Tentative/CannotVerify 三态裁决，拼错自动回滚）。④ **修复日历活跃天数不刷新**：日历开着时本月概况不再冻结在打开那一刻的快照（常驻实例改为打开即拉 + 60s 静默刷新）。⑤ **托盘/设置页/悬浮条三处开关同步**核验通过；托盘勾选态与设置页双向即时一致 |
 | **v1.0.0** | 2026-09-29 | 🎉 **首个正式版（滑动截长图）** | **新增滑动截长图 + 修复 macOS 截图画中画（Retina 几何）+ 文字标注敲定后可再拖动**（v0.9.7 后 5 个提交）。① **滑动截长图**：截图工具条新增「长图」按钮——框选后进入长图面板，手动滚动页面逐屏续捕，Rust 侧以重叠检测自动拼接（探针行=新图顶 1/8、在底图底部 600px 带内滑动、列采样 8px、通道容差 12、取最低匹配=最短滚动），键盘 Enter=续捕、Shift+Enter=完成、Esc=退出；完成走 screenshot_commit 复用剪贴板/存盘/DB/历史全链路；IPC 88→92。② **macOS 截图画中画**：Retina 屏逻辑像素↔物理像素 2x 混用导致框选几何错位，统一换算后落帧。③ **文字标注**：双击敲定后可继续拖动调整位置。④ **工程收口**：子进程统一 proc::hidden 防控制台闪窗；跨平台 cfg 收口到 system_load/platform 与 screenshot/platform |
 | **v0.9.7** | 2026-09-22 | 🐞 **四缺陷修复版** | **修复 Windows 应用名重复 + macOS「Item-0」+ 截图重入 + 截图历史单选失效**（四项均为用户实测反馈）。① **Windows 录制应用名重复**：列表显示「ScreenTime Pro · ScreenTime Pro」——根因 `windows.rs` 把 `name` 填成窗口标题，而 UI 渲染「name · 窗口标题」，两者必然相同；现 `name` 改用进程名（去 `.exe` 后缀），窗口标题匹配职责由 `window_title` 字段独立承担（分类器匹配 5 字段，规则不受影响）。② **macOS 状态栏「Item-0」**：前台应用带 NSStatusItem 时，系统给状态栏项生成的占位标题「Item-0」被当成窗口标题记进库；现 `get_foreground_window_title` 加 `kCGWindowLayer==0` 过滤（与 `probe_foreign_titles` 口径一致）。③ **截图重入工具条入镜**：遮罩亮着时再按快捷键，旧冻结帧的工具条被截进新图；现 `begin_capture` 加 `CAPTURE_IN_FLIGHT` RAII 重入闸门 + `SELF_OVERLAY_LABELS` 纳入 `capture` 窗口。④ **截图历史单选失效**：`.shot-check` 是 `position:absolute` 但 `.shot-item` 漏 `position:relative`，勾选框全部脱锚到页面左上角叠成一团；补锚 + 整卡可点 |
 | **v0.9.6** | 2026-09-22 | 🐞 **弹窗交互修复版** | **修复设置页弹窗「确定」关不掉（P1）+「检查更新」标题缺版本号**。根因一：v0.9.4 为 macOS 权限弹窗加「重启应用」按钮时用 footer slot **覆盖**了 Modal 自带按钮，自定义「确定」只执行确认回调、**丢失了 Modal 自带按钮的 close() 行为**——v0.9.4 起设置页所有弹窗点「确定」均无反应（只能右上角 X / 点遮罩 / Esc 关闭）。修复：`onAlertConfirm` 补回 `alertOpen=false`，且**先关弹窗再跑回调**（回调里常再弹「已清理」等结果弹窗，顺序反了会被误关）。根因二：「检查更新」弹窗标题 `t("settings.upToDate")` **漏传 `{current}` 插值参数**，标题渲染成「已是最新版本（v）」；补传后正确显示「已是最新版本（v0.9.6）」。⚠️ 本版仅改前端交互，应用功能与 v0.9.5 完全一致 |

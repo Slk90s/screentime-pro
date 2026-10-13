@@ -10,7 +10,7 @@
  * - 参数命名遵循 Tauri v2 约定：Rust 侧 snake_case 形参，JS 侧传 camelCase（如 maxWidth / pngBase64）。
  * - **合成在前端**（v0.8.0 修订）：遮罩窗 canvas 把裁剪/标注/圆角/投影画好后整体交给
  *   `screenshot_commit`，Rust 不再做像素加工 → 预览与导出逐像素一致。
- * - v0.9.7 Unreleased：长图四件套（longStart/longCapture/longFinish/longCancel），
+ * - v1.0.0：长图四件套（longStart/longCapture/longFinish/longCancel），
  *   截图与拼接在 Rust 完成（长图模式遮罩会隐藏、无法走前端 canvas 合成）。
  */
 
@@ -188,7 +188,7 @@ export const screenshot = {
   /** 重启应用（TCC 新授权只对新进程生效 —— 轮询发现授权翻转后引导用户点这个） */
   restartApp: (): Promise<void> => invoke<void>("screenshot_restart_app"),
 
-  // ===== v0.9.7 Unreleased：滑动截长图 =====
+  // ===== v1.0.0：滑动截长图 =====
 
   /**
    * 开始长图会话：以选区矩形（物理像素）为裁剪依据抓首屏。

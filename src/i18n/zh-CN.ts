@@ -152,7 +152,7 @@ export default {
     toastCopied: "已复制到剪贴板，Ctrl+V 直接粘贴",
     toastSaved: "已保存到截图历史",
     toastBoth: "已复制到剪贴板，并保存到截图历史",
-    // v0.9.7 Unreleased（2026-09-22）：滑动截长图
+    // v1.0.0（2026-09-22）：滑动截长图
     longEnter: "滑动截长图",
     longTitle: "截长图",
     longHint:

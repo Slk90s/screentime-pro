@@ -151,7 +151,7 @@ export default {
     toastCopied: "Copied to clipboard — paste with Ctrl+V",
     toastSaved: "Saved to screenshot history",
     toastBoth: "Copied to clipboard and saved to history",
-    // v0.9.7 Unreleased (2026-09-22): scrolling long screenshot
+    // v1.0.0 (2026-09-22): scrolling long screenshot
     longEnter: "Scrolling long screenshot",
     longTitle: "Long screenshot",
     longHint:

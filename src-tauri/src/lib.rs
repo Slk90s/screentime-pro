@@ -328,7 +328,7 @@ pub fn run() {
             // 截图配置从 settings 表读（首启即默认值：快捷键 CmdOrCtrl+Shift+A、确认即复制剪贴板）
             let screenshot_cfg = screenshot::ScreenshotConfig::load(&app_state.db);
             app.manage(screenshot::ScreenshotState::new(screenshot_cfg.clone()));
-            // v0.9.7 Unreleased：长图会话状态（start/capture/finish/cancel 共用）
+            // v1.0.0：长图会话状态（start/capture/finish/cancel 共用）
             app.manage(screenshot::long::LongShotState::default());
             app.manage(pet::PetHitState::default());
             // 注册截图全局快捷键。失败不致命：可能被系统/其他软件占用，
@@ -740,7 +740,7 @@ pub fn run() {
             screenshot::screenshot_request_permission,
             screenshot::screenshot_open_permission_settings,
             screenshot::screenshot_restart_app,
-            // v0.9.7 Unreleased：滑动截长图（会话 start/capture/finish/cancel 四件套）
+            // v1.0.0：滑动截长图（会话 start/capture/finish/cancel 四件套）
             screenshot::screenshot_long_start,
             screenshot::screenshot_long_capture,
             screenshot::screenshot_long_finish,

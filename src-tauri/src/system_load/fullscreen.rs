@@ -18,7 +18,7 @@
 //! FFI 风格与 network.rs 一致：裸 `extern "system"` 声明，不引入 windows crate。
 //!
 //! 修改历史：
-//!   - 2026-09-10 @Unreleased: 初始创建 - Windows 实装，其余平台 stub。
+//!   - 2026-09-10 @v0.7.6: 初始创建 - Windows 实装，其余平台 stub。
 //!   - 2026-09-16 @v0.8.0: macOS 实装（前台普通窗口 bounds vs 主显示器 bounds）。
 
 #[cfg(target_os = "windows")]

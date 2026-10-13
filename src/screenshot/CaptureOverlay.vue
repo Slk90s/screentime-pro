@@ -136,7 +136,7 @@
       <button class="tb" :class="{ on: tool === 'text' }" :title="t('shot.toolText')" @click="pick('text')">
         <svg viewBox="0 0 20 20" width="18" height="18"><path d="M4 5h12M10 5v11" /></svg>
       </button>
-      <!-- v0.9.7 Unreleased：滑动截长图（进入后遮罩转长图模式，用户手动滚动 + 逐屏截取） -->
+      <!-- v1.0.0：滑动截长图（进入后遮罩转长图模式，用户手动滚动 + 逐屏截取） -->
       <button
         v-if="!longMode"
         class="tb"
@@ -249,7 +249,7 @@
       @blur="commitText"
     />
 
-    <!-- v0.9.7 Unreleased：长图模式浮层（替换工具栏成为唯一交互入口） -->
+    <!-- v1.0.0：长图模式浮层（替换工具栏成为唯一交互入口） -->
     <div v-if="box && longMode" class="panel panel--long" :style="longPanelStyle" @pointerdown.stop>
       <div class="ocr-head">
         <span class="pill-label">{{ t("shot.longTitle") }}</span>
@@ -999,7 +999,7 @@ function pick(name: Tool) {
   activePanel.value = null;
 }
 
-// ===== v0.9.7 Unreleased：滑动截长图 =====
+// ===== v1.0.0：滑动截长图 =====
 //
 // 交互流程（与 Rust long.rs 的设计对应）：
 // ① 用户框选 → 点工具栏「长图」→ longStart（Rust 用冻结帧抓首屏，零闪烁）
@@ -1225,7 +1225,7 @@ function reset() {
   ocrLang.value = "";
   ocrCopied.value = false;
   ocrStale.value = false;
-  // v0.9.7 Unreleased：长图状态一并复位（会话本身由 Rust commit/cancel 清掉）
+  // v1.0.0：长图状态一并复位（会话本身由 Rust commit/cancel 清掉）
   longMode.value = false;
   longBusy.value = false;
   longErr.value = "";
@@ -1591,7 +1591,7 @@ onBeforeUnmount(() => {
   color: #f1f5f9;
 }
 
-/* ===== v0.9.7 Unreleased：长图模式 ===== */
+/* ===== v1.0.0：长图模式 ===== */
 /* 半透明「幽灵」选区框：不压暗（屏幕必须看得清才能滚动对齐），只提示截取范围 */
 .hole--ghost {
   box-shadow: 0 0 0 6000px rgba(2, 6, 23, 0) !important;
