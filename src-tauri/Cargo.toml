@@ -58,7 +58,11 @@ base64 = "0.22"
 sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png"] }
 tauri-plugin-global-shortcut = "2"
-ort = { version = "2.0.0-rc.13", features = ["load-dynamic"] }
+# ⚠️ 精确 pin：ort 是 RC 预发布版，Cargo 对 pre-release 的兼容规则会把
+# "2.0.0-rc.13" 解析到更新的 rc（rc.14 起breaking：Environment 必须显式 build 传参），
+# 曾导致 v1.1.0 三平台 CI 全挂（E0599 commit 不存在 / E0061 builder 缺参）。
+# 升级 rc.14+ 时须同步改 ocr_onnx.rs 的 ensure_env / Session::builder 三处调用。
+ort = { version = "=2.0.0-rc.13", features = ["load-dynamic"] }
 ndarray = "0.17.2"
 
 # ---- macOS 专属依赖（对齐 Tauri 2.x 引入的 objc2 0.6，避免重复编译）----

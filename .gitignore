@@ -9,8 +9,8 @@ src-tauri/target/
 src-tauri/gen/
 
 # Tauri generated (schemas, etc.)
-src-tauri/Cargo.lock
-# NOTE: 若希望锁定依赖可取消上面一行并改为提交 Cargo.lock
+# Cargo.lock 已入库（2026-10-13）：桌面应用要求构建可重现——v1.1.0 CI 因无锁文件
+# 解析到 ort rc.14（发布当日新 RC，breaking）三平台全挂。锁文件入库后 CI 与本地一致。
 
 # Release binaries (发布安装包通过 GitHub Releases 分发，不入库)
 release/
