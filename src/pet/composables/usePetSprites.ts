@@ -20,6 +20,7 @@
  */
 import { reactive, watch } from 'vue';
 import type { PetState, PetDecoration } from '../types';
+import { log } from "@/lib/logger";
 import {
   getComposition,
   type PetComposition,
@@ -62,7 +63,7 @@ function saveJSON(key: string, value: unknown): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch (e) {
-    console.warn('[pet] localStorage 写入失败（可能超限）', e);
+    log.warn('[pet] localStorage 写入失败（可能超限）', e);
   }
 }
 
@@ -91,7 +92,7 @@ function setCustomSprite(spriteId: string, dataUrl: string): boolean {
   // 粗略估算大小（base64 ≈ 原始 * 4/3）
   const estimatedBytes = Math.floor((dataUrl.length - 'data:image/png;base64,'.length) * 0.75);
   if (estimatedBytes > MAX_SPRITE_SIZE) {
-    console.warn(`[pet] 素材 ${spriteId} 过大（~${(estimatedBytes / 1024).toFixed(0)}KB > 256KB）`);
+    log.warn(`[pet] 素材 ${spriteId} 过大（~${(estimatedBytes / 1024).toFixed(0)}KB > 256KB）`);
     return false;
   }
   state.sprites[spriteId] = dataUrl;
@@ -216,7 +217,7 @@ function importConfig(jsonStr: string): boolean {
     }
     return true;
   } catch (e) {
-    console.error('[pet] 导入配置失败', e);
+    log.error('[pet] 导入配置失败', e);
     return false;
   }
 }

@@ -15,6 +15,7 @@
  */
 import type { PetState } from '../types';
 import defaultPhrases from '../config/bubble-phrases.json';
+import { log } from "@/lib/logger";
 
 const STORAGE_KEY = 'pet_bubble_phrases';
 
@@ -39,7 +40,7 @@ function loadCustom(): CustomPhraseLibrary {
       if (parsed && typeof parsed === 'object') return parsed;
     }
   } catch (e) {
-    console.warn('[pet] 读取自定义气泡配置失败', e);
+    log.warn('[pet] 读取自定义气泡配置失败', e);
   }
   return {};
 }
@@ -49,7 +50,7 @@ function saveCustom(custom: CustomPhraseLibrary): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(custom));
   } catch (e) {
-    console.warn('[pet] 保存自定义气泡配置失败', e);
+    log.warn('[pet] 保存自定义气泡配置失败', e);
   }
 }
 
@@ -154,6 +155,6 @@ export function resetAllCustomPhrases(): void {
   try {
     localStorage.removeItem(STORAGE_KEY);
   } catch (e) {
-    console.warn('[pet] 重置自定义气泡配置失败', e);
+    log.warn('[pet] 重置自定义气泡配置失败', e);
   }
 }

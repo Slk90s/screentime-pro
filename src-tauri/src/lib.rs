@@ -5,6 +5,12 @@
 //! 2. 系统托盘：应用关闭时最小化到托盘/菜单栏，而不是直接退出
 //! 3. 菜单栏纯后台模式（macOS）：设为 Accessory 激活策略，去掉 Dock 图标
 //! 4. 启动即自动追踪 + 开机自启；命令注册
+//!
+//! 修改历史（本文件近期变更）：
+//!   - 2026-10-17 @v1.1.1: 废弃 - 移除滑动截长图：`app.manage(screenshot::long::LongShotState)`
+//!     与 `generate_handler!` 内 4 个 `screenshot_long_*` 命令（截图 IPC 26→22）。
+//!     原因见 `screenshot/mod.rs` 修改历史段。
+//!
 
 mod categorizer;
 mod classifier;
@@ -53,8 +59,8 @@ pub struct AppState {
 }
 
 /// v0.7.6（2026-09-10）：托盘快捷开关菜单项句柄（setup 构建 tray 菜单后 manage）。
-/// 用途：设置页 `set_status_bar_config` / `set_system_metrics_enabled` 保存成功后
-/// 调用 `sync()` 同步菜单勾选态，防止「设置页改了、托盘菜单还挂旧勾」的显示不一致。
+/// 用途：设置页 `set_status_bar_config` 保存成功后调用 `sync()` 同步菜单勾选态，
+/// 防止「设置页改了、托盘菜单还挂旧勾」的显示不一致。
 /// CheckMenuItem 句柄是廉价 clone（内部同一 Arc），与菜单事件闭包里持有的 clone 互不冲突。
 /// 托盘菜单唯一的快捷开关句柄（**启用状态栏**总开关）。
 /// v0.7.6 初版曾含 状态栏/CPU/网速/内存 四项勾选；2026-09-10 按 Ryan 反馈精简为
@@ -328,8 +334,6 @@ pub fn run() {
             // 截图配置从 settings 表读（首启即默认值：快捷键 CmdOrCtrl+Shift+A、确认即复制剪贴板）
             let screenshot_cfg = screenshot::ScreenshotConfig::load(&app_state.db);
             app.manage(screenshot::ScreenshotState::new(screenshot_cfg.clone()));
-            // v1.0.0：长图会话状态（start/capture/finish/cancel 共用）
-            app.manage(screenshot::long::LongShotState::default());
             app.manage(pet::PetHitState::default());
             // 注册截图全局快捷键。失败不致命：可能被系统/其他软件占用，
             // 用户仍可用托盘菜单「截图」或设置页按钮触发（此处只记日志；
@@ -463,10 +467,6 @@ pub fn run() {
                 // macOS 左键沿用「点击切换主窗口显隐」（见下方 on_tray_icon_event）
                 .show_menu_on_left_click(false)
                 .on_menu_event(move |app, event| match event.id.as_ref() {
-                    "capture" => {
-                        // v0.8.0：托盘「截图」入口（与全局快捷键同一条 begin_capture 流程）
-                        crate::screenshot::begin_capture(app);
-                    }
                     "show" => {
                         if let Some(w) = app.get_webview_window("main") {
                             let _ = w.show();
@@ -674,10 +674,6 @@ pub fn run() {
             commands::get_hourly_buckets,
             commands::get_app_ranking,
             commands::get_categories,
-            commands::get_sessions,
-            commands::set_idle_threshold,
-            commands::get_idle_threshold,
-            commands::export_data,
             commands::check_permissions,
             commands::open_privacy_settings,
             commands::restart_app,
@@ -688,7 +684,6 @@ pub fn run() {
             commands::delete_rule,
             commands::reclassify_all,
             commands::set_autostart,
-            commands::is_autostart,
             commands::get_autostart_pref,
             commands::get_trends,
             commands::export_all,
@@ -708,8 +703,6 @@ pub fn run() {
             commands::check_for_update,
             commands::open_url,
             commands::get_system_metrics,
-            commands::set_system_metrics_enabled,
-            commands::get_system_metrics_enabled,
             commands::get_status_bar_config,
             commands::set_status_bar_config,
             commands::export_logs,
@@ -740,11 +733,9 @@ pub fn run() {
             screenshot::screenshot_request_permission,
             screenshot::screenshot_open_permission_settings,
             screenshot::screenshot_restart_app,
-            // v1.0.0：滑动截长图（会话 start/capture/finish/cancel 四件套）
-            screenshot::screenshot_long_start,
-            screenshot::screenshot_long_capture,
-            screenshot::screenshot_long_finish,
-            screenshot::screenshot_long_cancel,
+            // v1.1.1：滑动截长图四件套（screenshot_long_start/capture/finish/cancel）
+            // 已**移除** —— 遮罩窗是置顶窗，用户无法滚动它下方的目标窗口，
+            // 功能在现有遮罩窗架构内不可达。详见 screenshot/mod.rs 修改历史。
             pet::create_pet_window,
             pet::show_pet_window,
             pet::hide_pet_window,

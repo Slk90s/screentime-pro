@@ -80,3 +80,6 @@ vite.config.js
 
 # 内部调研/提案文档（不随仓库开源）
 SNAPZY-*
+
+# 代码审查报告（内部审查文档，不随仓库开源）
+CODE_REVIEW-*.md

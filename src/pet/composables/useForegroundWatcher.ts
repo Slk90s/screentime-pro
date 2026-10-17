@@ -20,6 +20,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { petStore } from '../stores/petStore';
 import { inferStateFromApp, shouldReinfer } from '../engine/appToState';
 import type { ForegroundAppInfo } from '../types';
+import { log } from "@/lib/logger";
 
 const POLL_INTERVAL_MS = 1000;
 
@@ -56,7 +57,7 @@ export function useForegroundWatcher(): void {
       }
     } catch (e) {
       // 静默失败（采样循环主路径有重试，桌宠轮询是辅助）
-      console.warn('[pet] 前台应用轮询失败', e);
+      log.warn('[pet] 前台应用轮询失败', e);
     }
   }
 

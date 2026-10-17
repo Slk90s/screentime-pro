@@ -17,12 +17,13 @@
  */
 import { onMounted, onBeforeUnmount } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
+import { log } from "@/lib/logger";
 
 export function usePetCursorPassthrough(): void {
   onMounted(() => {
     // ① 鼠标穿透：false = 本窗接收鼠标事件（拖拽/右键/点击）
     invoke('set_pet_cursor_passthrough', { passthrough: false }).catch((err) => {
-      console.error('[pet] 设置鼠标穿透失败', err);
+      log.error('[pet] 设置鼠标穿透失败', err);
     });
 
     // ② 覆盖全局 style.css 的 body{background:#f5f5f7}，使透明窗体真正透明

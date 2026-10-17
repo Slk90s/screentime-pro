@@ -103,6 +103,7 @@ import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 import { tracker } from "../api/tracker";
 import { screenshot } from "../api/screenshot";
 import type { MetricsOut, StatusBarConfig } from "../types";
+import { log } from "@/lib/logger";
 
 // v0.8.2：按钮 tooltip 文案（浮窗此前无任何用户可见文案，首次引入 useI18n）
 const { t } = useI18n();
@@ -251,7 +252,7 @@ async function onPointerDown(e: PointerEvent): Promise<void> {
   try {
     await win.startDragging();
   } catch (err) {
-    console.warn("[float] 原生拖拽不可用", err);
+    log.warn("[float] 原生拖拽不可用", err);
     dragging = false;
     return;
   }

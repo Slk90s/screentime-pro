@@ -21,6 +21,7 @@
  */
 import { reactive, watch } from 'vue';
 import type { PetState } from '../types';
+import { log } from "@/lib/logger";
 
 const STORAGE_KEY = 'pet_custom_badges';
 
@@ -40,7 +41,7 @@ function saveJSON(key: string, value: unknown): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch (e) {
-    console.warn('[pet] 表情持久化失败', e);
+    log.warn('[pet] 表情持久化失败', e);
   }
 }
 

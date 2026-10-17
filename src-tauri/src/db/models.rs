@@ -13,17 +13,6 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize)]
-pub struct SessionOut {
-    pub id: i64,
-    pub app_id: i64,
-    pub app_name: String,
-    pub category_id: String,
-    pub start_at: String,
-    pub end_at: String,
-    pub duration_seconds: i64,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct DailySummaryOut {
     pub date: String,
     pub total_seconds: i64,

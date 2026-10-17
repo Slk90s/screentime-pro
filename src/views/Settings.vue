@@ -432,6 +432,12 @@
               </figcaption>
             </figure>
           </div>
+          <!-- v1.1.1：加载更多（分页追加），与 max_count 解耦 -->
+          <div v-if="shotHasMore" class="shot-more">
+            <button class="ghost-btn" :disabled="shotLoadingMore" @click="loadMoreShots">
+              {{ shotLoadingMore ? t("settings.shotLoading") : t("settings.shotLoadMore") }}
+            </button>
+          </div>
         </template>
       </div>
     </div>
@@ -895,6 +901,7 @@ import { petStore } from "../pet/stores/petStore";
 import PetSpriteEditor from "../pet/components/PetSpriteEditor.vue";
 import { skinRegistry } from "../pet/skins/registry";
 import "../pet/skins";
+import { log } from "@/lib/logger";
 
 const { t } = useI18n();
 
@@ -915,20 +922,25 @@ let unlistenPetEnabled: (() => void) | null = null;
 let unlistenStatusBarCfg: (() => void) | null = null;
 // v0.9.2：截图完成 → 刷新历史列表（注销函数需保存，防监听器泄漏）
 let unlistenShotDone: (() => void) | null = null;
+// 单一 onMounted 汇聚全部初始化（v1.1.1 合并，原分散在 4 处）：
+// ① 跨窗口事件监听（桌宠皮肤/开关、托盘状态栏勾选）
+// ② 截图配置 + 取字引擎 + 截图历史 + screenshot-done 监听
+// ③ 版本 + 通用设置 + 备份配置 + 状态栏配置
+// ④ 日志大小
 onMounted(async () => {
   try {
     unlistenSkin = await listen("pet-skin-changed", () => {
       skinRegistry.reloadActive();
     });
   } catch (e) {
-    console.error("[Settings] 监听 pet-skin-changed 失败", e);
+    log.error("[Settings] 监听 pet-skin-changed 失败", e);
   }
   try {
     unlistenPetEnabled = await listen("pet-enabled-changed", () => {
       petStore.reload();
     });
   } catch (e) {
-    console.error("[Settings] 监听 pet-enabled-changed 失败", e);
+    log.error("[Settings] 监听 pet-enabled-changed 失败", e);
   }
   // 托盘菜单勾选后后端 emit 此事件，设置页卡片即时反映（避免两处状态不一致）
   try {
@@ -939,8 +951,11 @@ onMounted(async () => {
       },
     );
   } catch (e) {
-    console.error("[Settings] 监听 status-bar-config-changed 失败", e);
+    log.error("[Settings] 监听 status-bar-config-changed 失败", e);
   }
+  void initScreenshot();
+  void initSettings();
+  void refreshLogSize();
 });
 onBeforeUnmount(() => {
   if (unlistenSkin) unlistenSkin();
@@ -965,12 +980,12 @@ async function onTogglePet(checked: boolean) {
         return invoke("move_pet_window", { x: pos.x, y: pos.y });
       })
       .catch((err) => {
-        console.error("[pet] 切换桌宠失败", err);
+        log.error("[pet] 切换桌宠失败", err);
         showAlert("warn", t("common.error"), String(err));
       });
   } else {
     invoke("hide_pet_window").catch((err) => {
-      console.error("[pet] 隐藏桌宠失败", err);
+      log.error("[pet] 隐藏桌宠失败", err);
     });
   }
 }
@@ -981,7 +996,7 @@ async function onShowPet() {
     const pos = petStore.position;
     await invoke("move_pet_window", { x: pos.x, y: pos.y });
   } catch (err) {
-    console.error("[pet] 显示桌宠失败", err);
+    log.error("[pet] 显示桌宠失败", err);
     showAlert("warn", t("common.error"), String(err));
   }
 }
@@ -992,7 +1007,7 @@ async function onHidePet() {
   try {
     await invoke("hide_pet_window");
   } catch (err) {
-    console.error("[pet] 隐藏桌宠失败", err);
+    log.error("[pet] 隐藏桌宠失败", err);
   }
 }
 function onResetPetPos() {
@@ -1137,7 +1152,7 @@ async function onAlertRestart() {
     await tracker.resetScreenCapturePermission();
   } catch (err) {
     // 重置失败不阻断重启：tccutil 在个别系统上需要 sudo，此时至少让「重启」这条路还能走
-    console.warn("[shot] 重置屏幕录制授权失败:", err);
+    log.warn("[shot] 重置屏幕录制授权失败:", err);
   }
   try {
     await tracker.restartApp();
@@ -1180,7 +1195,7 @@ async function loadStatusBarConfig() {
   try {
     statusBarConfig.value = await tracker.getStatusBarConfig();
   } catch (err) {
-    console.warn("[Settings] 加载状态栏配置失败", err);
+    log.warn("[Settings] 加载状态栏配置失败", err);
   }
 }
 // 乐观更新：先翻 ref 再 await IPC，失败回滚（与 onAutostart 模式一致）
@@ -1227,13 +1242,19 @@ const shotDir = ref("");
 const shotHistory = ref<ScreenshotOut[]>([]);
 /** id → 缩略图 data URL（按需拉取；文件缺失的条目不会进这张表） */
 const shotThumbs = ref<Record<number, string>>({});
+// v1.1.1：截图历史分页 —— 与 max_count（FIFO 上限）解耦，按「加载更多」翻页
+const SHOT_PAGE_SIZE = 60;
+/** 已加载到第几张（= shotHistory.length），作为下次加载的 offset */
+const shotHasMore = ref(true);
+/** 加载更多按钮是否忙碌（防连点） */
+const shotLoadingMore = ref(false);
 
 async function loadShotConfig() {
   try {
     shotConfig.value = await screenshot.getConfig();
     shotDir.value = await screenshot.dir();
   } catch (err) {
-    console.warn("[Settings] 加载截图配置失败", err);
+    log.warn("[Settings] 加载截图配置失败", err);
   }
 }
 
@@ -1245,7 +1266,7 @@ async function loadOcrEngineInfo() {
   try {
     ocrInfo.value = await screenshot.ocrEngineInfo();
   } catch (err) {
-    console.warn("[Settings] 读取取字引擎信息失败", err);
+    log.warn("[Settings] 读取取字引擎信息失败", err);
   }
 }
 
@@ -1515,18 +1536,44 @@ async function openShotDir() {
 
 async function loadShotHistory() {
   try {
-    shotHistory.value = await screenshot.list(60);
-    // 缩略图并发拉取（单张 ~30–80KB，走 data URL 避免额外协议/config 改动）
-    const pairs = await Promise.all(
-      shotHistory.value.map(async (s) => [s.id, await screenshot.thumbnail(s.id, 320)] as const),
-    );
-    const map: Record<number, string> = {};
-    for (const [id, url] of pairs) {
-      if (url) map[id] = url;
-    }
-    shotThumbs.value = map;
+    // v1.1.1：首页加载（offset=0），成功后再按「加载更多」追加翻页
+    shotHistory.value = await screenshot.list(SHOT_PAGE_SIZE, 0);
+    shotHasMore.value = shotHistory.value.length === SHOT_PAGE_SIZE;
+    await fetchShotThumbs(shotHistory.value);
   } catch (err) {
-    console.warn("[Settings] 加载截图历史失败", err);
+    log.warn("[Settings] 加载截图历史失败", err);
+  }
+}
+
+/** 按需拉取一批截图的缩略图（并发；文件缺失的条目返回空串，不进表） */
+async function fetchShotThumbs(items: ScreenshotOut[]) {
+  const pairs = await Promise.all(
+    items.map(async (s) => [s.id, await screenshot.thumbnail(s.id, 320)] as const),
+  );
+  const map: Record<number, string> = {};
+  for (const [id, url] of pairs) {
+    if (url) map[id] = url;
+  }
+  shotThumbs.value = { ...shotThumbs.value, ...map };
+}
+
+/** 「加载更多」：以当前已加载数量为 offset 翻下一页并追加 */
+async function loadMoreShots() {
+  if (shotLoadingMore.value) return;
+  shotLoadingMore.value = true;
+  try {
+    const next = await screenshot.list(SHOT_PAGE_SIZE, shotHistory.value.length);
+    if (next.length === 0) {
+      shotHasMore.value = false;
+    } else {
+      shotHistory.value = [...shotHistory.value, ...next];
+      shotHasMore.value = next.length === SHOT_PAGE_SIZE;
+      await fetchShotThumbs(next);
+    }
+  } catch (err) {
+    log.warn("[Settings] 加载更多截图失败", err);
+  } finally {
+    shotLoadingMore.value = false;
   }
 }
 
@@ -1581,8 +1628,8 @@ async function deleteSelectedShots() {
   }
 }
 
-// 截图完成 → 刷新历史（主窗口收到 Rust 的 screenshot-done 事件）
-onMounted(async () => {
+// 截图初始化：配置 + 取字引擎 + 历史 + screenshot-done 监听（主窗口收到 Rust 事件后刷新）
+async function initScreenshot() {
   await loadShotConfig();
   await loadOcrEngineInfo();
   await loadShotHistory();
@@ -1596,7 +1643,7 @@ onMounted(async () => {
   } catch {
     /* 非 Tauri 环境 */
   }
-});
+}
 
 const pruneDialogOpen = ref(false);
 const deviceStats = ref<DeviceStats[]>([]);
@@ -1643,7 +1690,7 @@ async function onConfirmPruneByDevice() {
       t("settings.cleanedByDeviceMsg", { n: totalDeleted, devices: ids.length, backups: backups.join("\n") })
     );
   } catch (e) {
-    console.error("按设备清理失败", e);
+    log.error("按设备清理失败", e);
     showAlert("warn", t("settings.cleanFailed"), t("settings.cleanFailedMsg", { err: e instanceof Error ? e.message : String(e) }));
   }
 }
@@ -1658,7 +1705,7 @@ function confirmCleanAll() {
         const n = await tracker.pruneData(retention.value);
         showAlert("info", t("settings.cleaned"), t("settings.cleanedSimple", { n }));
       } catch (e) {
-        console.error("清理失败", e);
+        log.error("清理失败", e);
         showAlert("warn", t("settings.cleanFailed"), t("settings.cleanFailedMsg", { err: e instanceof Error ? e.message : String(e) }));
       }
     }
@@ -1667,7 +1714,8 @@ function confirmCleanAll() {
 
 // （v0.6.2-beta.19 移除"重置设备 ID"按钮：后端未实现 reset_device_id 命令，截图里的"重置"按钮只用作视觉示意，保留会让用户点了报错。设备 ID 不可重置：它绑定了 sessions 数据。）
 
-onMounted(async () => {
+// 通用设置初始化：版本 + 通用设置 + 备份配置 + 状态栏配置
+async function initSettings() {
   try {
     version.value = await getVersion();
   } catch {
@@ -1693,7 +1741,7 @@ onMounted(async () => {
   } catch {
     /* 浏览器预览模式忽略 */
   }
-});
+}
 
 // 切换开机自启（v0.6.2-beta.23：去掉成功弹窗；v0.6.2-beta.24：乐观更新 + 失败回滚）
 // 关键：<input> 是单向 :checked 绑定，vue 下次 render 会用 autostart.value 强制覆盖原生 checked，
@@ -1710,15 +1758,25 @@ async function onAutostart(e: Event) {
 }
 
 async function onSave() {
+  // 实际生效值：设备名为空时后端回落旧名（见 save_settings 语义），
+  // 保存成功后用真实生效值回写，避免「输入框空、实际用旧名」的不一致。
+  const effectiveName = deviceName.value.trim() || settings.value.device_name;
+  const effectiveIdle = idleMin.value * 60;
+  const effectiveRetention = retention.value;
   try {
     await tracker.saveSettings({
-      idleThreshold: idleMin.value * 60,
-      deviceName: deviceName.value.trim() || settings.value.device_name,
-      dataRetentionDays: retention.value,
+      idleThreshold: effectiveIdle,
+      deviceName: effectiveName,
+      dataRetentionDays: effectiveRetention,
     });
+    // 同步内存态与界面，保持「所见即所得」
+    settings.value.device_name = effectiveName;
+    settings.value.idle_threshold = effectiveIdle;
+    settings.value.data_retention_days = effectiveRetention;
+    deviceName.value = effectiveName;
     showAlert("info", t("settings.saved"), t("settings.savedMsg"));
   } catch (e) {
-    console.error("保存设置失败", e);
+    log.error("保存设置失败", e);
     showAlert("warn", t("settings.saveFailed"), t("settings.saveFailedMsg", { err: e instanceof Error ? e.message : String(e) }));
   }
 }
@@ -1729,7 +1787,7 @@ async function onExport() {
     exportPath.value = res.path;
     exportDialogOpen.value = true;
   } catch (e) {
-    console.error("导出失败", e);
+    log.error("导出失败", e);
     showAlert("warn", t("settings.exportFailed"), t("settings.exportFailedMsg", { err: e instanceof Error ? e.message : String(e) }));
   }
 }
@@ -1767,7 +1825,7 @@ async function refreshLogSize() {
     const size = await invoke<number>("get_log_size");
     logSize.value = size;
   } catch (e) {
-    console.error("读取日志大小失败", e);
+    log.error("读取日志大小失败", e);
     logSize.value = null;
   }
 }
@@ -1779,7 +1837,7 @@ async function exportLogs() {
     logExportDialogOpen.value = true;
     void refreshLogSize();
   } catch (e) {
-    console.error("导出日志失败", e);
+    log.error("导出日志失败", e);
     showAlert("warn", t("settings.exportFailed"), t("settings.exportFailedMsg", { err: e instanceof Error ? e.message : String(e) }));
   }
 }
@@ -1789,14 +1847,10 @@ async function revealLogDir() {
     const logDir = await invoke<string>("get_log_dir");
     await tracker.revealPath(logDir);
   } catch (e) {
-    console.error("打开日志目录失败", e);
+    log.error("打开日志目录失败", e);
     showAlert("warn", t("settings.openFailed"), t("settings.openFailedMsg", { err: e instanceof Error ? e.message : String(e) }));
   }
 }
-
-onMounted(() => {
-  void refreshLogSize();
-});
 
 function pickImport() {
   fileInput.value?.click();
@@ -1810,7 +1864,7 @@ async function onImport(e: Event) {
     const n = await tracker.importData(text);
     showAlert("info", t("settings.importSuccess"), t("settings.importedMsg", { n }));
   } catch (err) {
-    console.error("导入失败", err);
+    log.error("导入失败", err);
     showAlert("warn", t("settings.importFailed"), t("settings.importFailedMsg", { err: err instanceof Error ? err.message : String(err) }));
   } finally {
     (e.target as HTMLInputElement).value = "";
@@ -1836,7 +1890,7 @@ async function onCheckUpdate() {
       showAlert("info", t("settings.upToDate", { current: updateResult.value.current }), t("settings.upToDateMsg", { current: updateResult.value.current }));
     }
   } catch (e: any) {
-    console.error("检查更新失败", e);
+    log.error("检查更新失败", e);
     showAlert("warn", t("settings.checkUpdateFailed"), t("settings.checkUpdateFailedMsg", { err: e?.message || e }));
   } finally {
     checking.value = false;

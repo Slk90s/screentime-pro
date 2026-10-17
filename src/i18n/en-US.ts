@@ -151,19 +151,11 @@ export default {
     toastCopied: "Copied to clipboard — paste with Ctrl+V",
     toastSaved: "Saved to screenshot history",
     toastBoth: "Copied to clipboard and saved to history",
-    // v1.0.0 (2026-09-22): scrolling long screenshot
-    longEnter: "Scrolling long screenshot",
-    longTitle: "Long screenshot",
-    longHint:
-      "First shot captured. Scroll the page down so the new view overlaps the previous capture, then click Continue (or press Enter). Click Finish when done (or Shift+Enter).",
-    longCapture: "Continue",
-    longDone: "Finish",
-    longCancel: "Cancel",
-    longBusy: "Capturing and stitching…",
-    longProgress: "{n} shots · {h}px tall",
-    // v1.1.0: low-confidence stitch warning (multi-row hit, verified/rolled back on next capture or finish)
-    longTentative:
-      "The last stitch was low-confidence (repetitive layout). Scroll and capture one more frame to verify; it is checked on Finish and rolled back if wrong.",
+    // The 9 v1.0.0 scrolling-long-screenshot keys (longEnter / longTitle / longHint /
+    // longCapture / longDone / longCancel / longBusy / longProgress / longTentative)
+    // were **removed** in v1.1.1 (2026-10-17): the capture overlay is an
+    // always-on-top window, so the user cannot scroll the page beneath it and the
+    // feature is unreachable within the current overlay architecture.
     countdownTip: "s until capture",
     countdownCancel: "Cancel (Esc)",
   },
@@ -242,6 +234,9 @@ export default {
     shotSelectNone: "Clear",
     shotSelected: "{n} selected",
     shotDeleteSelected: "Delete selected",
+    // v1.1.1: screenshot history pagination (load more)
+    shotLoadMore: "Load more",
+    shotLoading: "Loading…",
     // v0.9.1 (2026-09-18): macOS "Screen Recording" permission guidance (capture would be wallpaper-only)
     shotPermTitle: "Screen Recording permission required",
     shotPermOpen: "Open System Settings",

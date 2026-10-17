@@ -152,18 +152,10 @@ export default {
     toastCopied: "已复制到剪贴板，Ctrl+V 直接粘贴",
     toastSaved: "已保存到截图历史",
     toastBoth: "已复制到剪贴板，并保存到截图历史",
-    // v1.0.0（2026-09-22）：滑动截长图
-    longEnter: "滑动截长图",
-    longTitle: "截长图",
-    longHint:
-      "已截取第 1 屏。向下滚动页面，让新画面与上一次截取的内容有部分重合，然后点「继续截取」（或按 Enter）。完成后点「完成」（或 Shift+Enter）。",
-    longCapture: "继续截取",
-    longDone: "完成",
-    longCancel: "取消长图",
-    longBusy: "正在截取拼接…",
-    longProgress: "已截 {n} 屏 · 高 {h}px",
-    // v1.1.0：低置信拼接提示（多行命中待下一屏验证，完成前会自动复核/回滚）
-    longTentative: "上一屏拼接为低置信（页面版式重复），建议滚动后再截一屏以复核；完成时会自动校验，如拼错会回滚。",
+    // v1.0.0（2026-09-22）滑动截长图的 9 个 key（longEnter / longTitle / longHint /
+    // longCapture / longDone / longCancel / longBusy / longProgress / longTentative）
+    // 已于 v1.1.1（2026-10-17）**整体删除**：遮罩窗是 always_on_top 置顶窗，
+    // 用户无法滚动它下方的目标页面，长图功能在现有架构内不可达。
     // v1.1.0：延时截图悬浮倒计时（主窗右下角）
     countdownTip: "秒后开始截图",
     countdownCancel: "取消 (Esc)",
@@ -229,6 +221,9 @@ export default {
     shotSelectNone: "取消全选",
     shotSelected: "已选 {n} 项",
     shotDeleteSelected: "删除选中",
+    // v1.1.1：截图历史分页（加载更多）
+    shotLoadMore: "加载更多",
+    shotLoading: "加载中…",
     // v0.9.1（2026-09-18）：macOS 缺「屏幕录制」权限的引导（截图会只剩桌面壁纸）
     shotPermTitle: "缺少「屏幕录制」权限",
     shotPermOpen: "打开系统设置",

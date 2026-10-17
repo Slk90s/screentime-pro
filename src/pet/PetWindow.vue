@@ -80,6 +80,7 @@ import './skins';
 // v0.6.2：皮肤自描述窗口尺寸（2D 140×140；Pop Mart 等竖图皮肤更高窗）
 import { skinRegistry } from './skins/registry';
 import { LogicalSize } from '@tauri-apps/api/dpi';
+import { log } from "@/lib/logger";
 
 const { t } = useI18n();
 
@@ -155,7 +156,7 @@ async function onFullscreenEnter(): Promise<void> {
   try {
     await invoke('hide_pet_window');
   } catch (e) {
-    console.warn('[pet] 全屏隐藏失败', e);
+    log.warn('[pet] 全屏隐藏失败', e);
   }
 }
 async function onFullscreenExit(): Promise<void> {
@@ -165,7 +166,7 @@ async function onFullscreenExit(): Promise<void> {
   try {
     await invoke('show_pet_window');
   } catch (e) {
-    console.warn('[pet] 退出全屏恢复失败', e);
+    log.warn('[pet] 退出全屏恢复失败', e);
   }
 }
 
@@ -189,7 +190,7 @@ function applySkinSize(): void {
   const win = getCurrentWindow();
   win
     .setSize(new LogicalSize(s.w, s.h))
-    .catch((e: unknown) => console.warn('[pet] 窗口尺寸调整失败', e));
+    .catch((e: unknown) => log.warn('[pet] 窗口尺寸调整失败', e));
 }
 
 /** v0.6.2-beta.15：滚轮缩放（Ctrl/⌘ + 滚轮 才生效，避免误操作） */
@@ -254,7 +255,7 @@ async function onContextMenu(_e: MouseEvent): Promise<void> {
     void MENU_W; // 防止 unused
     await invoke('show_pet_menu_window');
   } catch (e) {
-    console.warn('[pet] 打开菜单失败', e);
+    log.warn('[pet] 打开菜单失败', e);
   }
 }
 
@@ -322,7 +323,7 @@ onMounted(async () => {
     });
     reloadConfig(); // 初次创建窗口时也读一次（保险）
   } catch (e) {
-    console.error('[pet] 监听 pet 事件失败', e);
+    log.error('[pet] 监听 pet 事件失败', e);
   }
   // v0.7.0：启动饱食度衰减循环（仅桌宠窗口存活时运行）
   decayTimer = window.setInterval(() => {

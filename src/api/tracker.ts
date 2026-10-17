@@ -20,7 +20,6 @@ import type {
   OverviewOut,
   PermissionStatus,
   RuleOut,
-  SessionOut,
   SettingsOut,
   StatusBarConfig,
   TrendsOut,
@@ -88,9 +87,6 @@ export const tracker = {
       month,
       device: device ?? null,
     }),
-  sessions: (date: string) => call<SessionOut[]>("get_sessions", { date }),
-  setIdle: (secs: number) => call<boolean>("set_idle_threshold", { secs }),
-  getIdle: () => call<number>("get_idle_threshold"),
   checkPermissions: () => call<PermissionStatus>("check_permissions"),
   /**
    * 打开 macOS「隐私与安全性」面板。
@@ -154,6 +150,7 @@ export const tracker = {
     pattern: string;
     categoryId: string;
     priority: number;
+    enabled: boolean;
   }) => call<number>("add_rule", r),
   updateRule: (r: {
     id: number;
@@ -167,13 +164,9 @@ export const tracker = {
   deleteRule: (id: number) => call<boolean>("delete_rule", { id }),
   reclassify: () => call<number>("reclassify_all"),
   setAutostart: (enabled: boolean) => call<boolean>("set_autostart", { enabled }),
-  isAutostart: () => call<boolean>("is_autostart"),
   getAutostartPref: () => call<boolean | null>("get_autostart_pref"),
   // ===== v0.7.5：状态栏系统指标（v0.7.6 起扩展网络字段，向后兼容）=====
   getSystemMetrics: () => call<MetricsOut>("get_system_metrics"),
-  setSystemMetricsEnabled: (enabled: boolean) =>
-    call<boolean>("set_system_metrics_enabled", { enabled }),
-  getSystemMetricsEnabled: () => call<boolean>("get_system_metrics_enabled"),
   // ===== v0.7.6：状态栏配置（总开关 + 3 个子项）=====
   getStatusBarConfig: () => call<StatusBarConfig>("get_status_bar_config"),
   setStatusBarConfig: (config: StatusBarConfig) =>

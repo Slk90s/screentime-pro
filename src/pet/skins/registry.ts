@@ -20,6 +20,7 @@
 import { reactive } from 'vue';
 import { emit as tauriEmit } from '@tauri-apps/api/event';
 import type { PetSkinManifest, PetSkinRegistry } from './types';
+import { log } from "@/lib/logger";
 
 const STORAGE_KEY = 'screentime-pet-skin';
 const FALLBACK_ID = 'popmart-3d'; // v0.6.2-beta.5 起默认皮肤（移除 panda-2d）
@@ -76,7 +77,7 @@ export const skinRegistry: PetSkinRegistry = {
   },
   setActive(id) {
     if (!state.byId.has(id)) {
-      console.warn(`[pet-skin] setActive: 未知皮肤 id "${id}"`);
+      log.warn(`[pet-skin] setActive: 未知皮肤 id "${id}"`);
       return false;
     }
     if (state.activeId === id) return true;
@@ -88,7 +89,7 @@ export const skinRegistry: PetSkinRegistry = {
     // 通知后调用 reloadActive() 把本地副本对齐。emit 失败（非 Tauri / 权限）
     // 由 try/catch 吞掉，不影响本地 notify。
     void emitSkinChanged(id).catch((e) =>
-      console.warn('[pet-skin] 广播 pet-skin-changed 失败', e)
+      log.warn('[pet-skin] 广播 pet-skin-changed 失败', e)
     );
     return true;
   },
@@ -117,7 +118,7 @@ async function emitSkinChanged(id: string): Promise<void> {
     await tauriEmit(SKIN_CHANGE_EVENT, { id });
   } catch (e) {
     // 非 Tauri 运行时（浏览器预览 / SSR）emit 会抛，吞掉即可
-    console.warn('[pet-skin] emit pet-skin-changed 失败（可能非 Tauri 环境）', e);
+    log.warn('[pet-skin] emit pet-skin-changed 失败（可能非 Tauri 环境）', e);
   }
 }
 
@@ -127,7 +128,7 @@ function persist(id: string): void {
       localStorage.setItem(STORAGE_KEY, id);
     }
   } catch (e) {
-    console.warn('[pet-skin] 持久化 active id 失败', e);
+    log.warn('[pet-skin] 持久化 active id 失败', e);
   }
 }
 

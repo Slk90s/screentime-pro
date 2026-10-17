@@ -10,8 +10,11 @@
  * - 参数命名遵循 Tauri v2 约定：Rust 侧 snake_case 形参，JS 侧传 camelCase（如 maxWidth / pngBase64）。
  * - **合成在前端**（v0.8.0 修订）：遮罩窗 canvas 把裁剪/标注/圆角/投影画好后整体交给
  *   `screenshot_commit`，Rust 不再做像素加工 → 预览与导出逐像素一致。
- * - v1.0.0：长图四件套（longStart/longCapture/longFinish/longCancel），
- *   截图与拼接在 Rust 完成（长图模式遮罩会隐藏、无法走前端 canvas 合成）。
+ *
+ * 修改历史：
+ *   - 2026-10-17 @v1.1.1: 废弃 - 移除长图四件套（longStart / longCapture /
+ *     longFinish / longCancel）与 `LongShotInfo`。遮罩窗是置顶窗，用户无法
+ *     滚动它下方的目标页面，功能在现有遮罩窗架构内不可达。
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -41,7 +44,6 @@ export interface ScreenshotPermissionStatus {
 export const DEFAULT_SCREENSHOT_CONFIG: ScreenshotConfig = {
   enabled: true,
   shortcut: "CmdOrCtrl+Shift+A",
-  auto_copy: true,
   auto_save: false,
   corner_radius: 8,
   shadow: false,
@@ -110,8 +112,8 @@ export const screenshot = {
 
   cancel: (): Promise<void> => invoke<void>("screenshot_cancel"),
 
-  list: (limit = 60): Promise<ScreenshotOut[]> =>
-    isTauri ? invoke<ScreenshotOut[]>("screenshot_list", { limit }) : Promise.resolve([]),
+  list: (limit = 60, offset = 0): Promise<ScreenshotOut[]> =>
+    isTauri ? invoke<ScreenshotOut[]>("screenshot_list", { limit, offset }) : Promise.resolve([]),
 
   remove: (id: number): Promise<boolean> => invoke<boolean>("screenshot_delete", { id }),
 
@@ -187,39 +189,4 @@ export const screenshot = {
 
   /** 重启应用（TCC 新授权只对新进程生效 —— 轮询发现授权翻转后引导用户点这个） */
   restartApp: (): Promise<void> => invoke<void>("screenshot_restart_app"),
-
-  // ===== v1.0.0：滑动截长图 =====
-
-  /**
-   * 开始长图会话：以选区矩形（物理像素）为裁剪依据抓首屏。
-   * 返回首屏尺寸（物理像素），用于进度显示。
-   * ⚠️ 必须在遮罩窗内、框选完成后调用；首屏用冻结帧（零闪烁）。
-   */
-  longStart: (x: number, y: number, width: number, height: number): Promise<LongShotInfo> =>
-    invoke<LongShotInfo>("screenshot_long_start", { x, y, width, height }),
-
-  /**
-   * 截下一屏：Rust 隐藏遮罩 → 抓屏 → 恢复遮罩 → 拼接。
-   * 返回拼接后的总高（物理像素）。用户应先手动滚动页面再调用。
-   */
-  longCapture: (): Promise<LongShotInfo> => invoke<LongShotInfo>("screenshot_long_capture"),
-
-  /**
-   * 结束长图：返回整图 PNG data URL（前端再走 screenshot.commit 落盘/剪贴板）。
-   * 会话一次性：调用后即销毁，再次 capture 会报「会话未开始」。
-   */
-  longFinish: (): Promise<string> => invoke<string>("screenshot_long_finish"),
-
-  /** 取消长图：丢弃会话（不产任何图） */
-  longCancel: (): Promise<void> => invoke<void>("screenshot_long_cancel"),
 };
-
-/** 长图进度信息（与 Rust `LongShotInfo` 字段一致，snake_case） */
-export interface LongShotInfo {
-  /** 已拼接总高度（物理像素） */
-  height: number;
-  /** 宽度（物理像素，恒 = 首屏选区宽） */
-  width: number;
-  /** v1.1.0：当前处于低置信（tentative，多行命中待下一屏验证）状态的段计数，0 或 1 */
-  tentative: number;
-}

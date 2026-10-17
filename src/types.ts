@@ -1,15 +1,5 @@
 // 与后端 src-tauri/src/db/models.rs 中的 serde 结构一一对应
 
-export interface SessionOut {
-  id: number;
-  app_id: number;
-  app_name: string;
-  category_id: string;
-  start_at: string;
-  end_at: string;
-  duration_seconds: number;
-}
-
 export interface DailySummaryOut {
   date: string;
   total_seconds: number;
@@ -206,8 +196,6 @@ export interface ScreenshotConfig {
   enabled: boolean;
   /** 全局快捷键（global-hotkey 语法，如 CmdOrCtrl+Shift+A） */
   shortcut: string;
-  /** 确认时默认动作 = 复制到剪贴板 */
-  auto_copy: boolean;
   /** 确认时同时落盘归档 */
   auto_save: boolean;
   corner_radius: number;

@@ -5,7 +5,7 @@ use crate::classifier::classify_app;
 use crate::db::{
     AppRankingOut, CategoryOut, CurrentForegroundOut, DailySummaryOut, DayCategoryOut, DeviceInfo,
     ExportBundle, ExportResult, HourlyBucketOut, MetricsOut, MonthSummaryOut, OverviewOut,
-    PermissionStatus, PeriodStat, RuleOut, SessionOut, SettingsOut, TrendsOut,
+    PermissionStatus, PeriodStat, RuleOut, SettingsOut, TrendsOut,
 };
 use crate::error::AppError;
 use crate::tracker::{platform_name, RawApp};
@@ -269,11 +269,6 @@ pub fn get_categories(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<Cate
 }
 
 #[tauri::command]
-pub fn get_sessions(state: tauri::State<'_, Arc<AppState>>, date: String) -> Result<Vec<SessionOut>, String> {
-    state.db.get_sessions(&date).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
 pub fn get_trends(state: tauri::State<'_, Arc<AppState>>, period: String, device: Option<String>) -> Result<TrendsOut, String> {
     let (cur_start, cur_end, prev_start, prev_end, yoy_start, yoy_end, cur_label, prev_label) = period_ranges(&period);
     let current = state.db.period_summary(&cur_start, &cur_end, &device, &cur_label).map_err(|e| e.to_string())?;
@@ -289,34 +284,6 @@ pub fn get_trends(state: tauri::State<'_, Arc<AppState>>, period: String, device
         0.0
     };
     Ok(TrendsOut { period, current, prev, yoy, delta_total_pct })
-}
-
-#[tauri::command]
-pub fn set_idle_threshold(state: tauri::State<'_, Arc<AppState>>, secs: u64) -> Result<bool, String> {
-    *state.idle_threshold.lock().unwrap_or_else(|e| e.into_inner()) = secs;
-    Ok(true)
-}
-
-#[tauri::command]
-pub fn get_idle_threshold(state: tauri::State<'_, Arc<AppState>>) -> Result<u64, String> {
-    Ok(*state.idle_threshold.lock().unwrap_or_else(|e| e.into_inner()))
-}
-
-#[tauri::command]
-pub fn export_data(app: tauri::AppHandle, state: tauri::State<'_, Arc<AppState>>, date: String, format: String) -> Result<ExportResult, String> {
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let exports = dir.join("exports");
-    std::fs::create_dir_all(&exports).ok();
-    let ext = if format == "json" { "json" } else { "csv" };
-    let path = exports.join(format!("screentime_{}.{}", date, ext));
-    if ext == "csv" {
-        state.db.export_csv(&path, &date).map_err(|e| e.to_string())?;
-    } else {
-        let ranking = state.db.get_app_ranking(0, &date, &None).map_err(|e| e.to_string())?;
-        let json = serde_json::to_string_pretty(&ranking).map_err(|e| e.to_string())?;
-        std::fs::write(&path, json).map_err(|e| e.to_string())?;
-    }
-    Ok(ExportResult { path: path.to_string_lossy().to_string() })
 }
 
 #[tauri::command]
@@ -377,7 +344,18 @@ pub fn backup_and_prune_device(app: tauri::AppHandle, device_id: String) -> Resu
 pub fn import_data(app: tauri::AppHandle, content: String) -> Result<usize, String> {
     let bundle: ExportBundle = serde_json::from_str(&content).map_err(|e| e.to_string())?;
     let state = app.state::<Arc<AppState>>();
-    state.db.import_data(&bundle).map_err(|e| e.to_string())
+    let imported = state.db.import_data(&bundle).map_err(|e| e.to_string())?;
+    // P2-9：导入若含**当前设备**的名字映射，同步刷新裸键 `device_name` 与内存态，
+    // 消除「备份还原后 device_name 与 device_name:<id> 短暂不一致」的歧义。
+    // 只有 bundle.devices 里恰好命中本机 device_id 才写（跨设备合并导入不会误改本机名）。
+    if let Some(name) = bundle.devices.get(&state.device_id) {
+        state
+            .db
+            .set_setting("device_name", name)
+            .map_err(|e| e.to_string())?;
+        *state.device_name.lock().unwrap_or_else(|e| e.into_inner()) = name.clone();
+    }
+    Ok(imported)
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -586,9 +564,9 @@ pub fn get_rules(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<RuleOut>,
 }
 
 #[tauri::command]
-pub fn add_rule(state: tauri::State<'_, Arc<AppState>>, field: String, match_type: String, pattern: String, category_id: String, priority: i32) -> Result<i64, String> {
-    let id = state.db.insert_rule(&field, &match_type, &pattern, &category_id, priority).map_err(|e| e.to_string())?;
-    crate::logging::audit("rule_added", &format!("field={field} match_type={match_type} pattern={pattern} category={category_id}"));
+pub fn add_rule(state: tauri::State<'_, Arc<AppState>>, field: String, match_type: String, pattern: String, category_id: String, priority: i32, enabled: bool) -> Result<i64, String> {
+    let id = state.db.insert_rule(&field, &match_type, &pattern, &category_id, priority, enabled).map_err(|e| e.to_string())?;
+    crate::logging::audit("rule_added", &format!("field={field} match_type={match_type} pattern={pattern} category={category_id} enabled={enabled}"));
     reload_rules(&state);
     Ok(id)
 }
@@ -627,11 +605,6 @@ pub fn set_autostart(app: tauri::AppHandle, state: tauri::State<'_, Arc<AppState
     if enabled { mgr.enable().map_err(|e| e.to_string())?; } else { mgr.disable().map_err(|e| e.to_string())?; }
     state.db.set_setting("autostart", if enabled { "true" } else { "false" }).map_err(|e| e.to_string())?;
     Ok(true)
-}
-
-#[tauri::command]
-pub fn is_autostart(app: tauri::AppHandle) -> Result<bool, String> {
-    Ok(app.autolaunch().is_enabled().unwrap_or(false))
 }
 
 #[tauri::command]
@@ -1112,38 +1085,4 @@ pub fn get_system_metrics(state: tauri::State<'_, Arc<AppState>>) -> MetricsOut 
         net_rx_bps: snap.net_rx_bps,
         net_tx_bps: snap.net_tx_bps,
     }
-}
-
-// ===== v0.7.5 兼容 IPC：set/get_system_metrics_enabled 改为操作新 config（enabled 字段）=====
-#[tauri::command]
-pub fn set_system_metrics_enabled(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
-    enabled: bool,
-) -> Result<bool, String> {
-    // 2026-09-10 总开关统管：enabled 翻转影响浮窗可见态（关总开关 → 开着的浮窗立即隐藏）
-    let (old_enabled, old_float) = {
-        let c = state.status_bar_config.lock().unwrap_or_else(|e| e.into_inner());
-        (c.enabled, c.float_enabled)
-    };
-    let mut cfg = *state.status_bar_config.lock().unwrap_or_else(|e| e.into_inner());
-    cfg.enabled = enabled;
-    cfg.save(&state.db).map_err(|e| e.to_string())?;
-    *state.status_bar_config.lock().unwrap_or_else(|e| e.into_inner()) = cfg;
-    // v0.7.6：旧兼容命令同样同步托盘菜单勾选态
-    // v0.7.11（2026-09-14）：勾选项已改为「启用状态栏」（enabled），sync 随之刷新
-    if let Some(toggles) = app.try_state::<crate::TrayStatusBarToggle>() {
-        toggles.sync(&cfg);
-    }
-    let old_shown = old_enabled && old_float;
-    let new_shown = cfg.enabled && cfg.float_enabled;
-    if old_shown != new_shown {
-        crate::float_window::set_float_visible(&app, new_shown).map_err(|e| e.to_string())?;
-    }
-    Ok(true)
-}
-
-#[tauri::command]
-pub fn get_system_metrics_enabled(state: tauri::State<'_, Arc<AppState>>) -> bool {
-    state.status_bar_config.lock().unwrap_or_else(|e| e.into_inner()).enabled
 }

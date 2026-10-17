@@ -191,6 +191,7 @@ import { STATE_ICON } from '../engine/stateIcons';
 import { skinRegistry } from '../skins/registry';
 import type { PetSkinManifest } from '../skins/types';
 import type { PetState } from '../types';
+import { log } from "@/lib/logger";
 
 const { t } = useI18n();
 
@@ -286,7 +287,7 @@ onMounted(async () => {
       store.reload();
     });
   } catch (e) {
-    console.warn('[PetContextMenu] 监听失败', e);
+    log.warn('[PetContextMenu] 监听失败', e);
   }
 });
 // 组件卸载时取消订阅
@@ -485,7 +486,7 @@ onMounted(async () => {
       };
       dragDelta.value = { x: 0, y: 0 };
     } catch (e) {
-      console.warn('[pet-menu] 初始化窗口位置失败', e);
+      log.warn('[pet-menu] 初始化窗口位置失败', e);
       basePos.value = { x: 0, y: 0 };
     }
   } else if (basePos.value.x === 0 && basePos.value.y === 0) {

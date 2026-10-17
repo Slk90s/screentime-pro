@@ -31,6 +31,9 @@
 //!
 //! 修改历史：
 //!   - 2026-09-20 @v0.9.4: 初始创建 —— SCK 单帧截图引擎 + macOS 版本回落。
+//!   - 2026-10-17 @v1.1.1: 修复 - 显式设置 `SCStreamConfiguration` 出图宽高（P0，
+//!     「小窗口快照」根因）；同时返回显示器真实原点（原硬编码 0,0）。详见下方
+//!     「出图尺寸」段的完整推导。
 //!
 
 use screencapturekit::screenshot_manager::{CGImageExt, SCScreenshotManager};
@@ -82,7 +85,10 @@ pub fn sck_available() -> bool {
     is_macos_14_plus()
 }
 
-/// 用 SCK 抓取**主显示器**整屏，返回物理像素 RGBA8 图与该显示器的真实缩放因子。
+/// 用 SCK 抓取**主显示器**整屏，返回物理像素 RGBA8 图、该显示器在全局坐标系中的
+/// 原点（物理像素）与该显示器的真实缩放因子。
+///
+/// 返回 `(img, origin_x_px, origin_y_px, scale)`。
 ///
 /// 流程：`SCShareableContent::get()`（枚举显示器；未授权时这里报错）→
 /// 选主显示器（displays()[0]；SCK 返回顺序即系统顺序，第一块即主屏）→
@@ -92,19 +98,43 @@ pub fn sck_available() -> bool {
 /// ⚠️ **会阻塞**：`capture_image` 内部是同步等待回调（Swift Task → completion），
 /// 必须从 `spawn_blocking` 里调（`begin_capture_inner` 已保证）。
 ///
-/// 尺寸说明：`SCStreamConfiguration` 的宽高**不设**时 SCK 默认按显示器原生
-/// 分辨率出图（Retina 下即物理像素）；显式设宽高反而可能触发缩放。
-/// 这里只设 `capture_resolution_type(Best)` 保证拿最高分辨率。
+/// ## 出图尺寸（2026-10-17 @v1.1.1 修复 P0，必须显式设置宽高）
 ///
-/// v1.0.1 修复「画中画」：返回值从 `RgbaImage` 改为 `(RgbaImage, f64)` ——
-/// 旧实现上层（platform/macos.rs）把 scale 硬编码成 1.0，而 SCK 的出图尺寸
-/// 随系统行为漂移（有的版本回逻辑尺寸），上层按「物理像素 ÷ 显示器 scale」
-/// 转逻辑几何时窗口只盖住半屏（用户看到的全屏画中画）。
-/// 缩放因子取 `SCContentFilter::point_pixel_scale()`（macOS 14+ 权威的
-/// 点→像素比，Retina = 2.0）。**注意**：不能拿 `SCDisplay.width()` 除以
-/// `frame().size.width` 自算 —— Apple 文档明确两者单位都是**点**，比值恒 1.0
-/// （crate 文档声称 width 是像素属于错误文档，审计时已核实）。
-pub fn capture_main_display() -> SckResult<(image::RgbaImage, f64)> {
+/// **修改原因**：`SCStreamConfiguration` 的宽高**不设时，Apple 的默认值就是
+/// 1920×1080**（官方 StackOverflow 答复 78847211 与 DTS 论坛 765360 双源确认：
+/// "The SCStreamConfiguration defaults to 1920x1080. It has to be configured
+/// manually"）。本文件此前未调 `with_width` / `with_height`，于是**无论显示器
+/// 真实分辨率多高，冻结帧恒为 1920×1080** → 遮罩窗按 1920×1080 布局 → 用户看到
+/// 「一个小窗口的快照」而不是整屏。
+///
+/// **注意事项**：
+///   - 期望物理像素尺寸 = `SCContentFilter::content_rect().size`（**单位：点**）
+///     × `point_pixel_scale()`（点→像素比）。两者都是 `SCContentFilter` 的现成
+///     方法（`macos_14_0` feature，本项目 `Cargo.toml` 已启用），无需新增依赖。
+///   - **向上取整**（`ceil`）而非四舍五入：Retina 下 point × 2 偶能整除，但带
+///     分数缩放（如 1.5x 的外接显示器、macOS 的「放大显示」非整数档位）时
+///     取整会**少 1px**，导致遮罩窗右下角露缝。
+///   - **不可用** `SCScreenshotConfiguration`（`screenshot_manager.rs` 内自带
+///     `with_width`/`with_height`）：它整体 gated 在 `macos_26_0` feature 之后，
+///     而本项目目标是 **macOS 14+**，用它会在 14/15 上直接编译不过。
+///   - 抓完做**尺寸自检**：出图与期望偏差 > 2px 即返回 `Err`，让
+///     `platform/macos.rs` 回落 xcap（宁可走旧引擎，也不出半张/被缩放的坏图）。
+///     这道兜底覆盖「某些系统版本上 contentRect 返回 0」等未知漂移。
+///   - **旧约定失效**：本函数头注释此前声称「宽高不设时 SCK 默认按显示器原生
+///     分辨率出图（Retina 下即物理像素）」—— 该断言**已被 Apple 官方答复证伪**，
+///     不要再沿用。若未来看到「不设宽高更简单」的「优化」，那是在 reintroduce
+///     本 bug。
+///
+/// ## 缩放因子与原点
+///
+/// - `scale` 取 `SCContentFilter::point_pixel_scale()`（macOS 14+ 权威的
+///   点→像素比，Retina = 2.0）。**注意**：不能拿 `SCDisplay.width()` 除以
+///   `frame().size.width` 自算 —— Apple 文档明确两者单位都是**点**，比值恒 1.0
+///   （crate 文档声称 width 是像素属于错误文档，审计时已核实）。
+/// - `origin_x_px / origin_y_px` 取 `SCDisplay::frame().origin`（**单位：点**）
+///   × `scale` 换算到物理像素。此前上层硬编码 `0, 0`，多显示器 / 非主屏场景下
+///   遮罩窗会错位（macOS 允许显示器原点为负坐标 —— 副屏在主屏左侧/上方）。
+pub fn capture_main_display() -> SckResult<(image::RgbaImage, i32, i32, f64)> {
     if !sck_available() {
         return Err("SCK 需要 macOS 14+，本机版本较低".into());
     }
@@ -137,8 +167,37 @@ pub fn capture_main_display() -> SckResult<(image::RgbaImage, f64)> {
         if (1.0..=4.0).contains(&s) { s } else { 1.0 }
     };
 
-    // ③ 配置：原生分辨率 + 最高质量；宽高不设 = 按显示器原生出图
+    // ②' 期望出图物理像素尺寸：content_rect（点）× scale。
+    //     ⚠️ content_rect 在 macOS < 14.0 返回零 rect，但本函数已由
+    //     `sck_available()` 守住 14+ 下限；这里仍做一次显式防御 ——
+    //     拿不到有效尺寸时**直接报错回落 xcap**，绝不带着 0 去构造 config
+    //     （`with_width(0)` 会让 SCK 行为未定义）。
+    let content_rect = filter.content_rect();
+    let expected_w = (content_rect.size.width * scale).ceil();
+    let expected_h = (content_rect.size.height * scale).ceil();
+    if !expected_w.is_finite() || !expected_h.is_finite() || expected_w < 1.0 || expected_h < 1.0 {
+        return Err(format!(
+            "SCK contentRect 无效（point {}×{}，scale {scale}），无法确定出图尺寸",
+            content_rect.size.width, content_rect.size.height
+        ));
+    }
+    // 上限保护：8K（7680×4320）已远超任何现役显示器；超过说明 content_rect
+    // 拿到了异常值，直接回落而不是给 SCK 塞一个荒谬的尺寸。
+    const MAX_DIMENSION: f64 = 8192.0;
+    if expected_w > MAX_DIMENSION || expected_h > MAX_DIMENSION {
+        return Err(format!(
+            "SCK contentRect 异常偏大（{expected_w:.0}×{expected_h:.0}），已放弃 SCK 路径"
+        ));
+    }
+    let expected_w = expected_w as u32;
+    let expected_h = expected_h as u32;
+
+    // ③ 配置：**显式**指定出图宽高（Apple 默认 1920×1080，见函数头「出图尺寸」段）
+    //    + 最高质量。`with_capture_resolution_type(Best)` 在显式宽高下只影响
+    //    内部采样质量，不再决定出图尺寸。
     let config = SCStreamConfiguration::new()
+        .with_width(expected_w)
+        .with_height(expected_h)
         .with_capture_resolution_type(SCCaptureResolutionType::Best)
         .with_shows_cursor(false); // 与 xcap 路径行为一致：冻结帧不含鼠标指针
 
@@ -150,6 +209,18 @@ pub fn capture_main_display() -> SckResult<(image::RgbaImage, f64)> {
     let h = cg_image.height();
     if w == 0 || h == 0 {
         return Err("SCK 返回了空图像".into());
+    }
+
+    // ④' 出图尺寸自检：与期望偏差 > 2px 即视为「SCK 没按我们给的宽高出图」。
+    //     宁回落 xcap（`platform/macos.rs` 的 Err 分支）也不出坏图 ——
+    //     半张图 / 被系统悄悄缩放过的图会让遮罩窗与冻结帧对不上，
+    //     表现为「框选位置偏移」，比整条链路失败更难排查。
+    let dw = (w as i64 - expected_w as i64).abs();
+    let dh = (h as i64 - expected_h as i64).abs();
+    if dw > 2 || dh > 2 {
+        return Err(format!(
+            "SCK 出图尺寸与期望不符：期望 {expected_w}×{expected_h}，实际 {w}×{h}（偏差 {dw}×{dh}）"
+        ));
     }
 
     // ⑤ 提取 RGBA 像素（CGImageExt::rgba_data；BGRA 更快但我们后续链路全是 RGBA）
@@ -166,7 +237,25 @@ pub fn capture_main_display() -> SckResult<(image::RgbaImage, f64)> {
 
     let img = image::RgbaImage::from_raw(w as u32, h as u32, rgba)
         .ok_or_else(|| "SCK 像素数据无法组装为图像".to_string())?;
-    Ok((img, scale))
+
+    // ⑥ 显示器真实原点：SCDisplay.frame() 的单位是**点**（含 origin，
+    //     副屏在主屏左侧/上方时为负），× scale 换算到物理像素。
+    //     与上面出图尺寸同源同一个坐标系，故用同一个 scale 换算。
+    let frame = display.frame();
+    let origin_x_px = (frame.origin.x * scale).round() as i32;
+    let origin_y_px = (frame.origin.y * scale).round() as i32;
+    tracing::info!(
+        expected_w,
+        expected_h,
+        actual_w = w,
+        actual_h = h,
+        scale,
+        origin_x_px,
+        origin_y_px,
+        "SCK 出图尺寸与显示器原点已确定"
+    );
+
+    Ok((img, origin_x_px, origin_y_px, scale))
 }
 
 #[cfg(test)]

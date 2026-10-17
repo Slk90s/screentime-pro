@@ -19,6 +19,7 @@
 import { onBeforeUnmount, onMounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { isTauri } from '../../api/tracker';
+import { log } from "@/lib/logger";
 
 /** 网格密度：32×32 对 150×330 的窗来说每格 ≈ 5×10px，足够贴合身体轮廓又不至于太重 */
 const COLS = 32;
@@ -90,7 +91,7 @@ export function usePetHitMask(getRoot: () => HTMLElement | null): UsePetHitMaskR
     try {
       await invoke('set_pet_hit_mask', { cols: COLS, rows: ROWS, cells: Array.from(cells) });
     } catch (err) {
-      console.warn('[pet] 上报命中掩码失败', err);
+      log.warn('[pet] 上报命中掩码失败', err);
     }
   }
 

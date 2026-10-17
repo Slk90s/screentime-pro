@@ -64,8 +64,6 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
       return true;
     case "reclassify_all":
       return 0;
-    case "is_autostart":
-      return false;
     case "get_autostart_pref":
       return null;
     case "get_overview": {
@@ -182,8 +180,8 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
         window_title: "文件传输助手",
         session_seconds: 1830,
       };
-    case "get_idle_threshold":
-      return 300;
+    // ⚠️ v1.1.1 删除 `case "get_idle_threshold"`：该 command 已由工作区他人改动移除，
+    // 残留会让 mock 与真实命令列表漂移（生产不走 mock，运行时无害）。
     // ===== 周/月同比分析 =====
     case "get_trends": {
       const period = (args?.period as string) || "week";

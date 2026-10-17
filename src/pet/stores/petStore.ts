@@ -18,6 +18,7 @@
 import { reactive, computed, watch } from 'vue';
 import { emit } from '@tauri-apps/api/event';
 import type { PetState } from '../types';
+import { log } from "@/lib/logger";
 
 /** 是否运行在 Tauri 环境（浏览器 mock 模式不触发跨窗口事件，避免报错） */
 const isTauriEnv =
@@ -75,7 +76,7 @@ function loadInitial(): RawState {
       };
     }
   } catch (e) {
-    console.error('[pet] 读取持久化数据失败', e);
+    log.error('[pet] 读取持久化数据失败', e);
   }
   return {
     enabled: false,
@@ -105,7 +106,7 @@ watch(
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(v));
     } catch (e) {
-      console.error('[pet] 持久化失败', e);
+      log.error('[pet] 持久化失败', e);
     }
   },
   { deep: true },
@@ -188,7 +189,7 @@ function reload(): void {
       if (typeof p.scale === 'number') _state.scale = Math.min(2, Math.max(0.5, p.scale));
     }
   } catch (e) {
-    console.error('[pet] reload 失败', e);
+    log.error('[pet] reload 失败', e);
   }
 }
 function setPosition(x: number, y: number): void {
@@ -221,7 +222,7 @@ function setPersistSuspended(v: boolean): void {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(_state));
     } catch (e) {
-      console.error('[pet] 持久化失败', e);
+      log.error('[pet] 持久化失败', e);
     }
   }
 }

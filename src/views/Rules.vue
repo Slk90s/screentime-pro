@@ -144,6 +144,7 @@ import Modal from "../components/Modal.vue";
 import { tracker } from "../api/tracker";
 import { categoryName } from "../i18n/categories";
 import type { CategoryOut, RuleOut } from "../types";
+import { log } from "@/lib/logger";
 
 const { t } = useI18n();
 
@@ -275,6 +276,7 @@ async function submit() {
         pattern: f.pattern.trim(),
         categoryId: f.category_id,
         priority: f.priority,
+        enabled: f.enabled,
       });
       showAlert("info", t("rules.added"), t("rules.addedMsg", { pattern: f.pattern }));
     } else {
@@ -293,7 +295,7 @@ async function submit() {
     resetForm();
     formOpen.value = false;
   } catch (e: any) {
-    console.error("[Rules] submit failed:", e);
+    log.error("[Rules] submit failed:", e);
     showAlert("warn", t("rules.opFailed"), t("rules.opFailedMsg", { err: e?.message || e }));
   }
 }
@@ -342,7 +344,7 @@ function confirmRemove(id: number, pattern: string) {
         showAlert("info", t("rules.removed"), t("rules.removedMsg", { pattern }));
         await loadAll();
       } catch (e: any) {
-        console.error("[Rules] deleteRule failed:", e);
+        log.error("[Rules] deleteRule failed:", e);
         showAlert("warn", t("rules.removeFailed"), t("rules.removeFailedMsg", { err: e?.message || e }));
       }
     }
@@ -356,7 +358,7 @@ async function doReclassify() {
     showAlert("info", t("rules.reclassifyDone"), t("rules.reclassifyMsg", { n }));
     await loadAll();
   } catch (e: any) {
-    console.error("[Rules] reclassify failed:", e);
+    log.error("[Rules] reclassify failed:", e);
     showAlert("warn", t("rules.reclassifyFailed"), t("rules.reclassifyFailedMsg", { err: e?.message || e }));
   }
 }

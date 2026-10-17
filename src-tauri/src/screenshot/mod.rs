@@ -64,23 +64,34 @@
 //!        `screenshot_restart_app`（全项目 IPC 84→**88**），前端紧凑弹窗轮询 status、
 //!        发现翻转后引导重启；③ `begin_capture_inner` 识别原因码，权限类失败**不再发**
 //!        `screenshot-error`（改由前端主动轮询引导），非权限失败照旧。
+//!   - 2026-10-17 @v1.1.1: 废弃 - **移除滑动截长图**（`long.rs` 全文 + 4 个 IPC +
+//!     前端面板），截图 IPC 26→**22**。
+//!     **全项目 IPC 95 → 84**（净减 11 = 长图 4 + `commands.rs` 清理 7；
+//!     后者是工作区既有的、与本次截图修复无关的改动 —— 本模块只负责自己那 4 个）。
+//!     移除原因（三条独立证据同时成立，详见 docs/SHOTFIX-ARCHITECTURE-2026-10-17.md）：
+//!     ① **交互架构自相矛盾**：遮罩窗是 `always_on_top` 全屏置顶窗，它本身就是
+//!     用户要滚动的那块屏幕的遮挡物，长图模式只把挖洞阴影改透明、窗口本体
+//!     依然吃掉所有滚轮事件（项目从未对遮罩窗调 `set_ignore_cursor_events`），
+//!     用户**根本无法滚动** —— 这不是算法缺陷，换 FFT 模板匹配也解决不了；
+//!     ② **macOS 100% 不可用**：首屏冻结帧走 SCK（当时恒为 1920×1080），
+//!     后续每屏走 xcap（真实物理分辨率），尺寸守卫必然触发；
+//!     ③ **三平台无法拉齐**：自动滚动需 `enigo`（MSRV 1.77→1.85）+
+//!     macOS 辅助功能新权限 + Linux Wayland 完全不支持。
+//!     ⚠️ 未来若要重启长图：**不要**当成 bug 直接加回来，先解决遮罩窗鼠标穿透
+//!     （控制 UI 必须移出遮罩窗到独立浮窗，项目已有 `set_ignore_cursor_events`
+//!     先例见 `pet/hit_mask.rs`）。
+//!   - 2026-10-17 @v1.1.1: 修复 - `begin_capture_inner` 的 `scale` 变量遮蔽去歧义
+//!     （`capture_scale` / `window_scale` 两个**职责不同**的量，见各自注释），
+//!     并让 `capture_with_xcap` 的**宽高与原点都**归一到物理像素（三平台口径各不同，
+//!     证据见该函数头）；`CaptureReadyPayload` 四字段改为由 `capture_scale` 单一派生
+//!     （`physical == round(logical × scale_factor)`，加 `debug_assert_eq!` 守着）。
+//!     ⚠️ 前端只读 `physical_*`，payload 其余字段属排障信息 —— 保留是为了可观测性。
 //!
 
 /// macOS 截图专属逻辑（屏幕录制授权闸门 / 授权失效根因诊断 / 一键重置授权）。
 /// 仅在 macOS 上编译：Windows/Linux 抓屏不需要 TCC 授权，问题全在 mac 这一侧。
 #[cfg(target_os = "macos")]
 pub(crate) mod macos;
-
-/// 滑动截长图（v1.0.0）：会话状态 + 重叠检测拼接 + 4 个 IPC 命令。
-/// 详见模块头注释 —— 关键约束：首屏必须用冻结帧（遮罩亮着时实时抓屏会拍到自家遮罩），
-/// 后续每屏先隐藏遮罩再抓。
-///
-/// ⚠️ `pub use long::*;` 必须保留：`#[tauri::command]` 在子模块内生成的
-/// `__cmd__<name>` 处理器常量只在 `long` 模块内可见，`lib.rs` 的
-/// `generate_handler![screenshot::screenshot_long_*]` 依赖本条 re-export
-/// 才能解析到（与 `pet/mod.rs` 的 `pub use hit_mask::*;` 同一套机制）。
-pub(crate) mod long;
-pub use long::*;
 
 /// macOS SCK 截图引擎（ScreenCaptureKit 单帧截图，macOS 14+；低版本回落 xcap）。
 /// 仅在 macOS 上编译。为什么引入见模块头注释 —— 核心是旧 API「未授权不报错」
@@ -159,8 +170,6 @@ pub struct ScreenshotConfig {
     pub enabled: bool,
     /// 全局快捷键（global-hotkey 语法，如 CmdOrCtrl+Shift+A）
     pub shortcut: String,
-    /// 确认时默认动作 = 复制到剪贴板
-    pub auto_copy: bool,
     /// 确认时同时落盘到历史目录
     pub auto_save: bool,
     /// 默认圆角（逻辑像素；0 = 直角）
@@ -185,7 +194,6 @@ impl Default for ScreenshotConfig {
         Self {
             enabled: true,
             shortcut: "CmdOrCtrl+Shift+A".into(),
-            auto_copy: true,
             auto_save: false,
             corner_radius: 8,
             shadow: false,
@@ -245,10 +253,6 @@ impl ScreenshotConfig {
                 .get_setting("screenshot_shortcut")
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or(d.shortcut),
-            auto_copy: db
-                .get_setting("screenshot_auto_copy")
-                .map(|s| s == "true")
-                .unwrap_or(d.auto_copy),
             auto_save: db
                 .get_setting("screenshot_auto_save")
                 .map(|s| s == "true")
@@ -279,7 +283,6 @@ impl ScreenshotConfig {
     pub fn save(&self, db: &crate::db::AppDb) -> rusqlite::Result<()> {
         db.set_setting("screenshot_enabled", Self::b(self.enabled))?;
         db.set_setting("screenshot_shortcut", &self.shortcut)?;
-        db.set_setting("screenshot_auto_copy", Self::b(self.auto_copy))?;
         db.set_setting("screenshot_auto_save", Self::b(self.auto_save))?;
         db.set_setting("screenshot_corner_radius", &self.corner_radius.to_string())?;
         db.set_setting("screenshot_shadow", Self::b(self.shadow))?;
@@ -405,14 +408,6 @@ fn ensure_capture_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String
 fn hide_capture_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window(CAPTURE_WINDOW_LABEL) {
         let _ = w.hide();
-    }
-}
-
-/// 长图模式用：把遮罩窗还回来（截完一屏后恢复 UI）。
-/// 与 hide_capture_window 成对出现，供 `long::screenshot_long_capture` 在阻塞线程里调用。
-fn show_capture_window(app: &AppHandle) {
-    if let Some(w) = app.get_webview_window(CAPTURE_WINDOW_LABEL) {
-        let _ = w.show();
     }
 }
 
@@ -633,21 +628,55 @@ async fn begin_capture_inner(app: &AppHandle) -> Result<(), String> {
     hide_self(app, &state);
     tokio::time::sleep(Duration::from_millis(160)).await;
 
-    // ② 抓主显示器整屏（物理像素）
+    // ② 抓主显示器整屏（**统一为物理像素口径**）
     //
     // v0.9.4（Task 80）：macOS 优先走 SCK 引擎（ScreenCaptureKit，macOS 14+），
     // 失败或低版本回落 xcap；Windows / Linux 直走 xcap。抓屏逻辑收口到
     // `platform::Backend::capture`（在阻塞线程跑，SCK 内部同步等回调）。
+    //
+    // v1.1.1：契约收紧 —— 返回的 `mx/my/mw/mh` **一律是物理像素**。
+    // 旧契约下 macOS 的 `mw/mh` 来自 `xcap::Monitor::width()`，那是
+    // `CGDisplayBounds().size.width` = **逻辑点**（Retina 下 = 物理/2），
+    // 与同一元组里代表物理像素的 `img` 构成混口径 → 遮罩窗按点数布局、
+    // 冻结帧是物理像素，两者对不上（`xcap-0.9.8/src/macos/impl_monitor.rs:159`
+    // vs `windows/impl_monitor.rs:236`，同一行代码两平台语义不同）。
+    // 现统一改用 `img` 自身尺寸（`img` 就是这块屏的完整抓屏，天然自洽、零换算误差）。
     let captured = tauri::async_runtime::spawn_blocking(crate::screenshot::platform::Backend::capture)
         .await
         .map_err(|e| format!("截图线程异常: {e}"))??;
-    let (img, mx, my, mw, mh, scale) = captured;
+    // `capture_scale` = **抓屏侧**缩放因子（来自 `platform::Backend::capture`，
+    // macOS 上是 SCK 的 `point_pixel_scale`、其它平台是 xcap 的 `scale_factor`）。
+    // ⚠️ v1.1.1 之前这里叫 `scale`，与下方 `window_scale`（显示器侧）同名遮蔽，
+    //    导致 payload 里 `width/height` 用抓屏 scale、`scale_factor` 用窗口 scale，
+    //    读代码时极易误判为自洽。单显示器下两者相等故无可见错误，但多屏
+    //    / 抓屏回落等场景会发散 —— 现在靠改名消除歧义。
+    let (img, mx, my, mw, mh, capture_scale) = captured;
 
     tracing::info!(w = img.width(), h = img.height(), x = mx, y = my, "整屏已抓取");
     let phys_w = img.width();
     let phys_h = img.height();
-    let logical_w = phys_w as f64 / scale;
-    let logical_h = phys_h as f64 / scale;
+    // 用**抓屏侧** scale 把物理像素换成 CSS 逻辑像素：这才是前端
+    // `<img>` / canvas 所处的坐标系（冻结帧的物理像素 ÷ 冻结帧自带的缩放比）。
+    // ⚠️ 必须与下面 payload 的 `scale_factor` 同源，否则 payload 三字段互相矛盾
+    //   （历史上正是这个不一致引发「按点数布局、按像素裁剪」的错位）。
+    let logical_w = phys_w as f64 / capture_scale;
+    let logical_h = phys_h as f64 / capture_scale;
+    debug_assert_eq!(
+        phys_w as f64,
+        (logical_w * capture_scale).round(),
+        "capture-ready payload 不自洽：physical_width 必须等于 round(width × scale_factor)。\
+         若此断言触发，说明 phys_w 与 scale_factor 取自不同口径的 scale"
+    );
+    debug_assert_eq!(
+        phys_h as f64,
+        (logical_h * capture_scale).round(),
+        "capture-ready payload 不自洽：physical_height 必须等于 round(height × scale_factor)"
+    );
+    // ⚠️ 这两条断言**只在真机跑截图时**才可能触发：`begin_capture_inner` 需要真实
+    // `AppHandle` + 显示器，现有单测不覆盖它（已实测：故意破坏断言条件后
+    // `cargo test` 仍全绿，因为没有任何测试执行到这行）。它们的价值是
+    // 「开发/真机调试构建下把口径发散当场炸出来」，而非 CI 门禁 ——
+    // 别指望 `cargo test` 能验证它们。
 
     *state.frame.lock().unwrap_or_else(|e| e.into_inner()) = Some(CachedFrame { img });
 
@@ -666,25 +695,39 @@ async fn begin_capture_inner(app: &AppHandle) -> Result<(), String> {
     // 逻辑值在任何 scale_factor 下语义唯一（AppKit 再按显示器真实缩放还原），
     // Windows/Linux 上 `to_logical(s)` 用同显示器 scale 除回再乘，逐值等价，不受影响。
     let win = ensure_capture_window(app)?;
-    let scale = win
+    // `window_scale` = **显示器侧**缩放因子，只用于把物理几何转成「逻辑」值
+    // 喂给 `LogicalPosition` / `LogicalSize`（绕开 tao 的隐式换算，见上）。
+    //
+    // ⚠️ 为什么 payload 的 `scale_factor` 用 `capture_scale` 而这里用 `window_scale`：
+    //   两者**职责不同**，不是同一个数的两个名字 ——
+    //   - `capture_scale`：抓屏引擎回传的、**冻结帧自身**的物理/逻辑比。它决定
+    //     payload 的 `width/height`（前端 CSS 坐标系）与 `scale_factor`（供前端排障），
+    //     三者必须同源，故 payload 全部用 `capture_scale`。
+    //   - `window_scale`：**遮罩窗所在显示器**的 scale_factor。tao 对 `Physical*`
+    //     入参会按「窗口当前」scale 隐式换算（v0.9.8 的画中画 bug），故窗口几何必须
+    //     用显式 Logical* 绕开，而换算基准取目标显示器的 scale。
+    //   单显示器下两者相等（故历史上无可见错误）；多屏 / 抓屏回落场景下可能不同 ——
+    //   这正是本变量存在的意义，若合并成一个数会重新引入该类错位。
+    let window_scale = win
         .current_monitor()
         .ok()
         .flatten()
         .map(|m| m.scale_factor())
         .unwrap_or(1.0);
     tracing::info!(
-        scale,
+        window_scale,
+        capture_scale,
         phys = format!("{}x{}", mw, mh),
         "遮罩窗几何：显示器 scale_factor"
     );
     win.set_position(tauri::LogicalPosition::new(
-        mx as f64 / scale,
-        my as f64 / scale,
+        mx as f64 / window_scale,
+        my as f64 / window_scale,
     ))
     .map_err(|e| format!("定位遮罩窗失败: {e}"))?;
     win.set_size(tauri::LogicalSize::new(
-        mw as f64 / scale,
-        mh as f64 / scale,
+        mw as f64 / window_scale,
+        mh as f64 / window_scale,
     ))
     .map_err(|e| format!("调整遮罩窗尺寸失败: {e}"))?;
     win.show().map_err(|e| format!("显示遮罩窗失败: {e}"))?;
@@ -699,7 +742,7 @@ async fn begin_capture_inner(app: &AppHandle) -> Result<(), String> {
             height: logical_h,
             physical_width: phys_w,
             physical_height: phys_h,
-            scale_factor: scale,
+            scale_factor: capture_scale,
             default_radius: cfg.corner_radius,
             default_shadow: cfg.shadow,
         },
@@ -707,14 +750,29 @@ async fn begin_capture_inner(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// `capture-ready` 事件的载荷（Rust → 遮罩窗）。
+///
+/// ⚠️ v1.1.1 起**四个几何字段全部由同一个 `capture_scale` 派生**（自洽）：
+/// `width/height` 与 `scale_factor` 同源、`physical_*` 是冻结帧真实像素，
+/// 三者满足 `physical == round(logical × scale_factor)`（`begin_capture_inner`
+/// 里有 `debug_assert_eq!` 守着）。改动前 `width/height` 用抓屏 scale、
+/// `scale_factor` 用显示器 scale，两者可能不等 —— 单显示器下恰好相等所以从未暴露。
+///
+/// 前端当前**只读** `physical_width` / `physical_height`（canvas 尺寸与
+/// CSS→物理换算系数 `k = physical_width / window.innerWidth` 都由它们派生），
+/// `width`/`height`/`scale_factor` 属排障信息。保留它们是为了让「后端算了什么」
+/// 可被日志与真机排障直接观测，而不是让前端去反推。
 #[derive(Clone, serde::Serialize)]
 pub struct CaptureReadyPayload {
-    /// 遮罩窗的逻辑尺寸（CSS 像素），前端据此铺满
+    /// 冻结帧的 CSS 逻辑尺寸 = `physical_width ÷ scale_factor`（前端据此铺满）。
     pub width: f64,
     pub height: f64,
-    /// 整屏帧的物理像素尺寸（= CSS 尺寸 × scale_factor）
+    /// 整屏帧的物理像素尺寸（冻结帧真实像素，非 CSS 尺寸 × scale_factor）。
     pub physical_width: u32,
     pub physical_height: u32,
+    /// **抓屏侧**缩放因子（`platform::Backend::capture` 回传；macOS 上是 SCK 的
+    /// `point_pixel_scale`）。与 `width/height` 同源，⚠️ **不是**遮罩窗所在显示器的
+    /// `scale_factor`（那个值只用于窗口定位/尺寸的逻辑化换算，不进 payload）。
     pub scale_factor: f64,
     pub default_radius: u32,
     pub default_shadow: bool,
@@ -724,6 +782,40 @@ pub struct CaptureReadyPayload {
 ///
 /// 返回 `(整屏图, 显示器原点x, 原点y, 宽, 高, 缩放因子)`。
 /// Windows / Linux 的唯一路径；macOS 上作为 SCK 的回落（macOS < 14 或 SCK 失败）。
+///
+/// ⚠️ v1.1.1：**宽高原点一律取 `img` 自身尺寸，物理像素口径**。
+///
+/// 修改原因：`xcap::Monitor::width()/height()` 的语义**三平台不一致**——
+///   - Windows：`dmPelsWidth` = **物理像素**（`windows/impl_monitor.rs:236`）
+///   - macOS：`CGDisplayBounds().size.width` = **逻辑点**，Retina 下 = 物理/2
+///     （`macos/impl_monitor.rs:159`；注意其 `scale_factor` = `pixel_width/width`
+///     恰好反证了 width 是点）
+///   - Linux：`X11Monitor` 的 mm→点后**再除以 scale_factor** = **逻辑像素**
+///     （`linux/impl_monitor.rs:301`）
+/// 旧代码把 `m.width()` 与物理像素的 `img` 塞进同一个元组，在 macOS 上构成
+/// 混口径几何（遮罩窗按点数布局、冻结帧是物理像素）→ 窗口与冻结帧对不上。
+///
+/// 注意事项：`img` 是 `m.capture_image()` 的返回，就是**这块显示器**的完整抓屏，
+/// 尺寸与该屏天然自洽 —— 用它做宽高，三平台都正确且无需任何换算。
+/// ⚠️ 旧约定失效：`mw`/`mh` **不再**来自 `xcap::Monitor`，若未来有人想「改用
+///   Monitor 的宽高以支持非整屏抓屏」，必须先补上三平台的口径换算。
+///
+/// ## 原点 `mx/my` 同样做了口径归一（2026-10-17 补充）
+///
+/// `x()/y()` 的单位与 `width()/height()` **是同一个坑**（都源自 `CGDisplayBounds` 等
+/// 平台 API 对「点」与「像素」的混用）：
+///   - Windows：`dmPosition.x/y` = **物理像素**（`windows/impl_monitor.rs:225-233`）
+///   - macOS：`CGDisplayBounds().origin.x/y` = **逻辑点**（`macos/impl_monitor.rs:146-158`）
+///   - Linux：`monitor.x() / scale_factor` = **逻辑像素**（`linux/impl_monitor.rs:287-299`）
+///
+/// 故 macOS / Linux 侧乘 `scale` 归一到物理像素，Windows 侧原样（已是物理像素）。
+/// 单显示器恒为 `(0,0)`，乘 0 仍是 0 → **单屏行为零变化**，只在多屏下纠正错位。
+///
+/// 为什么 tao 要的是「物理像素」：tao 的 `util::window_position`（tao-0.37.1
+/// `src/platform_impl/macos/util/mod.rs:94-99`）做 Y 轴翻转时用的是
+/// `CGDisplay::main().pixels_high()` —— **物理像素**。它用物理像素量纲去减我们传入的
+/// y，传入的也必须是物理像素这一量纲，反推才成立。传入逻辑点会在 Retina 主屏上
+/// 让翻转量错一倍（`pixels_high` 是逻辑高的 2倍）。
 fn capture_with_xcap() -> Result<(RgbaImage, i32, i32, i32, i32, f64), String> {
     let monitors = xcap::Monitor::all().map_err(|e| format!("枚举显示器失败: {e}"))?;
     if monitors.is_empty() {
@@ -734,11 +826,29 @@ fn capture_with_xcap() -> Result<(RgbaImage, i32, i32, i32, i32, f64), String> {
         .find(|m| m.is_primary().unwrap_or(false))
         .unwrap_or(&monitors[0]);
     let img = m.capture_image().map_err(|e| format!("屏幕捕获失败: {e}"))?;
-    let mx = m.x().unwrap_or(0);
-    let my = m.y().unwrap_or(0);
-    let mw = m.width().unwrap_or(img.width());
-    let mh = m.height().unwrap_or(img.height());
     let scale = m.scale_factor().unwrap_or(1.0) as f64;
+    // 宽高一律用 `img` 的真实像素尺寸（见函数头「三平台口径不一致」段）
+    let (mw, mh) = (img.width(), img.height());
+    let (mx_raw, my_raw) = (m.x().unwrap_or(0), m.y().unwrap_or(0));
+    // 原点归一到物理像素：macOS / Linux 的 `x()/y()` 是逻辑量，需乘 scale；
+    // Windows 的 `dmPosition` 已是物理像素，原样透传。
+    // ⚠️ `cfg` 必须精确到 windows —— 用 `not(windows)` 会把未来任何新平台
+    // 默认打上「需换算」，而新平台的语义无从得知，宁可编译期报错也不猜。
+    #[cfg(target_os = "windows")]
+    let (mx, my) = (mx_raw, my_raw);
+    #[cfg(not(target_os = "windows"))]
+    let (mx, my) = (
+        (f64::from(mx_raw) * scale).round() as i32,
+        (f64::from(my_raw) * scale).round() as i32,
+    );
+    tracing::debug!(
+        mx,
+        my,
+        mw,
+        mh,
+        scale,
+        "xcap 抓屏几何（已归一到物理像素）"
+    );
     Ok((img, mx, my, mw as i32, mh as i32, scale))
 }
 
@@ -776,9 +886,7 @@ pub struct ScreenshotResult {
 ///
 /// v0.10.0：新增 `region` 可选参数（选区在冻结帧上的物理像素矩形 x/y/w/h）。
 /// 传了就记入 `last_region`，供 `screenshot_repeat_region` 重复截图；不传（旧调用方）
-/// 不影响任何行为。⚠️ 长图 finish 也走本 commit 管道（前端 longFinishStep 调用，
-/// v1.1.0 起），但**不传 region**（长图拼接自多次抓屏，无单一冻结帧选区语义），
-/// 所以不会污染 last_region。
+/// 不影响任何行为。
 #[tauri::command]
 pub async fn screenshot_commit(
     app: AppHandle,
@@ -1192,10 +1300,11 @@ pub fn screenshot_dir(app: AppHandle) -> Result<String, String> {
 pub fn screenshot_list(
     state: tauri::State<'_, Arc<AppState>>,
     limit: u32,
+    offset: u32,
 ) -> Result<Vec<crate::db::ScreenshotOut>, String> {
     state
         .db
-        .list_screenshots(limit.clamp(1, 500))
+        .list_screenshots(limit.clamp(1, 500), offset)
         .map_err(|e| e.to_string())
 }
 

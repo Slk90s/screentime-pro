@@ -89,6 +89,7 @@ import type {
   HourlyBucketOut,
   OverviewOut,
 } from "../types";
+import { log } from "@/lib/logger";
 
 const { t } = useI18n();
 
@@ -165,9 +166,12 @@ function backToToday() {
   loadDetails({ days: 0, date: selectedDate.value });
 }
 // 顶部「今天」按钮：同时切换范围 + 刷新查看日期为当天
+// 注意：range 已是 0（单日）时 watch([range, device]) 不会触发，必须显式刷新，
+// 否则「切到历史日期后再点今天」页面仍停留在历史那天（与 backToToday 对齐）。
 function selectToday() {
   range.value = 0;
   selectedDate.value = todayStr();
+  loadDetails({ days: 0, date: selectedDate.value });
 }
 
 // v0.7.9（2026-09-12）加固：
@@ -180,10 +184,10 @@ async function loadDevices() {
     if (Array.isArray(list)) {
       devices.value = list;
     } else {
-      console.error("[devices] get_devices 返回非数组：", list);
+      log.error("[devices] get_devices 返回非数组：", list);
     }
   } catch (e) {
-    console.error("[devices] get_devices 调用失败：", e);
+    log.error("[devices] get_devices 调用失败：", e);
   }
 }
 

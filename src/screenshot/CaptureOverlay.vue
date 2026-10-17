@@ -34,6 +34,13 @@
       → 命中检测（逐条 measureText 包围盒，倒序取最上层）→ 整条 op 摘出跟随指针
       → 松手/Enter 落回。文字工具原本「点空白=新建」的语义保留：未命中才走新建。
       命中框同时给出手型光标反馈（hitText 时 cursor: grab）。
+    - 2026-10-17 @v1.1.1: 废弃 - **移除滑动截长图模式**（工具栏按钮 + 长图面板 +
+      7 个状态 ref + 4 个步骤函数 + 样式）。原因：遮罩窗是 `always_on_top` 全屏置顶窗，
+      它本身就是用户要滚动的那块屏幕的遮挡物 —— 长图模式只把挖洞阴影改透明，窗口本体
+      依然存在且吃掉所有滚轮事件（项目从未对遮罩窗调 `set_ignore_cursor_events`），
+      用户**根本无法滚动**。这不是拼接算法能解决的问题。
+      ⚠️ `.mini--ghost` 样式**保留**（OCR 面板「关闭」按钮在用）。
+      ⚠️ 普通截图链路（框选/标注/取字/圆角/马赛克/OCR/剪贴板/落盘）行为完全不变。
 -->
 <template>
   <div
@@ -44,17 +51,15 @@
     @pointerup="onUp"
     @pointercancel="onUp"
   >
-    <!-- 冻结的桌面（与真实桌面逐像素一致，但静止）；长图模式下隐藏（露出真实滚动屏幕） -->
-    <img v-if="imgUrl && !longMode" class="shot" :src="imgUrl" alt="" draggable="false" />
+    <!-- 冻结的桌面（与真实桌面逐像素一致，但静止） -->
+    <img v-if="imgUrl" class="shot" :src="imgUrl" alt="" draggable="false" />
 
-    <!-- 压暗：在选区处挖一个洞（box-shadow 外扩把四周压暗，圆角同步）；长图模式只留细边框不压暗 -->
-    <div v-if="box && !longMode" class="hole" :style="holeStyle"></div>
-    <div v-else-if="box && longMode" class="hole hole--ghost" :style="holeStyle"></div>
+    <!-- 压暗：在选区处挖一个洞（box-shadow 外扩把四周压暗，圆角同步） -->
+    <div v-if="box" class="hole" :style="holeStyle"></div>
     <div v-else class="dim-all"></div>
 
-    <!-- 标注层（只画在选区内，带圆角裁切）；长图模式下无意义，隐藏 -->
+    <!-- 标注层（只画在选区内，带圆角裁切） -->
     <canvas
-      v-if="!longMode"
       ref="annoEl"
       class="anno"
       :width="meta ? meta.physical_width : 1"
@@ -63,7 +68,7 @@
 
     <!-- 选区边框 + 手柄（仅在「选择」状态出现，标注时锁边避免误拖） -->
     <div v-if="box" class="sel" :style="selStyle"></div>
-    <template v-if="box && tool === 'none' && !longMode">
+    <template v-if="box && tool === 'none'">
       <span
         v-for="h in HANDLES"
         :key="h"
@@ -73,8 +78,8 @@
       ></span>
     </template>
 
-    <!-- 尺寸胶囊（长图模式由长图面板的进度替代） -->
-    <div v-if="box && !longMode" class="pills" :style="pillStyle">
+    <!-- 尺寸胶囊 -->
+    <div v-if="box" class="pills" :style="pillStyle">
       <span class="pill pill--size">{{ Math.round(box.w) }} × {{ Math.round(box.h) }} px</span>
       <span v-if="radius > 0 || shadow" class="pill pill--tag">
         <template v-if="radius > 0">{{ t("shot.radius") }} {{ radius }}</template>
@@ -119,8 +124,8 @@
       </template>
     </div>
 
-    <!-- QQ 式工具栏（长图模式下隐藏，由长图面板接管） -->
-    <div v-if="box && !longMode" class="bar" :style="barStyle" @pointerdown.stop>
+    <!-- QQ 式工具栏 -->
+    <div v-if="box" class="bar" :style="barStyle" @pointerdown.stop>
       <button class="tb" :class="{ on: tool === 'rect' }" :title="t('shot.toolRect')" @click="pick('rect')">
         <svg viewBox="0 0 20 20" width="18" height="18"><rect x="3.5" y="4.5" width="13" height="11" rx="1.5" /></svg>
       </button>
@@ -136,19 +141,7 @@
       <button class="tb" :class="{ on: tool === 'text' }" :title="t('shot.toolText')" @click="pick('text')">
         <svg viewBox="0 0 20 20" width="18" height="18"><path d="M4 5h12M10 5v11" /></svg>
       </button>
-      <!-- v1.0.0：滑动截长图（进入后遮罩转长图模式，用户手动滚动 + 逐屏截取） -->
-      <button
-        v-if="!longMode"
-        class="tb"
-        :title="t('shot.longEnter')"
-        :disabled="selTooSmall"
-        @click="enterLongMode"
-      >
-        <svg viewBox="0 0 20 20" width="18" height="18">
-          <rect x="6.5" y="3" width="7" height="14" rx="1.5" />
-          <path d="M8.5 7h3M8.5 10h3M8.5 13h3" />
-        </svg>
-      </button>
+      <!-- v1.0.0 的「滑动截长图」按钮已随长图模式整体移除（v1.1.1，2026-10-17） -->
       <button
         class="tb"
         :class="{ on: activePanel === 'ocr', busy: ocrBusy }"
@@ -249,34 +242,6 @@
       @blur="commitText"
     />
 
-    <!-- v1.0.0：长图模式浮层（替换工具栏成为唯一交互入口） -->
-    <div v-if="box && longMode" class="panel panel--long" :style="longPanelStyle" @pointerdown.stop>
-      <div class="ocr-head">
-        <span class="pill-label">{{ t("shot.longTitle") }}</span>
-        <span v-if="longHeight > 0" class="ocr-lang ocr-lang--enh">
-          {{ t("shot.longProgress", { n: longShots, h: longHeight }) }}
-        </span>
-      </div>
-      <p class="ocr-hint">{{ t("shot.longHint") }}</p>
-      <!-- v1.1.0：上一屏为低置信拼接（多行命中）时提示用户多截一屏复核，完成前会自动验证/回滚 -->
-      <p v-if="longTentative && !longErr" class="ocr-hint ocr-hint--warn">
-        {{ t("shot.longTentative") }}
-      </p>
-      <p v-if="longErr" class="ocr-hint ocr-hint--err">{{ longErr }}</p>
-      <p v-else-if="longBusy" class="ocr-hint">{{ t("shot.longBusy") }}</p>
-      <div class="ocr-actions">
-        <button class="mini" :disabled="longBusy" @click="longCaptureStep">
-          {{ t("shot.longCapture") }}
-        </button>
-        <button class="mini mini--ok" :disabled="longBusy || longShots < 2" @click="longFinishStep">
-          {{ t("shot.longDone") }}
-        </button>
-        <button class="mini mini--ghost" :disabled="longBusy" @click="longCancelStep">
-          {{ t("shot.longCancel") }}
-        </button>
-      </div>
-    </div>
-
     <!-- 提示条（未框选时） -->
     <div v-if="!box" class="hint">{{ t("shot.hint") }}</div>
   </div>
@@ -289,6 +254,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { screenshot } from "../api/screenshot";
 import type { CaptureReadyPayload, OcrEngineKind } from "../types";
+import { log } from "@/lib/logger";
 
 const { t } = useI18n();
 
@@ -999,126 +965,10 @@ function pick(name: Tool) {
   activePanel.value = null;
 }
 
-// ===== v1.0.0：滑动截长图 =====
-//
-// 交互流程（与 Rust long.rs 的设计对应）：
-// ① 用户框选 → 点工具栏「长图」→ longStart（Rust 用冻结帧抓首屏，零闪烁）
-// ② 遮罩转长图模式：隐藏冻结帧与选区 UI，露出真实屏幕 → 用户手动滚动页面
-// ③ 对齐后点「继续截取」→ longCapture（Rust 隐藏遮罩 ~260ms 抓屏 → 拼接）
-//    ⚠️ 抓屏瞬间 Rust 会把整个遮罩窗 hide 再 show，前端会有一次「消失又回来」，
-//    属预期行为 —— Vue 状态不受影响（窗口只是 hide，webview 上下文还在）。
-// ④ 点「完成」→ longFinish 拿整图 base64 → 走既有 commit 管道（剪贴板/落盘/入库）
-//    或点「取消」→ longCancel 丢弃。
-// ⚠️ 长图模式下冻结帧已过期（屏幕在滚动），标注/取字/撤销全部禁用，
-//    Esc 语义改为「退出长图模式」（先 cancel 会话，再回普通截图）。
-
-const longMode = ref(false);
-const longBusy = ref(false);
-const longErr = ref("");
-const longShots = ref(0);
-const longHeight = ref(0);
-// v1.1.0：最近一次拼接是否为低置信（tentative，多行命中待下一屏验证）——透出面板提示
-const longTentative = ref(false);
-const longRect = ref<{ x: number; y: number; w: number; h: number } | null>(null);
-
-/** 长图面板落点：固定在选区下方（长图模式没有工具栏，直接用选区底边） */
-const longPanelStyle = computed(() => {
-  const b = box.value!;
-  const center = clamp(b.x + b.w / 2, 200, Math.max(200, vw.value - 200));
-  const below = b.y + b.h + 12;
-  const top = below + 150 <= vh.value ? below : Math.max(8, vh.value - 160);
-  return { left: `${center}px`, top: `${top}px`, transform: "translateX(-50%)" };
-});
-
-/** 进入长图模式：调 Rust 建会话（首屏 = 冻结帧上的选区） */
-async function enterLongMode() {
-  const b = box.value;
-  const m = meta.value;
-  if (!b || !m) return;
-  const s = k.value;
-  const rect = {
-    x: Math.round(b.x * s),
-    y: Math.round(b.y * s),
-    w: Math.max(16, Math.round(b.w * s)),
-    h: Math.max(16, Math.round(b.h * s)),
-  };
-  longBusy.value = true;
-  longErr.value = "";
-  try {
-    const info = await screenshot.longStart(rect.x, rect.y, rect.w, rect.h);
-    longRect.value = rect;
-    longShots.value = 1;
-    longHeight.value = info.height;
-    longMode.value = true;
-    tool.value = "none";
-    activePanel.value = null;
-  } catch (err) {
-    longErr.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    longBusy.value = false;
-  }
-}
-
-/** 截下一屏（用户已滚动到位；Rust 抓屏期间遮罩会短暂隐藏） */
-async function longCaptureStep() {
-  if (!longMode.value || longBusy.value) return;
-  longBusy.value = true;
-  longErr.value = "";
-  try {
-    const info = await screenshot.longCapture();
-    longShots.value += 1;
-    longHeight.value = info.height;
-    // v1.1.0：本屏若为低置信拼接，提示用户「滚动后多截一屏」让 Rust 侧复核/回滚
-    longTentative.value = info.tentative > 0;
-  } catch (err) {
-    // 拼接失败（滚动太快/无新内容）不算致命：保留会话，用户可调整后再试
-    longErr.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    longBusy.value = false;
-  }
-}
-
-/** 完成长图：拿整图 base64 走既有 commit 管道（复制 + 按配置落盘） */
-async function longFinishStep() {
-  if (!longMode.value || longBusy.value) return;
-  longBusy.value = true;
-  longErr.value = "";
-  // v1.1.0 审计修复配套：区分两段失败——
-  // ① longFinish 失败：Rust 侧编码失败时会话**还回**（可重试），保留长图模式；
-  // ② commit 失败：longFinish 已成功（会话已消费，take 语义），退出长图模式。
-  let finished = false;
-  try {
-    const png = await screenshot.longFinish();
-    finished = true;
-    await screenshot.commit({ pngBase64: png, copy: true, save: autoSave.value });
-    longMode.value = false;
-    reset();
-    await getCurrentWindow().hide();
-  } catch (err) {
-    longErr.value = err instanceof Error ? err.message : String(err);
-    if (finished) {
-      longMode.value = false;
-    }
-    // finished === false：长图会话仍在，面板保留，用户可直接再点「完成」重试
-  } finally {
-    longBusy.value = false;
-  }
-}
-
-/** 取消长图：丢弃会话，回到普通截图模式（选区保留，还能继续标注） */
-async function longCancelStep() {
-  if (!longMode.value) return;
-  try {
-    await screenshot.longCancel();
-  } finally {
-    longMode.value = false;
-    longErr.value = "";
-    longShots.value = 0;
-    longHeight.value = 0;
-    longTentative.value = false;
-    longRect.value = null;
-  }
-}
+// v1.1.1（2026-10-17）：滑动截长图模式已**整体移除**（模板按钮 + 面板 + 本脚本段）。
+// 原因：遮罩窗是 always_on_top 置顶窗，它本身就是用户要滚动的那块屏幕的遮挡物，
+// 用户无法滚动遮罩下方的目标页面 —— 换任何拼接算法都解决不了。若未来要重启，
+// 必须先做「遮罩窗 set_ignore_cursor_events(true) + 控制 UI 移出遮罩窗」。
 
 function togglePanel(name: "radius") {
   activePanel.value = activePanel.value === name ? null : name;
@@ -1225,14 +1075,6 @@ function reset() {
   ocrLang.value = "";
   ocrCopied.value = false;
   ocrStale.value = false;
-  // v1.0.0：长图状态一并复位（会话本身由 Rust commit/cancel 清掉）
-  longMode.value = false;
-  longBusy.value = false;
-  longErr.value = "";
-  longShots.value = 0;
-  longHeight.value = 0;
-  longTentative.value = false;
-  longRect.value = null;
   base = null;
   drag = null;
   // 丢掉上一会话残留的重绘任务，避免新会话首帧被旧状态覆盖
@@ -1252,11 +1094,6 @@ function onKey(e: KeyboardEvent) {
   if ((tag === "TEXTAREA" || tag === "INPUT") && e.key !== "Escape") return;
   if (e.key === "Escape") {
     e.preventDefault();
-    if (longMode.value) {
-      // 长图模式：先退长图（取消会话、回普通模式），再按一次才退出截图
-      void longCancelStep();
-      return;
-    }
     if (activePanel.value) {
       activePanel.value = null;
       return;
@@ -1268,12 +1105,6 @@ function onKey(e: KeyboardEvent) {
     void cancel();
   } else if (e.key === "Enter") {
     e.preventDefault();
-    if (longMode.value) {
-      // 长图模式：Enter = 继续截取（最常用的动作），Shift+Enter = 完成
-      if (e.shiftKey) void longFinishStep();
-      else void longCaptureStep();
-      return;
-    }
     if (box.value) void commit(true, autoSave.value);
   } else if ((e.key === "a" || e.key === "A") && (e.ctrlKey || e.metaKey)) {
     e.preventDefault();
@@ -1322,7 +1153,7 @@ onMounted(async () => {
       imgUrl.value = url;
       await loadBase(url);
     } catch (err) {
-      console.warn("[capture] 拉取整屏帧失败", err);
+      log.warn("[capture] 拉取整屏帧失败", err);
     }
   });
 });
@@ -1591,21 +1422,8 @@ onBeforeUnmount(() => {
   color: #f1f5f9;
 }
 
-/* ===== v1.0.0：长图模式 ===== */
-/* 半透明「幽灵」选区框：不压暗（屏幕必须看得清才能滚动对齐），只提示截取范围 */
-.hole--ghost {
-  box-shadow: 0 0 0 6000px rgba(2, 6, 23, 0) !important;
-  outline: 2px solid rgba(47, 107, 255, 0.9);
-  outline-offset: -2px;
-}
-/* 长图面板：复用 ocr 面板骨架（标题/提示/按钮行），宽一点容纳进度徽标 */
-.panel--long {
-  width: 360px;
-  gap: 6px;
-}
-.mini--ok {
-  background: #10b981;
-}
+/* ⚠️ `.mini--ghost` 必须保留**：OCR 面板的「关闭」按钮在用它（见模板 ocr-actions）。 */
+/* v1.1.1：长图模式样式（`.hole--ghost` / `.panel--long` / `.mini--ok`）已随长图功能移除。 */
 .tb.busy {
   opacity: 0.55;
 }

@@ -24,6 +24,7 @@
 import { onBeforeUnmount, ref } from 'vue';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
+import { log } from "@/lib/logger";
 
 /** 超过该位移（px）才判定为拖拽，否则视为点击（保留点击交互） */
 const DRAG_THRESHOLD = 4;
@@ -93,7 +94,7 @@ export function usePetDrag(
       await appWindow.startDragging();
     } catch (err) {
       // 原生拖拽不可用 → 回退手动 rAF 拖拽（重新挂监听走 fallback 分支）
-      console.warn('[pet] 原生拖拽不可用，回退手动拖拽', err);
+      log.warn('[pet] 原生拖拽不可用，回退手动拖拽', err);
       isDragging.value = false;
       nativeActive = false;
       // 注意：此处不调用 onEnd —— pointerup 时 onUpHandler 的回退分支会统一收尾，

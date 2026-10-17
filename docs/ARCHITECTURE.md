@@ -50,11 +50,47 @@
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-09-29（同步至 **v1.0.0**；首个正式版——
+> 最后更新：2026-10-17（同步至 **v1.1.1**——
+> ① **macOS 截图出图尺寸修复（P0「小窗口快照」）**：`screenshot/macos_sck.rs` 构建
+> `SCStreamConfiguration` 时**没有设宽高**，而 **Apple 的默认值就是 1920×1080**（官方
+> StackOverflow 答复 78847211 + DTS 论坛 765360 双源确认；**此前代码与文档注释声称
+> 「默认按显示器原生分辨率出图」是错的，已修正**）→ 冻结帧恒为 1920×1080，遮罩窗按
+> 1920×1080 布局，用户只看到屏幕左上角一小块。现显式 `with_width`/`with_height` =
+> `contentRect.size`（点）× `point_pixel_scale()`（**向上取整**）+ 出图尺寸自检
+> （偏差 > 2px 即回落 xcap）。⚠️ 不用 `SCScreenshotConfiguration`：它 gated 在
+> `macos_26_0` 之后，本项目目标 macOS 14+。
+> ② **多显示器几何口径统一为物理像素（宽高与原点都归一）**：SCK 路径原点由硬编码
+> `0,0` 改为透传 `SCDisplay.frame().origin`（macOS 允许显示器原点为负坐标）；xcap 路径的
+> **宽高**由 `xcap::Monitor::width()` 改为 `img.width()` —— 前者**三平台语义不同**
+> （Win = `dmPelsWidth` 物理像素 / mac = `CGDisplayBounds` **逻辑点** / Linux = 逻辑像素），
+> 与同一元组里代表物理像素的 `img` 构成混口径几何；**原点** `m.x()/m.y()` 是同一个坑，
+> macOS/Linux 侧乘 `scale` 归一、Windows 侧原样（单屏恒为 0，行为零变化）。
+> 依据：`tao-0.37.1` 的 `util::window_position`（`macos/util/mod.rs:94-99`）做 Y 轴翻转
+> 用的是 `CGDisplay::main().pixels_high()`（物理像素），传入量须同量纲。
+> ③ **payload 单一 scale 派生 + 去 shadow**：`begin_capture_inner` 的两个 `scale` 分名
+> `capture_scale`（抓屏侧，决定 payload 冻结帧 CSS 尺寸）与 `window_scale`（显示器侧，
+> **只**用于窗口几何逻辑化以绕开 tao 隐式换算 —— v0.9.8 画中画修复）—— 二者**职责不同、
+> 不可合并**。`CaptureReadyPayload` 四字段统一由 `capture_scale` 派生，满足
+> `physical == round(logical × scale_factor)`，加 `debug_assert_eq!` 守着。
+> （实测：前端只读 `physical_width/height`，其余属排障信息。）
+> ④ **滑动截长图移除**（`screenshot/long.rs` 全文 + 4 个 IPC
+> `screenshot_long_start/capture/finish/cancel` + `LongShotState` managed state +
+> 前端长图面板 + 双语 9 个 i18n key）：**截图 IPC 26 → 22，全项目 95 → 84**
+> （净减 11 = 长图 4 + `commands.rs` 清理 7；后者是工作区既有的、与本次截图修复无关的改动）。
+> 移除原因（三条独立证据同时成立，详见 `docs/SHOTFIX-ARCHITECTURE-2026-10-17.md`）：
+> 遮罩窗是 `always_on_top` 全屏置顶窗、**本身就是用户要滚动的那块屏幕的遮挡物**，项目从未
+> 对遮罩窗调 `set_ignore_cursor_events(true)` → **用户根本无法滚动**（这不是算法缺陷）；
+> macOS 因SCK/xcap 出图尺寸不一致而 100% 不可用；自动滚动需 `enigo`（MSRV 1.77→1.85）+
+> macOS 辅助功能新权限 + Linux Wayland 不支持，三平台无法拉齐。
+> ⚠️ **macOS 部分仅验证到「交叉编译通过 + 逻辑自洽」**（探针 `.tmp-ocr/vision-probe`，
+> `DOCS_RS=1` + `cargo check --target aarch64-apple-darwin`，探针可信度已用 `compile_error!`
+> 注入自证），**运行时出图尺寸未在 Retina 真机验证**。
+> 上一版v1.0.0 为首个正式版——
 > ① 滑动截长图（`screenshot/long.rs`：Rust 侧长图会话 `LongShotState` + 重叠检测拼接
 > [探针行=新图顶 1/8、底图底部 600px 带内滑动、列采样 8px、通道容差 12、取最低匹配]；
 > 四件套 IPC `screenshot_long_start/capture/finish/cancel`，88→**92**；首屏必须用冻结帧，
-> 完成复用 `screenshot_commit`；前端 Enter=续捕 / Shift+Enter=完成 / Esc=退出）
+> 完成复用 `screenshot_commit`；前端 Enter=续捕 / Shift+Enter=完成 / Esc=退出
+> ——⚠️ **该功能已于 v1.1.1 移除**，本段仅作历史留档）
 > ② macOS 截图画中画 Retina 几何换算修复（逻辑像素↔物理像素 2x 混用）③ 文字标注敲定后可再拖动
 > ④ 工程收口：子进程统一 `proc::hidden`；跨平台 cfg 收口到 `system_load/platform` 与
 > `screenshot/platform`。上一版 v0.9.7 为四缺陷修复版（用户实测反馈）——

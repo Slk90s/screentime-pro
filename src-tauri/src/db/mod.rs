@@ -474,60 +474,6 @@ impl AppDb {
         rows.collect()
     }
 
-    pub fn get_sessions(&self, date: &str) -> rusqlite::Result<Vec<SessionOut>> {
-        let conn = self.0.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT s.id, s.app_id, a.name, a.category_id, s.start_at, s.end_at, s.duration_seconds
-             FROM sessions s JOIN apps a ON s.app_id=a.id
-             WHERE s.date=?1 ORDER BY s.start_at DESC",
-        )?;
-        let rows = stmt.query_map(params![date], |r| {
-            Ok(SessionOut {
-                id: r.get(0)?,
-                app_id: r.get(1)?,
-                app_name: r.get(2)?,
-                category_id: r.get(3)?,
-                start_at: r.get(4)?,
-                end_at: r.get(5)?,
-                duration_seconds: r.get(6)?,
-            })
-        })?;
-        rows.collect()
-    }
-
-    /// 导出指定日期明细为 CSV 到给定路径
-    pub fn export_csv(&self, out_path: &Path, date: &str) -> Result<(), String> {
-        let conn = self.0.lock().unwrap();
-        let mut stmt = conn
-            .prepare(
-                "SELECT a.name, a.category_id, s.start_at, s.end_at, s.duration_seconds
-                 FROM sessions s JOIN apps a ON s.app_id=a.id
-                 WHERE s.date=?1 ORDER BY s.start_at ASC",
-            )
-            .map_err(|e| e.to_string())?;
-        let mut rows = stmt.query(params![date]).map_err(|e| e.to_string())?;
-        let mut csv = String::from("app_name,category_id,start_at,end_at,duration_seconds\n");
-        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
-            let name: String = row.get(0).map_err(|e| e.to_string())?;
-            let cat: String = row.get(1).map_err(|e| e.to_string())?;
-            let start: String = row.get(2).map_err(|e| e.to_string())?;
-            let end: String = row.get(3).map_err(|e| e.to_string())?;
-            let dur: i64 = row.get(4).map_err(|e| e.to_string())?;
-            csv.push_str(&format!(
-                "{},{},{},{},{}\n",
-                csv_escape(&name),
-                csv_escape(&cat),
-                csv_escape(&start),
-                csv_escape(&end),
-                dur
-            ));
-        }
-        fs::write(out_path, csv).map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    // ===================== 分类规则引擎持久化 =====================
-
     /// 加载全部分类规则（含禁用项），供采样循环在内存缓存后匹配
     pub fn load_rules(&self) -> rusqlite::Result<Vec<Rule>> {
         let conn = self.0.lock().unwrap();
@@ -570,7 +516,8 @@ impl AppDb {
         rows.collect()
     }
 
-    /// 新增规则；若 (field, match_type, pattern) 已存在则更新其分类/优先级并重新启用
+    /// 新增规则；若 (field, match_type, pattern) 已存在则更新其分类/优先级并重新启用。
+    /// `enabled` 由用户显式传入（前端新增表单有该复选框），缺省 true 仅作兜底。
     pub fn insert_rule(
         &self,
         field: &str,
@@ -578,14 +525,15 @@ impl AppDb {
         pattern: &str,
         category_id: &str,
         priority: i32,
+        enabled: bool,
     ) -> rusqlite::Result<i64> {
         let conn = self.0.lock().unwrap();
         conn.execute(
             "INSERT INTO classification_rules (field, match_type, pattern, category_id, priority, enabled)
-             VALUES (?1,?2,?3,?4,?5,1)
+             VALUES (?1,?2,?3,?4,?5,?6)
              ON CONFLICT(field, match_type, pattern) DO UPDATE SET
-               category_id=excluded.category_id, priority=excluded.priority, enabled=1",
-            params![field, match_type, pattern, category_id, priority],
+               category_id=excluded.category_id, priority=excluded.priority, enabled=excluded.enabled",
+            params![field, match_type, pattern, category_id, priority, if enabled { 1i64 } else { 0i64 }],
         )?;
         conn.query_row(
             "SELECT id FROM classification_rules WHERE field=?1 AND match_type=?2 AND pattern=?3",
@@ -1081,14 +1029,17 @@ pub fn prune_old(
         Ok(conn.last_insert_rowid())
     }
 
-    /// 截图历史（按时间倒序，限量）
-    pub fn list_screenshots(&self, limit: u32) -> rusqlite::Result<Vec<ScreenshotOut>> {
+    /// 截图历史（按时间倒序，限量 + 偏移）
+    ///
+    /// v1.1.1：增加 `offset` 支持「加载更多」分页，与 `max_count`（FIFO 上限）解耦——
+    /// 用户设了较大 `max_count` 时也能翻页看到全部历史，不再硬编码只取最近 60 张。
+    pub fn list_screenshots(&self, limit: u32, offset: u32) -> rusqlite::Result<Vec<ScreenshotOut>> {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, file_name, width, height, bytes, created_at
-             FROM screenshots ORDER BY id DESC LIMIT ?1",
+             FROM screenshots ORDER BY id DESC LIMIT ?1 OFFSET ?2",
         )?;
-        let rows = stmt.query_map(params![limit], |r| {
+        let rows = stmt.query_map(params![limit, offset], |r| {
             Ok(ScreenshotOut {
                 id: r.get(0)?,
                 file_name: r.get(1)?,
@@ -1144,15 +1095,6 @@ pub fn prune_old(
         let conn = self.0.lock().unwrap();
         conn.execute("DELETE FROM screenshots WHERE id=?1", params![id])?;
         Ok(())
-    }
-}
-
-/// CSV 字段转义（含逗号/引号/换行时用双引号包裹并转义内部引号）
-fn csv_escape(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') {
-        format!("\"{}\"", s.replace('"', "\"\""))
-    } else {
-        s.to_string()
     }
 }
 

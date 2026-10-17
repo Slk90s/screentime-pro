@@ -13,6 +13,7 @@
 import { onBeforeUnmount, onMounted } from 'vue';
 import { listen } from '@tauri-apps/api/event';
 import { petStore } from '../stores/petStore';
+import { log } from "@/lib/logger";
 
 export function useSystemOverloadWatcher() {
   let unlistenOverload: (() => void) | null = null;
@@ -26,7 +27,7 @@ export function useSystemOverloadWatcher() {
         petStore.setHeating(false, null);
       });
     } catch (err) {
-      console.error('[pet-overload] 监听失败', err);
+      log.error('[pet-overload] 监听失败', err);
     }
   });
   onBeforeUnmount(() => {
