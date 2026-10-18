@@ -19,6 +19,9 @@
 //!     原因：窗口固定 340px 而内容（如「● CPU 77% ↓1.4M ↑3.5M」）只有 ~200px，
 //!     右侧一大片空白，用户反馈「浮窗过长」。改为由 FloatBar.vue 测量内容宽度后
 //!     调本命令自适应收缩，窗口始终贴合内容（也顺带消除了透明窗口右侧的无效点击热区）。
+//!   - 2026-10-18 @v1.2.0: 清理 - 移除 `create_float_window` / `hide_float_window` 两个
+//!     死 IPC 命令（前端零调用，唯一调用方是 Rust 内部 `set_float_visible`，直接调
+//!     `ensure_float_window` 不经过 IPC）。命令由 5 个减为 3 个（show/move/resize）。
 
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder};
 
@@ -85,18 +88,8 @@ pub fn set_float_visible(app: &AppHandle, show: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn create_float_window(app: AppHandle) -> Result<(), String> {
-    ensure_float_window(&app)
-}
-
-#[tauri::command]
 pub async fn show_float_window(app: AppHandle) -> Result<(), String> {
     set_float_visible(&app, true)
-}
-
-#[tauri::command]
-pub async fn hide_float_window(app: AppHandle) -> Result<(), String> {
-    set_float_visible(&app, false)
 }
 
 /// 移动浮窗到屏幕绝对坐标（逻辑像素；前端拖拽结束 / 恢复位置时调用）

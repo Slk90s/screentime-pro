@@ -7,7 +7,6 @@ use crate::db::{
     ExportBundle, ExportResult, HourlyBucketOut, MetricsOut, MonthSummaryOut, OverviewOut,
     PermissionStatus, PeriodStat, RuleOut, SettingsOut, TrendsOut,
 };
-use crate::error::AppError;
 use crate::tracker::{platform_name, RawApp};
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate};
 use std::path::{Path, PathBuf};
@@ -733,7 +732,7 @@ async fn sampling_loop(state: Arc<AppState>) {
                     Err(e) => { tracing::error!(error = %e, process = %fg.process_name, name = %fg.name, "upsert_app 失败，跳过本 tick"); continue; }
                 };
                 *cur = Some(ActiveSession { app: fg, app_id, category_id: category.clone(), started_at: now, last_input_at: now });
-                let already_covered = state.rules.lock().unwrap().iter().any(|r| r.enabled && r.field == "process_name" && r.pattern == process_name);
+                let already_covered = state.rules.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|r| r.enabled && r.field == "process_name" && r.pattern == process_name);
                 if !already_covered {
                     let st = Arc::clone(&state);
                     let pn = process_name.clone();
@@ -751,10 +750,6 @@ async fn sampling_loop(state: Arc<AppState>) {
             }
         }
     }
-}
-
-impl From<AppError> for String {
-    fn from(e: AppError) -> Self { e.to_string() }
 }
 
 fn period_ranges(period: &str) -> (String, String, String, String, String, String, String, String) {

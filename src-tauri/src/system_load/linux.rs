@@ -6,7 +6,6 @@
 #![cfg(target_os = "linux")]
 
 use std::fs;
-use std::io;
 
 #[derive(Default)]
 pub struct Inner {
@@ -71,11 +70,4 @@ impl Inner {
         let used = d_total.saturating_sub(d_idle);
         Some((used as f32 / d_total as f32).clamp(0.0, 1.0))
     }
-}
-
-// 抑制 unused 警告：`KernelStats`（procfs）类型本身当前未直接使用——cpu_usage 手动解析
-// /proc/stat 首行；保留 import 供未来切换 procfs 高层 API 时使用，以占位函数钉住引用。
-#[allow(dead_code)]
-fn _unused_kernel(_: procfs::KernelStats) -> io::Result<()> {
-    Ok(())
 }

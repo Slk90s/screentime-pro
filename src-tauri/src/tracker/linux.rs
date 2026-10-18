@@ -8,7 +8,7 @@
 //! - `/proc/[pid]/comm` → 进程短名
 //! - `XScreenSaverQueryInfo` → 空闲秒数（需 X ScreenSaver 扩展）
 //!
-//! Wayland 环境：当前返回 Unsupported，上层采样循环跳过不崩溃。
+//! Wayland 环境：当前无 X11 Display 时连接失败，上层采样循环捕获错误后跳过不崩溃。
 //! 注：本文件仅在 `target_os = "linux"` 下参与编译。编译时无需系统 X11 库
 //! （x11rb 是纯 Rust XCB 协议实现）；运行时需要 X11 Display 服务。
 //!

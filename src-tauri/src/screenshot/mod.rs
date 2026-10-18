@@ -99,6 +99,9 @@ pub(crate) mod macos;
 #[cfg(target_os = "macos")]
 pub(crate) mod macos_sck;
 
+/// 全局光标坐标（v1.2.0 多屏截图「鼠标在哪截哪屏」的坐标源）。平台原生坐标。
+mod cursor;
+
 mod ocr;
 mod ocr_engine;
 mod ocr_onnx;
@@ -628,7 +631,8 @@ async fn begin_capture_inner(app: &AppHandle) -> Result<(), String> {
     hide_self(app, &state);
     tokio::time::sleep(Duration::from_millis(160)).await;
 
-    // ② 抓主显示器整屏（**统一为物理像素口径**）
+    // ② 抓**光标所在显示器**整屏（v1.2.0 起；单屏时即主屏，行为零变化）。
+    //    统一为物理像素口径（v1.1.1 契约）。
     //
     // v0.9.4（Task 80）：macOS 优先走 SCK 引擎（ScreenCaptureKit，macOS 14+），
     // 失败或低版本回落 xcap；Windows / Linux 直走 xcap。抓屏逻辑收口到
@@ -695,30 +699,21 @@ async fn begin_capture_inner(app: &AppHandle) -> Result<(), String> {
     // 逻辑值在任何 scale_factor 下语义唯一（AppKit 再按显示器真实缩放还原），
     // Windows/Linux 上 `to_logical(s)` 用同显示器 scale 除回再乘，逐值等价，不受影响。
     let win = ensure_capture_window(app)?;
-    // `window_scale` = **显示器侧**缩放因子，只用于把物理几何转成「逻辑」值
+    // `window_scale` = **目标显示器**缩放因子，只用于把物理几何转成「逻辑」值
     // 喂给 `LogicalPosition` / `LogicalSize`（绕开 tao 的隐式换算，见上）。
     //
-    // ⚠️ 为什么 payload 的 `scale_factor` 用 `capture_scale` 而这里用 `window_scale`：
-    //   两者**职责不同**，不是同一个数的两个名字 ——
-    //   - `capture_scale`：抓屏引擎回传的、**冻结帧自身**的物理/逻辑比。它决定
-    //     payload 的 `width/height`（前端 CSS 坐标系）与 `scale_factor`（供前端排障），
-    //     三者必须同源，故 payload 全部用 `capture_scale`。
-    //   - `window_scale`：**遮罩窗所在显示器**的 scale_factor。tao 对 `Physical*`
-    //     入参会按「窗口当前」scale 隐式换算（v0.9.8 的画中画 bug），故窗口几何必须
-    //     用显式 Logical* 绕开，而换算基准取目标显示器的 scale。
-    //   单显示器下两者相等（故历史上无可见错误）；多屏 / 抓屏回落场景下可能不同 ——
-    //   这正是本变量存在的意义，若合并成一个数会重新引入该类错位。
-    let window_scale = win
-        .current_monitor()
-        .ok()
-        .flatten()
-        .map(|m| m.scale_factor())
-        .unwrap_or(1.0);
+    // ⚠️ v1.2.0 起**直接用 `capture_scale`**：抓屏侧 scale（Windows per-monitor 比 /
+    //   macOS 点→像素比 / Linux 像素/逻辑比）就是「目标屏」的 scale。旧实现用
+    //   `win.current_monitor()` 取窗口**当前所在屏**的 scale，但此时窗口尚未 move
+    //   到目标屏，它返回的是默认创建位置所在屏（通常主屏）——多屏且各屏 DPI 不同时，
+    //   抓副屏会拿主屏 scale 去算副屏几何，遮罩窗尺寸/位置全错。既然现在抓的就是
+    //   光标所在屏，`capture_scale` 与目标屏 scale 恒等，二者合一不再有歧义。
+    let window_scale = capture_scale;
     tracing::info!(
         window_scale,
         capture_scale,
         phys = format!("{}x{}", mw, mh),
-        "遮罩窗几何：显示器 scale_factor"
+        "遮罩窗几何：目标显示器 scale_factor"
     );
     win.set_position(tauri::LogicalPosition::new(
         mx as f64 / window_scale,
@@ -778,10 +773,19 @@ pub struct CaptureReadyPayload {
     pub default_shadow: bool,
 }
 
-/// xcap 抓主显示器整屏（v0.9.4 从 `begin_capture_inner` 提取）。
+/// xcap 抓**光标所在**显示器整屏（v0.9.4 从 `begin_capture_inner` 提取；
+/// v1.2.0 起由「主屏」改为「光标所在屏」）。
 ///
 /// 返回 `(整屏图, 显示器原点x, 原点y, 宽, 高, 缩放因子)`。
 /// Windows / Linux 的唯一路径；macOS 上作为 SCK 的回落（macOS < 14 或 SCK 失败）。
+///
+/// ## 多屏选屏（v1.2.0）
+/// 用 `cursor::cursor_native()` 拿全局光标（**平台原生坐标**，与 `Monitor` 几何同空间），
+/// 交给 `xcap::Monitor::from_point(x,y)` 直接命中「光标停靠的显示器」。三平台的
+/// `from_point` 各自用原生坐标匹配（Windows `MonitorFromPoint` 物理像素 / macOS
+/// `CGGetDisplaysWithPoint` 点 / Linux 遍历 RandR 输出 × scale），无需本函数换算。
+/// 光标取不到 / 点不到任何屏时回落主屏（`is_primary`），主屏也取不到则取第 0 块。
+/// 单屏场景 `from_point` 恒命中唯一屏 → 行为与旧「直接挑主屏」完全一致。
 ///
 /// ⚠️ v1.1.1：**宽高原点一律取 `img` 自身尺寸，物理像素口径**。
 ///
@@ -821,11 +825,28 @@ fn capture_with_xcap() -> Result<(RgbaImage, i32, i32, i32, i32, f64), String> {
     if monitors.is_empty() {
         return Err("未找到可用显示器".into());
     }
-    let m = monitors
-        .iter()
-        .find(|m| m.is_primary().unwrap_or(false))
-        .unwrap_or(&monitors[0]);
+    // v1.2.0：多屏截图「鼠标在哪截哪屏」——优先抓光标停靠的显示器，
+    // 取不到光标 / 点不到任何屏时回落主屏（单屏行为零变化）。
+    let m = match cursor::cursor_native() {
+        Some((cx, cy)) => xcap::Monitor::from_point(cx as i32, cy as i32)
+            .ok()
+            .or_else(|| {
+                monitors
+                    .iter()
+                    .find(|m| m.is_primary().unwrap_or(false))
+                    .cloned()
+            })
+            .unwrap_or_else(|| monitors[0].clone()),
+        None => monitors
+            .iter()
+            .find(|m| m.is_primary().unwrap_or(false))
+            .cloned()
+            .unwrap_or_else(|| monitors[0].clone()),
+    };
     let img = m.capture_image().map_err(|e| format!("屏幕捕获失败: {e}"))?;
+    // scale 取目标屏自身的 scale_factor：Windows 是 per-monitor 物理/逻辑比、
+    // macOS 是 pixel_width/width、Linux 是像素/逻辑像素比，与遮罩窗定位的
+    // `window_scale`（改用 capture_scale 后）同源，保证逻辑尺寸换算一致。
     let scale = m.scale_factor().unwrap_or(1.0) as f64;
     // 宽高一律用 `img` 的真实像素尺寸（见函数头「三平台口径不一致」段）
     let (mw, mh) = (img.width(), img.height());

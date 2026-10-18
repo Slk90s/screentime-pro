@@ -143,8 +143,22 @@ pub fn capture_main_display() -> SckResult<(image::RgbaImage, i32, i32, f64)> {
     let content = SCShareableContent::get()
         .map_err(|e| format!("SCK 枚举屏幕内容失败（多为未授权屏幕录制）: {e}"))?;
     let displays = content.displays();
+    // v1.2.0：多屏「鼠标在哪截哪屏」——优先选光标停靠的显示器，取不到光标 /
+    // 点不到任何屏时回落第一块（与 xcap 路径的回落语义一致）。
+    // ⚠️ SCDisplay 无 Clone/Copy，用索引取借用（后续 with_display 吃 &SCDisplay）。
+    let display_idx = crate::screenshot::cursor::cursor_native()
+        .and_then(|(cx, cy)| {
+            displays.iter().position(|d| {
+                let f = d.frame();
+                cx >= f.origin.x
+                    && cx < f.origin.x + f.size.width
+                    && cy >= f.origin.y
+                    && cy < f.origin.y + f.size.height
+            })
+        })
+        .unwrap_or(0);
     let display = displays
-        .first()
+        .get(display_idx)
         .ok_or_else(|| "SCK 未枚举到任何显示器".to_string())?;
 
     // ② 过滤器：整个显示器（不含窗口级过滤 —— 我们要整屏冻结帧）

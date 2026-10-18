@@ -61,7 +61,7 @@ impl AppDb {
     /// `'default'`。这里在 device_id 已知后统一纠正，避免界面出现幽灵「default / 未命名」设备。
     /// 已带真实 device_id 的行不会被影响。
     pub fn backfill_device_column(&self, device_id: &str) -> rusqlite::Result<usize> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE sessions SET device = ?1 WHERE device = 'default' OR device IS NULL",
             params![device_id],
@@ -77,7 +77,7 @@ impl AppDb {
         category_id: &str,
         platform: &str,
     ) -> rusqlite::Result<i64> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT INTO apps (name, process_name, exe_path, category_id, platform)
              VALUES (?1,?2,?3,?4,?5)
@@ -106,7 +106,7 @@ impl AppDb {
         window_title: Option<&str>,
         device: &str,
     ) -> rusqlite::Result<()> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT INTO sessions (app_id, start_at, end_at, duration_seconds, date, window_title, device)
              VALUES (?1,?2,?3,?4,?5,?6,?7)",
@@ -131,7 +131,7 @@ impl AppDb {
         days: u32,
         device: &Option<String>,
     ) -> rusqlite::Result<Vec<DailySummaryOut>> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let mut p: Vec<&dyn ToSql> = vec![&days];
         let dev = if let Some(d) = device {
             if !d.is_empty() {
@@ -164,7 +164,7 @@ impl AppDb {
         days: u32,
         device: &Option<String>,
     ) -> rusqlite::Result<Vec<DayCategoryOut>> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let mut p: Vec<&dyn ToSql> = vec![&days];
         let dev = if let Some(d) = device {
             if !d.is_empty() {
@@ -199,7 +199,7 @@ impl AppDb {
         date: &str,
         device: &Option<String>,
     ) -> rusqlite::Result<Vec<HourlyBucketOut>> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let mut p: Vec<&dyn ToSql> = vec![&date];
         let dev = if let Some(d) = device {
             if !d.is_empty() {
@@ -239,7 +239,7 @@ impl AppDb {
         date: &str,
         device: &Option<String>,
     ) -> rusqlite::Result<Vec<AppRankingOut>> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         // 日期过滤分支：单日用精确匹配，范围用日期窗口
         let (date_clause, date_param): (&str, &dyn ToSql) = if days == 0 {
             ("s.date = ?1", &date as &dyn ToSql)
@@ -290,7 +290,7 @@ impl AppDb {
         date: &str,
         device: &Option<String>,
     ) -> rusqlite::Result<OverviewOut> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         // 日期过滤分支：单日用精确匹配，范围用日期窗口
         let (date_clause, date_param): (&str, &dyn ToSql) = if days == 0 {
             ("s.date = ?1", &date as &dyn ToSql)
@@ -385,7 +385,7 @@ impl AppDb {
         month: i32,
         device: &Option<String>,
     ) -> rusqlite::Result<MonthSummaryOut> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let prefix = format!("{:04}-{:02}-", year, month);
         let (dev_clause, dev_param): (&str, Option<&dyn ToSql>) = match device {
             Some(d) if !d.is_empty() => (" AND s.device = ?2", Some(d as &dyn ToSql)),
@@ -462,7 +462,7 @@ impl AppDb {
     }
 
     pub fn get_categories(&self) -> rusqlite::Result<Vec<CategoryOut>> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare("SELECT id, name, color FROM categories ORDER BY id")?;
         let rows = stmt.query_map([], |r| {
             Ok(CategoryOut {
@@ -476,7 +476,7 @@ impl AppDb {
 
     /// 加载全部分类规则（含禁用项），供采样循环在内存缓存后匹配
     pub fn load_rules(&self) -> rusqlite::Result<Vec<Rule>> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT id, field, match_type, pattern, category_id, priority, enabled
              FROM classification_rules ORDER BY priority DESC, id ASC",
@@ -497,7 +497,7 @@ impl AppDb {
 
     /// 以可序列化结构返回全部分类规则（供前端管理界面展示）
     pub fn get_rules_out(&self) -> rusqlite::Result<Vec<RuleOut>> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT id, field, match_type, pattern, category_id, priority, enabled
              FROM classification_rules ORDER BY priority DESC, id ASC",
@@ -527,7 +527,7 @@ impl AppDb {
         priority: i32,
         enabled: bool,
     ) -> rusqlite::Result<i64> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT INTO classification_rules (field, match_type, pattern, category_id, priority, enabled)
              VALUES (?1,?2,?3,?4,?5,?6)
@@ -559,7 +559,7 @@ impl AppDb {
         category_id: &str,
         priority: i32,
     ) -> rusqlite::Result<bool> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let n = conn.execute(
             "INSERT OR IGNORE INTO classification_rules (field, match_type, pattern, category_id, priority, enabled)
              VALUES (?1,?2,?3,?4,?5,1)",
@@ -579,7 +579,7 @@ impl AppDb {
         priority: i32,
         enabled: bool,
     ) -> rusqlite::Result<()> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE classification_rules
              SET field=?2, match_type=?3, pattern=?4, category_id=?5, priority=?6, enabled=?7
@@ -599,7 +599,7 @@ impl AppDb {
 
     /// 删除规则（按 id）
     pub fn delete_rule(&self, id: i64) -> rusqlite::Result<()> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute("DELETE FROM classification_rules WHERE id=?1", params![id])?;
         Ok(())
     }
@@ -608,7 +608,7 @@ impl AppDb {
     ///
     /// 返回被更新的应用数量。历史 session 通过 JOIN apps 自动跟随新分类。
     pub fn reclassify_all(&self, rules: &[Rule]) -> rusqlite::Result<usize> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt =
             conn.prepare("SELECT id, name, process_name, exe_path, category_id FROM apps")?;
         let apps = stmt
@@ -656,7 +656,7 @@ impl AppDb {
         device: &Option<String>,
         label: &str,
     ) -> rusqlite::Result<PeriodStat> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let mut p: Vec<&dyn ToSql> = vec![&start, &end];
         let dev = if let Some(d) = device {
             if !d.is_empty() {
@@ -739,7 +739,7 @@ impl AppDb {
         current_id: &str,
         current_name: &str,
     ) -> rusqlite::Result<Vec<DeviceInfo>> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare("SELECT DISTINCT device FROM sessions")?;
         let mut ids: Vec<String> = stmt
             .query_map([], |r| r.get::<_, String>(0))?
@@ -777,7 +777,7 @@ impl AppDb {
         &self,
         device_filter: Option<&str>,
     ) -> rusqlite::Result<ExportBundle> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT name, process_name, exe_path, category_id, platform FROM apps",
         )?;
@@ -865,7 +865,7 @@ impl AppDb {
     ///
     /// 返回新导入的时段条数。
     pub fn import_data(&self, bundle: &ExportBundle) -> rusqlite::Result<usize> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         // 写入设备名映射
         for (id, name) in &bundle.devices {
             conn.execute(
@@ -942,7 +942,7 @@ pub fn prune_old(
     retention_days: u32,
     device_filter: Option<&str>,
 ) -> rusqlite::Result<usize> {
-    let conn = self.0.lock().unwrap();
+    let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
     let cutoff = (Local::now() - Duration::days(retention_days as i64))
         .format("%Y-%m-%d")
         .to_string();
@@ -969,7 +969,7 @@ pub fn prune_old(
     /// - 用于「按设备清理」组合命令（先备份再全删）
     /// - 同步清理 daily_summaries（同 device 的记录）
     pub fn delete_all_sessions_for_device(&self, device_id: &str) -> rusqlite::Result<usize> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let n: usize = conn
             .execute(
                 "DELETE FROM sessions WHERE device = ?1",
@@ -984,7 +984,7 @@ pub fn prune_old(
 
     /// 读取配置项（不存在返回 None）
     pub fn get_setting(&self, key: &str) -> Option<String> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
             "SELECT value FROM settings WHERE key=?1",
             params![key],
@@ -997,7 +997,7 @@ pub fn prune_old(
 
     /// 写入/覆盖配置项
     pub fn set_setting(&self, key: &str, value: &str) -> rusqlite::Result<()> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT INTO settings (key, value) VALUES (?1,?2)
              ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -1020,7 +1020,7 @@ pub fn prune_old(
         created_at: &str,
         device: &str,
     ) -> rusqlite::Result<i64> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT INTO screenshots (file_name, width, height, bytes, created_at, device)
              VALUES (?1,?2,?3,?4,?5,?6)",
@@ -1034,7 +1034,7 @@ pub fn prune_old(
     /// v1.1.1：增加 `offset` 支持「加载更多」分页，与 `max_count`（FIFO 上限）解耦——
     /// 用户设了较大 `max_count` 时也能翻页看到全部历史，不再硬编码只取最近 60 张。
     pub fn list_screenshots(&self, limit: u32, offset: u32) -> rusqlite::Result<Vec<ScreenshotOut>> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT id, file_name, width, height, bytes, created_at
              FROM screenshots ORDER BY id DESC LIMIT ?1 OFFSET ?2",
@@ -1054,7 +1054,7 @@ pub fn prune_old(
 
     /// 取单条截图的文件名（缩略图 / 定位文件用）
     pub fn screenshot_file_name(&self, id: i64) -> rusqlite::Result<Option<String>> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
             "SELECT file_name FROM screenshots WHERE id=?1",
             params![id],
@@ -1065,7 +1065,7 @@ pub fn prune_old(
 
     /// 删除一条截图索引，返回其文件名（调用方负责把文件移入回收站）
     pub fn delete_screenshot(&self, id: i64) -> rusqlite::Result<Option<String>> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let name: Option<String> = conn
             .query_row(
                 "SELECT file_name FROM screenshots WHERE id=?1",
@@ -1081,7 +1081,7 @@ pub fn prune_old(
 
     /// FIFO 清理：保留最新 keep 条，返回超出需删除的 (id, file_name) 列表
     pub fn screenshots_exceeding(&self, keep: u32) -> rusqlite::Result<Vec<(i64, String)>> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT id, file_name FROM screenshots
              WHERE id NOT IN (SELECT id FROM screenshots ORDER BY id DESC LIMIT ?1)",
@@ -1092,7 +1092,7 @@ pub fn prune_old(
 
     /// 删除指定 id（FIFO 清理用，不返回文件名）
     pub fn delete_screenshot_by_id(&self, id: i64) -> rusqlite::Result<()> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute("DELETE FROM screenshots WHERE id=?1", params![id])?;
         Ok(())
     }
@@ -1152,7 +1152,7 @@ impl AppDb {
         current_id: &str,
         current_name: &str,
     ) -> rusqlite::Result<Vec<DeviceStats>> {
-        let conn = self.0.lock().unwrap();
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         // 1) 先取 sessions 中所有出现过的 device
         let mut stmt = conn.prepare("SELECT DISTINCT device FROM sessions")?;
         let mut ids: Vec<String> = stmt

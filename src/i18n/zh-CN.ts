@@ -438,6 +438,12 @@ export default {
   // ===== v0.8.2（2026-09-17）：悬浮指标条 =====
   float: {
     shot: "截图",
+    dotIdle: "空闲（CPU {cpu}% · 内存 {mem}%）",
+    dotLight: "轻载（CPU {cpu}% · 内存 {mem}%）",
+    dotBusy: "繁忙（CPU {cpu}% · 内存 {mem}%）",
+    dotHeavy: "高载（CPU {cpu}% · 内存 {mem}%）",
+    dotOverload: "过载（CPU {cpu}% · 内存 {mem}%）",
+    dotUnknown: "负载未知",
   },
   pet: {
     settings: {

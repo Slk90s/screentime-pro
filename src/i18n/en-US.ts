@@ -458,6 +458,12 @@ export default {
   // ===== v0.8.2 (2026-09-17): float bar =====
   float: {
     shot: "Screenshot",
+    dotIdle: "Idle (CPU {cpu}% · Mem {mem}%)",
+    dotLight: "Light load (CPU {cpu}% · Mem {mem}%)",
+    dotBusy: "Busy (CPU {cpu}% · Mem {mem}%)",
+    dotHeavy: "High load (CPU {cpu}% · Mem {mem}%)",
+    dotOverload: "Overload (CPU {cpu}% · Mem {mem}%)",
+    dotUnknown: "Load unknown",
   },
   pet: {
     settings: {

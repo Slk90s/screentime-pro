@@ -50,7 +50,25 @@
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-10-17（同步至 **v1.1.1**——
+> 最后更新：2026-10-18（同步至 **v1.2.0**——
+> ① **多屏截图「鼠标在哪截哪屏」（微信式 Alt+A）**：截图从「固定主屏」改为「抓光标停靠的
+> 那块屏」。新增 `screenshot/cursor.rs`（平台原生坐标的全局光标位置：Windows `GetCursorPos`
+> 物理像素 / macOS `CGEventGetLocation` 点 / Linux X11 `query_pointer` 根窗口像素），
+> `capture_with_xcap` 用 `xcap::Monitor::from_point` 命中光标所在屏、macOS SCK 路径用
+> `SCDisplay::frame().contains` 选光标所在 display，均回落主屏/首屏；遮罩窗定位的
+> `window_scale` 改用 `capture_scale`（= 目标屏 scale），顺带修复多屏异 DPI 下抓副屏拿错
+> scale 的隐患。
+> ② **浮窗最左侧状态点由固定 accent 橙改为按系统负载动态变色**（`FloatBar.vue`）：负载值取
+> CPU / 内存使用率的较高者，5 档（idle 绿 / light 黄绿 / busy 橙 / heavy 深橙 / overload 红）
+> + unknown 灰，阈值 0.15/0.35/0.65/0.85，CSS 0.35s 平滑过渡；tooltip 显示档位 + 实时
+> CPU/内存百分比；颜色集中在 `LOAD_COLORS` 单一来源。
+> ③ **代码体检清理（凌霄渡体检后续）**：删 3 处死代码（孤儿组件 `PetBody.vue`、
+> `system_load/linux.rs` 的 `_unused_kernel` + `Cargo.toml` `procfs` 依赖、
+> `float_window.rs` 的 `create_float_window` / `hide_float_window` 两个死 IPC 命令）；
+> 消除 33 处 `Mutex::lock().unwrap()` 违规（统一 `.unwrap_or_else(|e| e.into_inner())`）；
+> 清理 `error.rs` 半死代码（`AppError` + `From<String>` + `TrackerError::Unsupported`）；
+> 浮窗移除「重复上次区域」按钮。IPC 84 → **82**（删 float_window 2 个死命令）。
+> 上一版 v1.1.1 为修复版——
 > ① **macOS 截图出图尺寸修复（P0「小窗口快照」）**：`screenshot/macos_sck.rs` 构建
 > `SCStreamConfiguration` 时**没有设宽高**，而 **Apple 的默认值就是 1920×1080**（官方
 > StackOverflow 答复 78847211 + DTS 论坛 765360 双源确认；**此前代码与文档注释声称
@@ -125,7 +143,7 @@
 
 跨平台应用使用时长追踪（macOS / Windows / Linux），对标 iOS「屏幕使用时间」。**数据 100% 本地（SQLite bundled），零上传，隐私优先**。
 
-栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v1.1.1**（详见 [`RELEASE.md`](RELEASE.md)）。
+栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v1.2.0**（详见 [`RELEASE.md`](RELEASE.md)）。
 
 > ⚠️ 本节版本号在 v0.7.0 → v0.7.5 期间**长期未更新**（曾停留在 v0.7.0），与 `tauri.conf.json` 脱节。
 > 版本号唯一真实来源是 **`src-tauri/tauri.conf.json` 的 `version`**，改版本时务必回来同步本节。

@@ -749,9 +749,7 @@ pub fn run() {
             pet::show_pet_menu_window,
             pet::hide_pet_menu_window,
             pet::move_pet_menu_window,
-            float_window::create_float_window,
             float_window::show_float_window,
-            float_window::hide_float_window,
             float_window::move_float_window,
             float_window::resize_float_window,
         ])

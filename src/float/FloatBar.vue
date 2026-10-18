@@ -38,10 +38,18 @@
       begin_capture 会先隐藏 pet/float 再抓屏、结束后自动恢复。配置来源：StatusBarConfig
       新增 screenshot_enabled 字段（权威源仍是 screenshot 模块的 screenshot_enabled 键，
       set_status_bar_config 用 DB 权威值兜底，防设置页旧快照回写）。
+  - 2026-10-17 @v1.2.0: 移除 - 取消浮窗尾部「重复上次区域」按钮（v1.1.0 引入的
+      onShotRepeat + 图标）。用户反馈浮窗按钮与设置页入口重复、且无历史区域时点了没
+      反应易困惑；设置页的同名功能保留不受影响。
+  - 2026-10-17 @v1.2.0: 新增 - 最左侧状态点 `.f-dot` 由固定 accent 橙改为**按系统负载
+      动态变色**。负载值取 CPU/内存使用率的较高者，划分 5 档（idle 绿 / light 黄绿 /
+      busy 橙 / heavy 深橙 / overload 红）+ unknown 灰（数据源不可用兜底），阈值
+      0.15/0.35/0.65/0.85（左闭右开），CSS 0.35s 平滑过渡避免 1Hz 采样闪烁；
+      tooltip 显示档位 + 实时 CPU/内存百分比。颜色集中在 `LOAD_COLORS` 单一来源。
 -->
 <template>
   <div ref="rootRef" class="float-bar" @pointerdown="onPointerDown" @contextmenu.prevent>
-    <span class="f-dot"></span>
+    <span class="f-dot" :style="dotStyle" :title="dotTitle"></span>
     <span v-if="cfg.show_cpu" class="f-item">
       <i>CPU</i><b>{{ pct(metrics?.cpu_usage) }}</b>
     </span>
@@ -72,21 +80,6 @@
         <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
           <path d="M2 5.2V2h3.2M13.8 5.2V2h-3.2M2 10.8V14h3.2M13.8 10.8V14h-3.2" />
           <circle cx="8" cy="8" r="2.4" />
-        </svg>
-      </button>
-      <!-- v1.1.0：重复上次区域截图（借鉴 Snapzy）。点此图标 = 一键重截同一区域；
-           无历史区域时静默失败（浮窗不适合弹 toast，用户第一次点没反应就再正常截一次） -->
-      <button
-        type="button"
-        class="f-shot"
-        :title="t('settings.shotRepeat')"
-        @pointerdown.stop
-        @click="onShotRepeat"
-      >
-        <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-          <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" />
-          <path d="M13.6 1.6v3h-3" />
-          <circle cx="8" cy="8" r="1.8" />
         </svg>
       </button>
     </template>
@@ -158,6 +151,69 @@ function pct(v: number | undefined): string {
   return `${Math.max(0, Math.min(100, n))}%`;
 }
 
+/**
+ * 状态灯档位（v1.2.0）：负载「空闲 → 过载」5 档 + 未知/异常兜底。
+ *
+ * 负载值取 CPU / 内存使用率的**较高者**（0~1 分数）——任一打满都意味着系统吃紧，
+ * 最贴合「系统负载」直觉；磁盘占用长期偏高、不适合做 1Hz 瞬时状态灯，故不参与。
+ *
+ * 阈值划分（越高越热，边界「左闭右开」，色相冷→暖单调递增）：
+ *   idle     < 0.15   空闲（几乎无负载）
+ *   light    0.15–0.35 轻载（日常使用）
+ *   busy     0.35–0.65 繁忙（中高负载，开始发热）
+ *   heavy    0.65–0.85 高载（橙色告警）
+ *   overload ≥ 0.85   过载/接近占满（红色）
+ *   unknown  数据源不可用（supported/enabled 为假、或数值非有限）时灰色兜底，
+ *            避免指标缺失时误判成「空闲」误导用户。
+ */
+type LoadLevel = "idle" | "light" | "busy" | "heavy" | "overload" | "unknown";
+
+function loadLevel(m: MetricsOut | null): LoadLevel {
+  if (!m || !m.supported || !m.enabled) return "unknown";
+  const cpu = m.cpu_usage;
+  const mem = m.memory_usage;
+  const peak = Math.max(cpu, mem);
+  if (!Number.isFinite(peak) || peak < 0) return "unknown";
+  if (peak >= 0.85) return "overload";
+  if (peak >= 0.65) return "heavy";
+  if (peak >= 0.35) return "busy";
+  if (peak >= 0.15) return "light";
+  return "idle";
+}
+
+/** 各档位颜色（与 set 内联 `dotStyle` 共用同一份，避免散落两处口径不一致） */
+const LOAD_COLORS: Record<LoadLevel, string> = {
+  idle: "#34c759", // 绿 —— 空闲
+  light: "#7ed321", // 黄绿 —— 轻载（比空闲更亮一档，仍属「健康」区间）
+  busy: "#ff9f0a", // 橙 —— 繁忙（中高负载）
+  heavy: "#ff7e27", // 深橙 —— 高载（沿用品牌 accent 橙，接近告警）
+  overload: "#ef4444", // 红 —— 过载/占满
+  unknown: "#8e8e93", // 灰 —— 未知/异常
+};
+
+/** 状态点内联样式：背景色 + 同色光晕（透明度随颜色而异，统一 0.55 发光强度） */
+const dotStyle = computed(() => {
+  const c = LOAD_COLORS[loadLevel(metrics.value)];
+  return { background: c, boxShadow: `0 0 6px ${c}` };
+});
+
+/** 状态点 tooltip：中文给具体档位 + 实时负载值，方便悬停确认阈值归属 */
+const dotTitle = computed(() => {
+  const lv = loadLevel(metrics.value);
+  const m = metrics.value;
+  if (lv === "unknown") return t("float.dotUnknown");
+  const cpu = Math.round((m?.cpu_usage ?? 0) * 100);
+  const mem = Math.round((m?.memory_usage ?? 0) * 100);
+  const map: Record<Exclude<LoadLevel, "unknown">, string> = {
+    idle: "float.dotIdle",
+    light: "float.dotLight",
+    busy: "float.dotBusy",
+    heavy: "float.dotHeavy",
+    overload: "float.dotOverload",
+  };
+  return t(map[lv], { cpu, mem });
+});
+
 /** 字节/秒格式化（与 Rust format_bps 同口径：B / K / M / G 自适应） */
 function fmtRate(bps: number): string {
   if (!Number.isFinite(bps) || bps < 0) return "0B";
@@ -177,19 +233,6 @@ async function onShot(): Promise<void> {
     await screenshot.trigger();
   } catch {
     /* 应用退出中偶发失败，忽略 */
-  }
-}
-
-/**
- * v1.1.0：重复上次区域截图（借鉴 Snapzy）。与设置页 onShotRepeat 同一后端命令。
- * 失败静默：浮窗没有 toast 通道，且「还没有上次区域」属常态（第一次点必然如此），
- * 弹窗反而打扰；用户会自然退回普通截图路径。
- */
-async function onShotRepeat(): Promise<void> {
-  try {
-    await screenshot.repeatRegion(false);
-  } catch {
-    /* 无历史区域 / 区域失效 / 会话进行中 —— 一律静默 */
   }
 }
 
@@ -358,8 +401,12 @@ onBeforeUnmount(() => {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--accent, #ff7e27);
-  box-shadow: 0 0 6px rgba(255, 126, 39, 0.75);
+  /* 颜色由 `dotStyle` 内联注入（按负载档位动态切换）；这里不再写死 accent 橙 */
+  /* 平滑过渡：1Hz 采样下若直接用离散色跳变，高负载附近会闪烁；0.35s 缓动让变色
+     更柔和，同时保留「一眼看颜色」的直观性 */
+  transition:
+    background 0.35s ease,
+    box-shadow 0.35s ease;
 }
 .f-item {
   display: inline-flex;
