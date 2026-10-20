@@ -51,6 +51,14 @@
       长期钉在橙档、CPU 回落也不变绿（Windows 内存读数更低更跳故正常）。改为**以 CPU
       瞬时值为主信号**：内存 < 80%（MEM_WARN）时只跟 CPU；≥80% 才参与抬升（80~85% 深橙、
       ≥85% 红）。既让灯随实时活动变色，又保留内存快占满时变红。
+  - 2026-10-20 @v1.2.2: 修复 - macOS 状态灯**仍然恒橙**（v1.2.1 未真正修好）。
+      v1.2.1 把内存门槛设成 `>= 0.8`，与 macOS 内存**日常基线（70~80%）正好重合**
+      → 实测 MEM 80% / CPU 23% 时仍判 heavy 亮橙。现重新定标：
+      ① CPU 独立决定基础档位（0.15/0.35/0.65/0.85 不变）；
+      ② 内存只在**高水位**抬升——`MEM_HEAVY = 0.9` 抬到 heavy、`MEM_OVERLOAD = 0.95` 直接红；
+      ③ 内存**绝不降档**，也不会把 CPU 的低负载误判成繁忙。
+      即 MEM 80% 这类 macOS 常态不再影响灯色，CPU 23% 会如实显示「轻载」黄绿。
+      教训：跨平台阈值必须定在**各平台常态基线之上**，压在基线上等于永远触发的死阈值。
 -->
 <template>
   <div ref="rootRef" class="float-bar" @pointerdown="onPointerDown" @contextmenu.prevent>
@@ -157,12 +165,19 @@ function pct(v: number | undefined): string {
 }
 
 /**
- * 状态灯档位（v1.2.0）：负载「空闲 → 过载」5 档 + 未知/异常兜底。
+ * 状态灯档位（v1.2.0 引入，v1.2.2 重新定标）：负载「空闲 → 过载」5 档 + 未知兜底。
  *
- * 负载值取 CPU / 内存使用率的**较高者**（0~1 分数）——任一打满都意味着系统吃紧，
- * 最贴合「系统负载」直觉；磁盘占用长期偏高、不适合做 1Hz 瞬时状态灯，故不参与。
+ * 负载值以 **CPU 瞬时使用率为主信号**；内存只在**真正吃紧**时才参与抬升。
  *
- * 阈值划分（越高越热，边界「左闭右开」，色相冷→暖单调递增）：
+ * 为什么内存不能平权参与（v1.2.0 教训）：
+ *   内存占用变化极慢且平台基线差异巨大。macOS 采样是
+ *   `used = total - (free + inactive + speculative)`，把 wired（内核不可换出）+ compressor
+ *   压缩页 + 活跃应用全算作已用，**日常就是 70~80%**，属系统内存策略而非「系统吃紧」。
+ *   v1.2.0 取 `peak=max(cpu,mem)` → 灯被内存长期钉在橙档；v1.2.1 把门槛设成 `>= 0.8`，
+ *   与 macOS 常态线**恰好重合** → 依旧恒橙（用户实测 MEM 80%/CPU 23% 仍亮橙）。
+ *   结论：内存门槛必须显著高于各平台常态基线，且不参与「繁忙」档，只做**高水位告警**。
+ *
+ * 阈值划分（CPU 主信号；越高越热，边界左闭右开）：
  *   idle     < 0.15   空闲（几乎无负载）
  *   light    0.15–0.35 轻载（日常使用）
  *   busy     0.35–0.65 繁忙（中高负载，开始发热）
@@ -173,27 +188,29 @@ function pct(v: number | undefined): string {
  */
 type LoadLevel = "idle" | "light" | "busy" | "heavy" | "overload" | "unknown";
 
-/// 内存占用达到该分数（80%）才参与**抬升**状态灯档位；低于此值只由 CPU 瞬时驱动。
-const MEM_WARN = 0.8;
+/**
+ * 内存「吃紧」门槛（v1.2.2 定标）。高于 macOS 日常 70~80% 的常态占用，
+ * 只有真正接近耗尽才参与档位，避免内存把灯长期钉死。
+ */
+const MEM_HEAVY = 0.9;
+/** 内存「接近占满」门槛：到这一档直接判过载（红）。 */
+const MEM_OVERLOAD = 0.95;
 
 function loadLevel(m: MetricsOut | null): LoadLevel {
   if (!m || !m.supported || !m.enabled) return "unknown";
   const cpu = m.cpu_usage;
   const mem = m.memory_usage;
   if (!Number.isFinite(cpu) || !Number.isFinite(mem)) return "unknown";
-  // v1.2.1：负载值以 **CPU 瞬时值为主信号**，内存只在真正偏紧时抬升档位。
-  // 旧逻辑 peak=max(cpu,mem)，而内存变化很慢、macOS 又长期把占用维持在 70~80%
-  // （wired + compressor 压缩内存 + 文件缓存，属 Mac 内存策略），导致状态灯被内存
-  // 长期钉在橙色档、CPU 回落也不变绿（用户实测 macOS「灯不变色」；Windows 内存读数
-  // 更低更跳，故表现正常）。改为：mem < MEM_WARN 时 load 只跟 CPU；mem ≥ 80% 才把
-  // 内存纳入——80~85% 升深橙告警、≥85% 红（「接近占满」），仍满足内存吃紧时变红。
-  let load = Math.max(0, cpu);
-  if (mem >= MEM_WARN) load = Math.max(load, mem);
-  if (load >= 0.85) return "overload";
-  if (load >= 0.65) return "heavy";
-  if (load >= 0.35) return "busy";
-  if (load >= 0.15) return "light";
-  return "idle";
+  // CPU 决定基础档位（实时活动信号）
+  const c = Math.max(0, Math.min(1, cpu));
+  let level: LoadLevel =
+    c >= 0.85 ? "overload" : c >= 0.65 ? "heavy" : c >= 0.35 ? "busy" : c >= 0.15 ? "light" : "idle";
+  // 内存只做「高水位抬升」，且只抬到 heavy/overload，绝不因内存把灯压到低档
+  if (mem >= MEM_OVERLOAD) return "overload";
+  if (mem >= MEM_HEAVY && (level === "idle" || level === "light" || level === "busy")) {
+    return "heavy";
+  }
+  return level;
 }
 
 /** 各档位颜色（与 set 内联 `dotStyle` 共用同一份，避免散落两处口径不一致） */
@@ -212,7 +229,7 @@ const dotStyle = computed(() => {
   return { background: c, boxShadow: `0 0 6px ${c}` };
 });
 
-/** 状态点 tooltip：中文给具体档位 + 实时负载值，方便悬停确认阈值归属 */
+/** 状态点 tooltip：中文给具体档位 + 实时负载值 + 判定规则，方便悬停确认阈值归属 */
 const dotTitle = computed(() => {
   const lv = loadLevel(metrics.value);
   const m = metrics.value;
@@ -226,7 +243,9 @@ const dotTitle = computed(() => {
     heavy: "float.dotHeavy",
     overload: "float.dotOverload",
   };
-  return t(map[lv], { cpu, mem });
+  // v1.2.2：附上判定规则——用户曾因「MEM 80% 却不变色」困惑，明确写出内存只在
+  // ≥90% 才抬档，避免再被 macOS 常态高内存读数误导成 bug。
+  return `${t(map[lv], { cpu, mem })}\n${t("float.dotRule")}`;
 });
 
 /** 字节/秒格式化（与 Rust format_bps 同口径：B / K / M / G 自适应） */

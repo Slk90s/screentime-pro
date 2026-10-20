@@ -464,6 +464,7 @@ export default {
     dotHeavy: "High load (CPU {cpu}% · Mem {mem}%)",
     dotOverload: "Overload (CPU {cpu}% · Mem {mem}%)",
     dotUnknown: "Load unknown",
+    dotRule: "Driven by CPU; memory only escalates at ≥90% (≥95% = overload)",
   },
   pet: {
     settings: {

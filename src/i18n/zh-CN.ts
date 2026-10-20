@@ -444,6 +444,7 @@ export default {
     dotHeavy: "高载（CPU {cpu}% · 内存 {mem}%）",
     dotOverload: "过载（CPU {cpu}% · 内存 {mem}%）",
     dotUnknown: "负载未知",
+    dotRule: "档位以 CPU 为主；内存 ≥90% 才抬到高载、≥95% 判过载",
   },
   pet: {
     settings: {
