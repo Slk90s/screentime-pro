@@ -46,11 +46,41 @@
     同批合并进重切版：mac / Linux 取字**三重不可用**修复（运行库落盘路径曾返回目录而非文件名
     → 运行库永远落不了盘；下载超时过短；平台感知默认引擎 + 存量配置自愈）。
     **本版为同名 tag 重切**：v0.9.0 首发版对 macOS / Linux 的取字链路不可用，故修复后重切发布。
+  - 2026-10-20 @v1.2.1: 修复 - 三处跨平台实机问题（前两处 Windows，第三处 macOS）。
+    a) 「状态栏开了却看不到」：localStorage `float_pos` 存的是副屏还在时的负坐标，副屏移除后
+       被无校验恢复，窗口离屏（实测物理 (-695,159)，单屏 1536×864）。`float_window.rs` 新增
+       `clamp_to_visible_area`，show/move/resize 后用**物理像素**枚举显示器，重叠不足窗口宽 1/3
+       即回落主屏右上角。
+    b) 「记录中 screentime-pro · ScreenTime Float」：辅助窗口与主窗口同进程同 exe，在其上按下
+       （浮窗 startDragging）会短暂成为前台，旧实现无差别采集入库（macOS 浮窗不夺 frontmost）。
+       `tracker/windows.rs` 新增 `SELF_HELPER_TITLES` 标题过滤，命中即 NoForeground 跳过；
+       主窗口不过滤。
+    c) 「macOS 状态灯恒定橙色不变色」：v1.2.0 负载取 peak=max(cpu,mem)，macOS 内存长期
+       70~80%（wired/compressor/文件缓存，系统常态）把峰值钉在橙档、CPU 回落不变绿。
+       `float/FloatBar.vue` 的 loadLevel 改为 CPU 瞬时主信号，mem < 80%（MEM_WARN）不参与、
+       ≥80% 才抬升档位；五档阈值不变。IPC 总数不变（82）。
 -->
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-10-18（同步至 **v1.2.0**——
+> 最后更新：2026-10-20（同步至 **v1.2.1**——三处跨平台实机修复）——
+> ① **状态栏开了却看不到（P0）**：浮窗 localStorage `float_pos` 保存的是副屏还在时的
+> 负坐标，副屏移除/分辨率变小后被无校验恢复，窗口整个落到屏幕外（实测物理坐标 (-695,159)，
+> 单屏 1536×864）。`float_window.rs` 新增 `clamp_to_visible_area`：show/move/resize 三条路径后
+> 用**物理像素**枚举所有显示器，窗口与任一屏水平重叠不足自身宽 1/3 即判定离屏、回落到主屏
+> 右上角；物理像素判定规避多屏混合 DPI 歧义。已本机移回验证状态栏显示正常。
+> ② **自家浮窗被录制成应用（Windows）**：顶部「记录中 screentime-pro · ScreenTime Float」。
+> float/pet/pet-menu/capture 与主窗口同进程同 exe，在辅助窗口按下（浮窗 startDragging）会让其
+> 短暂成为前台窗口，旧实现无差别采集入库（macOS 浮窗不夺 frontmost 故无此问题）。
+> `tracker/windows.rs` 新增 `SELF_HELPER_TITLES` 标题过滤，命中即返回 NoForeground 跳过、不建会话；
+> 主窗口 ScreenTime Pro 不过滤（操作设置页记录自身属预期）。
+> ③ **macOS 状态灯恒定橙色不变色**：v1.2.0 负载值取 `peak=max(cpu,mem)`，macOS 内存长期
+> 维持 70~80%（wired 联动 + compressor 压缩 + 文件缓存，属系统常态而非真紧张），峰值被内存
+> 长期钉在橙档、CPU 回落也不变绿（Windows 内存口径更低更跳故正常）。`float/FloatBar.vue` 的
+> loadLevel 改为 **CPU 瞬时值为主信号**，内存 `<80%`（`MEM_WARN`）不参与档位、`≥80%` 才抬升
+> （80~85% 深橙、≥85% 红），五档阈值不变。IPC 总数不变（**82**）。
+>
+> 上一版 v1.2.0（2026-10-18）要点——
 > ① **多屏截图「鼠标在哪截哪屏」（微信式 Alt+A）**：截图从「固定主屏」改为「抓光标停靠的
 > 那块屏」。新增 `screenshot/cursor.rs`（平台原生坐标的全局光标位置：Windows `GetCursorPos`
 > 物理像素 / macOS `CGEventGetLocation` 点 / Linux X11 `query_pointer` 根窗口像素），
@@ -143,7 +173,7 @@
 
 跨平台应用使用时长追踪（macOS / Windows / Linux），对标 iOS「屏幕使用时间」。**数据 100% 本地（SQLite bundled），零上传，隐私优先**。
 
-栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v1.2.0**（详见 [`RELEASE.md`](RELEASE.md)）。
+栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v1.2.1**（详见 [`RELEASE.md`](RELEASE.md)）。
 
 > ⚠️ 本节版本号在 v0.7.0 → v0.7.5 期间**长期未更新**（曾停留在 v0.7.0），与 `tauri.conf.json` 脱节。
 > 版本号唯一真实来源是 **`src-tauri/tauri.conf.json` 的 `version`**，改版本时务必回来同步本节。

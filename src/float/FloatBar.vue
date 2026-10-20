@@ -46,6 +46,11 @@
       busy 橙 / heavy 深橙 / overload 红）+ unknown 灰（数据源不可用兜底），阈值
       0.15/0.35/0.65/0.85（左闭右开），CSS 0.35s 平滑过渡避免 1Hz 采样闪烁；
       tooltip 显示档位 + 实时 CPU/内存百分比。颜色集中在 `LOAD_COLORS` 单一来源。
+  - 2026-10-20 @v1.2.1: 修复 - macOS「状态灯不变色」。v1.2.0 的 peak=max(cpu,mem)，
+      而内存占用变化慢、Mac 又长期维持 70~80%（wired/compressor/缓存），状态灯被内存
+      长期钉在橙档、CPU 回落也不变绿（Windows 内存读数更低更跳故正常）。改为**以 CPU
+      瞬时值为主信号**：内存 < 80%（MEM_WARN）时只跟 CPU；≥80% 才参与抬升（80~85% 深橙、
+      ≥85% 红）。既让灯随实时活动变色，又保留内存快占满时变红。
 -->
 <template>
   <div ref="rootRef" class="float-bar" @pointerdown="onPointerDown" @contextmenu.prevent>
@@ -168,16 +173,26 @@ function pct(v: number | undefined): string {
  */
 type LoadLevel = "idle" | "light" | "busy" | "heavy" | "overload" | "unknown";
 
+/// 内存占用达到该分数（80%）才参与**抬升**状态灯档位；低于此值只由 CPU 瞬时驱动。
+const MEM_WARN = 0.8;
+
 function loadLevel(m: MetricsOut | null): LoadLevel {
   if (!m || !m.supported || !m.enabled) return "unknown";
   const cpu = m.cpu_usage;
   const mem = m.memory_usage;
-  const peak = Math.max(cpu, mem);
-  if (!Number.isFinite(peak) || peak < 0) return "unknown";
-  if (peak >= 0.85) return "overload";
-  if (peak >= 0.65) return "heavy";
-  if (peak >= 0.35) return "busy";
-  if (peak >= 0.15) return "light";
+  if (!Number.isFinite(cpu) || !Number.isFinite(mem)) return "unknown";
+  // v1.2.1：负载值以 **CPU 瞬时值为主信号**，内存只在真正偏紧时抬升档位。
+  // 旧逻辑 peak=max(cpu,mem)，而内存变化很慢、macOS 又长期把占用维持在 70~80%
+  // （wired + compressor 压缩内存 + 文件缓存，属 Mac 内存策略），导致状态灯被内存
+  // 长期钉在橙色档、CPU 回落也不变绿（用户实测 macOS「灯不变色」；Windows 内存读数
+  // 更低更跳，故表现正常）。改为：mem < MEM_WARN 时 load 只跟 CPU；mem ≥ 80% 才把
+  // 内存纳入——80~85% 升深橙告警、≥85% 红（「接近占满」），仍满足内存吃紧时变红。
+  let load = Math.max(0, cpu);
+  if (mem >= MEM_WARN) load = Math.max(load, mem);
+  if (load >= 0.85) return "overload";
+  if (load >= 0.65) return "heavy";
+  if (load >= 0.35) return "busy";
+  if (load >= 0.15) return "light";
   return "idle";
 }
 

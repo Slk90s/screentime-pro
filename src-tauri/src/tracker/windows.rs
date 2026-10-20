@@ -8,6 +8,13 @@
 //! 注：本文件仅在 `target_os = "windows"` 下参与编译。
 //! 对 GetModuleFileNameExW / QueryFullProcessImageNameW 使用 raw FFI 声明，
 //! 避免 windows crate 0.58 的 Param trait 严格类型约束导致交叉编译失败。
+//!
+//! 修改历史：
+//! - 2026-10-19 @v1.2.1: 修复「记录中 screentime-pro · ScreenTime Float」。根因：float/pet/
+//!   pet-menu/capture 与主窗口同一进程同一 exe，在这些辅助窗口上按下（浮窗 startDragging）
+//!   会使其短暂成为前台窗口，旧实现无差别采集 → 自家悬浮窗被录成被追踪应用（macOS 浮窗不夺
+//!   frontmost 故无此问题）。新增 SELF_HELPER_TITLES 标题过滤，命中即返回 NoForeground 跳过；
+//!   主窗口 ScreenTime Pro 不过滤（操作设置面板时记录自身属预期）。
 
 use crate::error::TrackerError;
 use crate::tracker::platform::{PlatformTracker, RawApp};
@@ -24,6 +31,23 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINF
 
 /// Windows 采集器
 pub struct WindowsTracker;
+
+/// 本程序自家的**辅助窗口**标题（与 tauri.conf.json 各窗口 title 一致）。
+///
+/// v1.2.1 修复「记录 screentime-pro · ScreenTime Float」：float / pet / pet-menu / capture
+/// 与主窗口同属一个进程、同一个 exe，差别只在窗口标题。在这些窗口上按下（浮窗整条是
+/// 原生 startDragging 拖拽区）会让它们短暂成为 `GetForegroundWindow` 的前台窗口，
+/// 旧实现无差别采集 → 把自家悬浮窗当成被追踪应用 upsert 入库。
+///
+/// 这里按标题把辅助窗口识别出来并当作「无前台」跳过（采样循环忽略该 tick、不建会话）。
+/// **主窗口 `ScreenTime Pro` 刻意不在列表中**：用户真正在操作设置面板时记录本程序是
+/// 预期行为（v0.9.7 仅修了其「名称重复展示」，未排除自身）。
+const SELF_HELPER_TITLES: [&str; 4] = [
+    "ScreenTime Float",
+    "ScreenTime Pet",
+    "ScreenTime Pet Menu",
+    "ScreenTime Capture",
+];
 
 impl PlatformTracker for WindowsTracker {
     fn get_foreground_app(&self) -> Result<RawApp, TrackerError> {
@@ -43,6 +67,15 @@ impl PlatformTracker for WindowsTracker {
             } else {
                 None
             };
+
+            // 自家辅助窗口抢前台（点浮窗/拖桌宠/截图遮罩）→ 当作无前台跳过，
+            // 不把 ScreenTime Float 之类录成被追踪应用（v1.2.1）
+            if let Some(t) = window_title.as_deref() {
+                if SELF_HELPER_TITLES.contains(&t) {
+                    tracing::debug!(title = t, "前台为本程序辅助窗口，跳过采集");
+                    return Err(TrackerError::NoForeground);
+                }
+            }
 
             // 获取 exe 全路径 + 进程名
             let (exe_path, process_name) = get_process_path(pid);
