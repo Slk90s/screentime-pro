@@ -45,7 +45,10 @@
     <!-- v0.6.2-beta.15：随机中文气泡（不影响点击/拖拽；pointer-events:none） -->
     <PetBubble v-if="bubbleVisible" :message="bubbleMessage" :duration="2500" />
     <!-- v0.6.2-beta.15：系统过载指示（头顶温度计，仅 angry 状态下叠加） -->
-    <div v-if="petStore.isHeating" class="pet-overheat-badge" aria-hidden="true">🔥</div>
+    <!-- v1.2.2: emoji 🔥 替换为 AppIcon 矢量火焰图标（与全局 icon 化规范一致） -->
+    <div v-if="petStore.isHeating" class="pet-overheat-badge" aria-hidden="true">
+      <AppIcon name="flame" :size="16" />
+    </div>
     <!-- v0.6.2：渲染协议改用 PetSkinRenderer 路由，按 skinRegistry.active() 动态挂载皮肤；
          桌宠现仅 Pop Mart 3D 皮肤（v0.6.2-beta.5 移除 panda-2d）；渲染器按 skinRegistry.active() 动态挂载 -->
     <!-- v0.7.2：拖拽期间不再挂 is-walking walk-cycle。透明置顶窗下每帧 transform 动画会强迫 DWM 整窗重合成，
@@ -80,6 +83,7 @@ import './skins';
 // v0.6.2：皮肤自描述窗口尺寸（2D 140×140；Pop Mart 等竖图皮肤更高窗）
 import { skinRegistry } from './skins/registry';
 import { LogicalSize } from '@tauri-apps/api/dpi';
+import AppIcon from '@/components/AppIcon.vue';
 import { log } from "@/lib/logger";
 
 const { t } = useI18n();
@@ -450,12 +454,14 @@ onBeforeUnmount(() => {
   80%      { transform: translate(-1px, 1px) rotate(-1deg); }
 }
 
-/* v0.6.2-beta.15：系统过载时头顶的🔥指示 */
+/* v0.6.2-beta.15：系统过载时头顶的火焰指示（v1.2.2: emoji → AppIcon 矢量图标，橙红色） */
 .pet-overheat-badge {
   position: absolute;
   top: -8px;
   right: 0;
   font-size: 16px;
+  line-height: 1;
+  color: #ff6a2b;
   filter: drop-shadow(0 0 4px rgba(255, 120, 30, 0.55));
   animation: overheat-pulse 0.8s ease-in-out infinite alternate;
   pointer-events: none;

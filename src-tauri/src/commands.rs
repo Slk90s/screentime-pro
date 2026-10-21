@@ -935,6 +935,12 @@ pub struct StatusBarConfig {
     // 权威源仍是 screenshot 模块的 `screenshot_enabled` 设置键：本字段只读不存
     // （save 不落库），缓存写入点见 screenshot_set_config / set_status_bar_config。
     pub screenshot_enabled: bool,
+    // v1.2.2（2026-10-21）：液态玻璃效果开关。开启后浮窗从 36px 深色条变为
+    // 44px 胶囊并叠加系统材质（macOS 26 = NSGlassEffectView 含折射；
+    // Win10 1809+/11 = DWM Acrylic；其余平台不支持，前端置灰）。
+    // 默认 false —— 保持既有视觉，用户主动升级观感；也避免老机器默认吃材质开销。
+    // 只影响 `float` 窗口，pet / capture 等窗口不受任何影响。
+    pub float_glass: bool,
 }
 
 impl Default for StatusBarConfig {
@@ -949,6 +955,8 @@ impl Default for StatusBarConfig {
             float_enabled: false,
             // 与 ScreenshotConfig::default().enabled 一致（截图默认开启）
             screenshot_enabled: true,
+            // v1.2.2：液态玻璃默认关闭（保持既有视觉，用户主动开启）
+            float_glass: false,
         }
     }
 }
@@ -990,6 +998,11 @@ impl StatusBarConfig {
             .get_setting("screenshot_enabled")
             .map(|s| s == "true")
             .unwrap_or(true);
+        // v1.2.2 新增：液态玻璃开关。老版本 DB 无此 key → 默认 false（保持既有视觉）
+        let float_glass = db
+            .get_setting("status_bar_float_glass")
+            .map(|s| s == "true")
+            .unwrap_or(false);
         Self {
             enabled,
             show_cpu,
@@ -998,6 +1011,7 @@ impl StatusBarConfig {
             show_net,
             float_enabled,
             screenshot_enabled,
+            float_glass,
         }
     }
 
@@ -1012,6 +1026,9 @@ impl StatusBarConfig {
         db.set_setting("status_bar_show_disk", b(self.show_disk))?;
         db.set_setting("status_bar_show_net", b(self.show_net))?;
         db.set_setting("status_bar_float_enabled", b(self.float_enabled))?;
+        // v1.2.2：液态玻璃开关（本地持久化；与 screenshot_enabled 那种"权威源在别处"
+        // 的透传字段不同，本字段由本结构独占）
+        db.set_setting("status_bar_float_glass", b(self.float_glass))?;
         Ok(())
     }
 }
@@ -1030,15 +1047,16 @@ pub fn set_status_bar_config(
     // v0.7.6：记录旧可见态，判断是否需要显隐浮窗。
     // 2026-09-10 总开关统管：浮窗可见 = enabled && float_enabled，
     // 任一翻转导致可见态变化都要动窗口（含「关总开关 → 浮窗立即隐藏」）
-    let (old_enabled, old_float) = {
+    // v1.2.2：额外记录 old_glass，用于判断是否需要切换液态玻璃材质
+    let (old_enabled, old_float, old_glass) = {
         let c = state
             .status_bar_config
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        (c.enabled, c.float_enabled)
+        (c.enabled, c.float_enabled, c.float_glass)
     };
     config.save(&state.db).map_err(|e| e.to_string())?;
-    crate::logging::audit("status_bar_config_saved", &format!("enabled={} float={} screenshot={}", config.enabled, config.float_enabled, config.screenshot_enabled));
+    crate::logging::audit("status_bar_config_saved", &format!("enabled={} float={} glass={} screenshot={}", config.enabled, config.float_enabled, config.float_glass, config.screenshot_enabled));
     *state.status_bar_config.lock().unwrap_or_else(|e| e.into_inner()) = config;
     // v0.8.2：screenshot_enabled 的权威源在截图模块。设置页可能持有打开时的旧快照，
     // 保存状态栏配置时会把旧值回写缓存，导致浮窗按钮显隐与截图实际开关脱节——
@@ -1059,6 +1077,28 @@ pub fn set_status_bar_config(
     if old_shown != new_shown {
         crate::float_window::set_float_visible(&app, new_shown)
             .map_err(|e| e.to_string())?;
+    }
+    // v1.2.2：液态玻璃模式翻转 → 应用/清除系统材质 + 同步窗口高度（36 ↔ 44）。
+    //
+    // 三个设计点：
+    // 1. **只在翻转时动**（old_glass != config.float_glass），避免每次保存四项指标开关
+    //    都重跑一遍材质调用（macOS 上会反复 addSubview/removeFromSuperview）。
+    // 2. 失败**不回滚**配置、不返回 Err —— 材质只是视觉增强，配置已落库。失败时
+    //    apply_via_app 内部记 warn，浮窗沿用 CSS 兜底样式，用户不会看到"开关自己弹回去"。
+    // 3. 窗口尚未创建（浮窗关着）时也调用：apply_via_app 会返回"尚未创建"的 Err，
+    //    我们忽略它——真正生效时机是用户下次打开浮窗，lib.rs 的显隐路径会补上
+    //    （见 set_float_visible 中的 ensure+材质钩子）。
+    if old_glass != config.float_glass {
+        if config.float_glass {
+            // 仅当浮窗当前可见时才需要立刻应用材质；不可见时留给下次 show
+            if new_shown {
+                if let Err(e) = crate::float_glass::apply_via_app(&app, true) {
+                    tracing::warn!(error = %e, "切换液态玻璃失败（浮窗可能在关闭状态）");
+                }
+            }
+        } else if let Err(e) = crate::float_glass::apply_via_app(&app, false) {
+            tracing::warn!(error = %e, "清除液态玻璃失败（浮窗可能在关闭状态）");
+        }
     }
     Ok(true)
 }

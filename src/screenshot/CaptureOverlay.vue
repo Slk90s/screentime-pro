@@ -81,10 +81,8 @@
     <!-- 尺寸胶囊 -->
     <div v-if="box" class="pills" :style="pillStyle">
       <span class="pill pill--size">{{ Math.round(box.w) }} × {{ Math.round(box.h) }} px</span>
-      <span v-if="radius > 0 || shadow" class="pill pill--tag">
-        <template v-if="radius > 0">{{ t("shot.radius") }} {{ radius }}</template>
-        <template v-if="radius > 0 && shadow"> · </template>
-        <template v-if="shadow">{{ t("shot.shadow") }}</template>
+      <span v-if="radius > 0" class="pill pill--tag">
+        {{ t("shot.radius") }} {{ radius }}
       </span>
     </div>
 
@@ -161,7 +159,7 @@
       </button>
 
       <span class="tb-sep"></span>
-      <button class="tb" :title="t('shot.radiusShadow')" :class="{ on: activePanel === 'radius' }" @click="togglePanel('radius')">
+      <button class="tb" :title="t('shot.radius')" :class="{ on: activePanel === 'radius' }" @click="togglePanel('radius')">
         <svg viewBox="0 0 20 20" width="18" height="18"><path d="M4 16V9a5 5 0 0 1 5-5h7" /></svg>
       </button>
 
@@ -183,16 +181,12 @@
       </button>
     </div>
 
-    <!-- 圆角 / 投影浮层 -->
+    <!-- 圆角浮层（v1.2.2：投影开关已移除，只留圆角滑杆） -->
     <div v-if="box && activePanel === 'radius'" class="panel" :style="panelStyle" @pointerdown.stop>
       <div class="panel-row">
         <span class="pill-label">{{ t("shot.radius") }}</span>
         <input v-model.number="radius" class="radius" type="range" min="0" max="40" step="2" />
         <span class="pill-num">{{ radius }}</span>
-      </div>
-      <div class="panel-row">
-        <span class="pill-label">{{ t("shot.shadow") }}</span>
-        <button class="switch" :class="{ on: shadow }" @click="shadow = !shadow"><span class="knob"></span></button>
       </div>
     </div>
 
@@ -307,7 +301,7 @@ const color = ref(COLORS[0]);
 const strokeWidth = ref(4);
 const mosaicBlock = ref(14);
 const radius = ref(8);
-const shadow = ref(false);
+// v1.2.2：`shadow` 状态已移除（截图投影功能整体下线，导出恒为无投影）
 const autoSave = ref(false);
 const activePanel = ref<"radius" | "ocr" | null>(null);
 const textEdit = ref<{ x: number; y: number } | null>(null);
@@ -987,7 +981,12 @@ function selectAll() {
 
 // ===== 提交 / 取消 =====
 
-/** 把选区 + 标注 + 圆角 + 投影合成成一张 PNG（data URL） */
+/** 把选区 + 标注 + 圆角合成成一张 PNG（data URL）
+ *
+ * v1.2.2：投影功能整体移除 → `pad` 恒为 0、画布尺寸恒等于选区尺寸，
+ * 导出图不再有四周留白与暗影。下面仍保留 `pad` 变量（恒 0），
+ * 是为了让 `roundRectPath` / `drawImage` / `paintOps` 的坐标推导只有一条口径，
+ * 不必为"无留白"再写一套偏移为 0 的重复逻辑。 */
 function compose(): string | null {
   const b = box.value;
   if (!b || !base || !meta.value) return null;
@@ -996,24 +995,13 @@ function compose(): string | null {
   const ch = Math.round(b.h * s);
   if (cw < 1 || ch < 1) return null;
   const r = radius.value * s;
-  const pad = shadow.value ? Math.round(Math.max(radius.value * 1.5, 14) * s) : 0;
+  const pad = 0;
 
   const c = document.createElement("canvas");
   c.width = cw + pad * 2;
   c.height = ch + pad * 2;
   const g = c.getContext("2d");
   if (!g) return null;
-
-  if (shadow.value) {
-    g.save();
-    g.shadowColor = "rgba(15, 23, 42, 0.42)";
-    g.shadowBlur = Math.max(6, pad * 0.85);
-    g.shadowOffsetY = 3 * s;
-    g.fillStyle = "#000";
-    roundRectPath(g, pad, pad, cw, ch, r);
-    g.fill();
-    g.restore();
-  }
 
   g.save();
   roundRectPath(g, pad, pad, cw, ch, r);
@@ -1037,20 +1025,8 @@ async function cancel() {
 async function commit(copy: boolean, save: boolean) {
   const png = compose();
   if (!png) return;
-  // v1.1.0：把选区的物理像素矩形交给后端记录（「重复区域截图」的数据源）。
-  // box 是窗口内 CSS 像素，×k（= 物理宽 / CSS 宽）换算成冻结帧上的物理像素。
-  // 投影 pad 是导出图上的装饰，不属于屏幕区域，故不参与矩形计算。
-  let region: [number, number, number, number] | undefined;
-  if (box.value && meta.value) {
-    const s = k.value;
-    const x = Math.round(box.value.x * s);
-    const y = Math.round(box.value.y * s);
-    const w = Math.round(box.value.w * s);
-    const h = Math.round(box.value.h * s);
-    if (w > 0 && h > 0) region = [x, y, w, h];
-  }
   try {
-    await screenshot.commit({ pngBase64: png, copy, save, region });
+    await screenshot.commit({ pngBase64: png, copy, save });
   } finally {
     reset();
     await getCurrentWindow().hide();
@@ -1139,12 +1115,10 @@ onMounted(async () => {
     sync();
     meta.value = ev.payload;
     radius.value = ev.payload.default_radius ?? 8;
-    shadow.value = ev.payload.default_shadow ?? false;
     try {
       const cfg = await screenshot.getConfig();
       autoSave.value = cfg.auto_save;
       radius.value = cfg.corner_radius;
-      shadow.value = cfg.shadow;
     } catch {
       /* 忽略：用事件里的默认值兜底 */
     }

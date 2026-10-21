@@ -301,6 +301,13 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
       // 浏览器预览场景：mock 不真的打开，只 console.log
       console.log("[mock] open_url:", args?.url);
       return null;
+    case "float_glass_support":
+      // v1.2.2：浏览器预览没有系统合成器，按"不支持"返回，设置页会置灰开关
+      return {
+        supported: false,
+        tier: "none",
+        reason: "mock: 浏览器预览环境无系统玻璃材质",
+      };
     default:
       return null;
   }

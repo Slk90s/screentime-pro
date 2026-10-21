@@ -170,7 +170,35 @@ export interface StatusBarConfig {
   // v0.8.2（2026-09-17）：截图总开关透传（浮窗尾部截图按钮的显隐依据；
   // 权威源是 screenshot 模块配置，本字段只读不回写）
   screenshot_enabled: boolean;
+  // v1.2.2（2026-10-21）：悬浮窗液态玻璃开关。为 true 时浮窗改用系统材质
+  // （macOS 26 NSGlassEffectView / Windows DWM Acrylic），高度 36 → 44px 胶囊形。
+  // 能力不足的平台由 `FloatGlassSupport.supported` 判定，设置页据此置灰。
+  float_glass: boolean;
 }
+
+// ===== v1.2.2（2026-10-21）：悬浮窗液态玻璃能力探测 =====
+
+/**
+ * `float_glass_support` 命令返回体（与 Rust `float_glass::FloatGlassSupport`
+ * 一一对应，结构体字段名 snake_case 原样返回，Tauri v2 不做驼峰转换）。
+ */
+export interface FloatGlassSupport {
+  /** 当前系统能否给出「半透明 + 背景模糊」材质（false 时设置页开关置灰） */
+  supported: boolean;
+  /** 实际可用的最高档位 */
+  tier: FloatGlassTier;
+  /** 能力说明 / 不支持原因（直接用作开关的 tooltip） */
+  reason: string;
+}
+
+/**
+ * 材质档位：
+ * - `liquid`   macOS 26+ 系统液态玻璃（半透明 + 模糊 + 真实折射）
+ * - `vibrancy` macOS < 26 NSVisualEffectView（半透明 + 模糊，无折射）
+ * - `acrylic`  Windows 10 1809+ DWM Acrylic（半透明 + 模糊，无折射）
+ * - `none`     Linux / 过老系统（不支持）
+ */
+export type FloatGlassTier = "liquid" | "vibrancy" | "acrylic" | "none";
 
 // ===== v0.7.5 / v0.7.6：状态栏系统指标 =====
 
@@ -199,7 +227,6 @@ export interface ScreenshotConfig {
   /** 确认时同时落盘归档 */
   auto_save: boolean;
   corner_radius: number;
-  shadow: boolean;
   /** 历史 FIFO 上限 */
   max_count: number;
   /**
@@ -265,7 +292,6 @@ export interface CaptureReadyPayload {
   physical_height: number;
   scale_factor: number;
   default_radius: number;
-  default_shadow: boolean;
 }
 
 /** 截图历史条目（图片本体在 screenshots/ 目录，此处只有索引） */

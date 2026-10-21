@@ -158,7 +158,7 @@
             :key="s.id"
             class="skin-btn"
             :class="{ active: isActiveSkin(s.id) }"
-            :title="s.description || s.name"
+            :title="t(`pet.skins.${s.id}.desc`, s.description || s.name)"
             @click="onPickSkin(s.id)"
           >
             <span class="skin-name">{{ s.name }}</span>
@@ -545,11 +545,12 @@ onBeforeUnmount(() => {
   user-select: none;
   -webkit-user-select: none;
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
-  animation: menu-in 0.15s ease-out;
+  /* v1.2.2: 弹出改弹簧曲线 + 更长时长，菜单"弹出感"更顺滑（轻微 overshoot） */
+  animation: menu-in 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 @keyframes menu-in {
-  from { opacity: 0; transform: scale(0.96) translateY(-4px); }
+  from { opacity: 0; transform: scale(0.9) translateY(-4px); }
   to { opacity: 1; transform: scale(1) translateY(0); }
 }
 
@@ -671,7 +672,7 @@ onBeforeUnmount(() => {
   border: 1px solid transparent;
   border-radius: 7px;
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
   color: rgba(255, 255, 255, 0.75);
   font-size: 11px;
 }
@@ -733,7 +734,7 @@ onBeforeUnmount(() => {
   color: rgba(255, 255, 255, 0.8);
   font-size: 11px;
   cursor: pointer;
-  transition: all 0.12s;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 .feed-btn:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.08);
@@ -766,7 +767,7 @@ onBeforeUnmount(() => {
   color: rgba(255, 255, 255, 0.75);
   font-size: 11px;
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 .skin-btn:hover {
   background: rgba(255, 255, 255, 0.08);
@@ -831,7 +832,7 @@ onBeforeUnmount(() => {
   color: rgba(255, 255, 255, 0.7);
   font-size: 12px;
   cursor: pointer;
-  transition: all 0.12s;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 .action-btn:hover {
   background: rgba(255, 255, 255, 0.08);
@@ -844,13 +845,15 @@ onBeforeUnmount(() => {
 }
 
 /* ---- Transition ---- */
+/* v1.2.2: 进出场加弹簧曲线（transform 0.22s 带 overshoot），opacity 仍用线性快淡出，
+   菜单关闭/弹出更"跟手"更顺；scale 起点加大到 0.92 让弹出更明显 */
 .menu-fade-enter-active,
 .menu-fade-leave-active {
-  transition: opacity 0.12s ease, transform 0.12s ease;
+  transition: opacity 0.16s ease, transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 .menu-fade-enter-from,
 .menu-fade-leave-to {
   opacity: 0;
-  transform: scale(0.95);
+  transform: scale(0.92);
 }
 </style>

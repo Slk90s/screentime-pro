@@ -204,6 +204,26 @@
             />
           </div>
           <p class="field-hint platform-note">{{ t("settings.statusBarFloatHint") }}</p>
+
+          <!-- v1.2.2（2026-10-21）：液态玻璃外观。
+               受三重门控：① 总开关启用；② 浮窗本身开启（玻璃只作用于浮窗）；
+               ③ `supported`（老系统 / Linux 无系统材质 → 置灰并给出原因）。
+               开关值随正式配置一起提交，Rust 侧 set_status_bar_config 检测到翻转后
+               会立刻重新应用/清除材质并同步窗口高度，无需额外 IPC。 -->
+          <div class="form-row row between">
+            <label>{{ t("settings.statusBarGlass") }}</label>
+            <input
+              type="checkbox"
+              class="check-input"
+              :checked="statusBarConfig.float_glass"
+              :disabled="!statusBarConfig.enabled || !statusBarConfig.float_enabled || !glassSupported"
+              :title="glassReason"
+              @change="onStatusBarItem($event, 'float_glass')"
+            />
+          </div>
+          <p class="field-hint platform-note">
+            {{ glassHint }}
+          </p>
         </div>
       </div>
     </div>
@@ -324,16 +344,7 @@
               @change="persistShotConfig"
             />
           </div>
-          <div class="form-row row between">
-            <label>{{ t("settings.shotShadow") }}</label>
-            <input
-              type="checkbox"
-              class="check-input"
-              :checked="shotConfig.shadow"
-              :disabled="!shotConfig.enabled"
-              @change="onShotToggle($event, 'shadow')"
-            />
-          </div>
+          <!-- v1.2.2：投影开关已移除（功能整体下线），此处只留圆角 -->
           <p class="field-hint">{{ t("settings.shotRadiusHint") }}</p>
 
           <div class="form-row row between">
@@ -358,19 +369,8 @@
             </div>
           </div>
 
-          <div class="form-row row between">
-            <label>{{ t("settings.shotNow") }}</label>
-            <button class="primary-btn" :disabled="!shotConfig.enabled" @click="onShotNow">
-              {{ t("settings.shotNow") }}
-            </button>
-          </div>
-          <!-- v1.1.0：重复区域截图（借鉴 Snapzy）——对上次框选区域一键重截 -->
-          <div class="form-row row between">
-            <label :title="t('settings.shotRepeatHint')">{{ t("settings.shotRepeat") }}</label>
-            <button class="ghost-btn" :disabled="!shotConfig.enabled" @click="onShotRepeat">
-              {{ t("settings.shotRepeat") }}
-            </button>
-          </div>
+          <!-- v1.2.2：移除「立即截图」按钮 —— 触发入口保留在浮窗胶囊与全局快捷键，
+               设置页不该成为第三个讲不清"按了会发生什么"的入口。 -->
           <!-- v1.1.0：延时截图（借鉴 Snapzy）——倒计时后进入正常截图，可先摆好界面 -->
           <div class="form-row row between">
             <label :title="t('settings.shotDelayHint')">{{ t("settings.shotDelay") }}</label>
@@ -627,12 +627,16 @@
               @click="pickSkin(s.id)"
             >
               <div class="pet-skin-head">
-                <span class="pet-skin-emoji" :aria-hidden="true">
-                  {{ s.id === 'popmart-3d' ? '🎁' : '🐾' }}
-                </span>
+                <!-- v1.2.2: emoji（🎁/🐾）统一替换为 AppIcon 矢量图标；描述文案走 i18n（pet.skins.<id>.desc），英文模式不再显示中文 -->
+                <AppIcon
+                  :name="skinIcon(s.id)"
+                  :size="18"
+                  class="pet-skin-icon"
+                  :aria-hidden="true"
+                />
                 <span class="pet-skin-name">{{ s.name }}</span>
               </div>
-              <div class="pet-skin-desc">{{ s.description }}</div>
+              <div class="pet-skin-desc">{{ skinDesc(s) }}</div>
             </button>
           </div>
         </div>
@@ -895,6 +899,7 @@ import type {
   ScreenshotOut,
   OcrEngineInfo,
   OcrEngineKind,
+  FloatGlassTier,
 } from "../types";
 import { formatDuration } from "../utils/format";
 import { petStore } from "../pet/stores/petStore";
@@ -913,6 +918,23 @@ const skinList = computed(() => skinRegistry.list());
 const activeSkinId = computed(() => skinRegistry.active().id);
 function pickSkin(id: string): void {
   skinRegistry.setActive(id);
+}
+
+/**
+ * v1.2.2：皮肤卡片图标（替代 emoji 🎁/🐾）。
+ * manifest 未声明 icon 字段，这里按 id 映射；新皮肤默认给 paw。
+ */
+function skinIcon(id: string): string {
+  return id === 'popmart-3d' ? 'gift' : 'paw';
+}
+
+/**
+ * v1.2.2：皮肤描述本地化 —— manifest.description 是硬编码中文，
+ * 英文模式下改读 i18n（pet.skins.<id>.desc），缺 key 时回退 manifest 原文。
+ * 右键菜单（PetContextMenu）的 tooltip 用同一套 key，两处文案保持一致。
+ */
+function skinDesc(s: { id: string; description?: string; name: string }): string {
+  return t(`pet.skins.${s.id}.desc`, s.description ?? s.name);
 }
 
 // v0.6.2-beta.3：跨窗口皮肤同步
@@ -1190,13 +1212,54 @@ const statusBarConfig = ref<StatusBarConfig>({
   float_enabled: false,
   // v0.8.2：截图总开关透传（只读视图，权威源在 screenshot 模块；此处仅占位满足类型）
   screenshot_enabled: true,
+  // v1.2.2：液态玻璃开关（默认关，首次 loadStatusBarConfig 由后端权威值覆盖）
+  float_glass: false,
 });
-async function loadStatusBarConfig() {
+
+// ===== v1.2.2（2026-10-21）：液态玻璃能力探测 =====
+// `supported=false` 时开关置灰，并换用「不支持」文案（避免"开了没效果"的死开关）。
+// 探测在 loadStatusBarConfig 里一并发起（同一卡片、同一次进入设置页）。
+// 默认 false：探测回来前先按不可用渲染，宁可短暂置灰也不让用户点到一个假开关。
+const glassSupported = ref(false);
+const glassReason = ref("");
+// Windows 的 tier 也是 "acrylic"，但实测系统材质对无边框窗口不透光，
+// 实际效果是「高透光但无模糊」——文案必须如实说明，不能让用户以为有模糊。
+const glassTier = ref<FloatGlassTier>("none");
+async function loadGlassSupport() {
   try {
-    statusBarConfig.value = await tracker.getStatusBarConfig();
+    const s = await tracker.getFloatGlassSupport();
+    glassSupported.value = s.supported;
+    glassTier.value = s.tier;
+    // 直接把后端返回的能力说明当 tooltip 用（英文技术描述，不另做 i18n，
+    // 它是给排障看的，不是给普通用户读的）
+    glassReason.value = s.reason;
+    // 能力不支持但配置里还开着（典型场景：从 macOS 26 机器把配置同步到了旧系统）
+    // → 前端不静默关掉用户配置（用户可能只是临时在别的机器上看），
+    //   仅置灰展示；Rust 侧 apply 失败会记 warn，浮窗自动退化 CSS 兜底。
   } catch (err) {
-    log.warn("[Settings] 加载状态栏配置失败", err);
+    log.warn("[Settings] 液态玻璃能力探测失败", err);
+    glassSupported.value = false;
+    glassTier.value = "none";
+    glassReason.value = "";
   }
+}
+
+// 说明文案三态：不支持 → 不支持；Windows(acrylic) → 明说无模糊；其余（macOS）→ 完整描述
+const glassHint = computed(() => {
+  if (!glassSupported.value) return t("settings.statusBarGlassUnsupported");
+  if (glassTier.value === "acrylic") return t("settings.statusBarGlassWindows");
+  return t("settings.statusBarGlassHint");
+});
+
+async function loadStatusBarConfig() {
+  // 两件事互不依赖，并发发起；任一失败只影响自己的 UI 分支
+  await Promise.all([loadGlassSupport(), (async () => {
+    try {
+      statusBarConfig.value = await tracker.getStatusBarConfig();
+    } catch (err) {
+      log.warn("[Settings] 加载状态栏配置失败", err);
+    }
+  })()]);
 }
 // 乐观更新：先翻 ref 再 await IPC，失败回滚（与 onAutostart 模式一致）
 async function onStatusBarEnabled(e: Event) {
@@ -1216,7 +1279,9 @@ async function onStatusBarEnabled(e: Event) {
 }
 async function onStatusBarItem(
   e: Event,
-  key: "show_cpu" | "show_mem" | "show_disk" | "show_net" | "float_enabled",
+  // v1.2.2：新增 float_glass。它在 Rust 侧 set_status_bar_config 里触发材质重应用，
+  // 与其它纯布尔项走同一条路径（乐观更新 + 失败回滚），无需单独的提交函数。
+  key: "show_cpu" | "show_mem" | "show_disk" | "show_net" | "float_enabled" | "float_glass",
 ) {
   const next = (e.target as HTMLInputElement).checked;
   const prev = statusBarConfig.value[key];
@@ -1481,7 +1546,7 @@ async function onShotEnabled(e: Event) {
   }
 }
 
-async function onShotToggle(e: Event, key: "auto_save" | "shadow") {
+async function onShotToggle(e: Event, key: "auto_save") {
   const next = (e.target as HTMLInputElement).checked;
   const prev = shotConfig.value[key];
   shotConfig.value = { ...shotConfig.value, [key]: next };
@@ -1490,28 +1555,6 @@ async function onShotToggle(e: Event, key: "auto_save" | "shadow") {
   } catch (err) {
     shotConfig.value = { ...shotConfig.value, [key]: prev };
     showAlert("warn", t("settings.shotTitle"), err instanceof Error ? err.message : String(err));
-  }
-}
-
-async function onShotNow() {
-  try {
-    await screenshot.trigger();
-  } catch (err) {
-    showAlert("warn", t("settings.shotTitle"), err instanceof Error ? err.message : String(err));
-  }
-}
-
-// v1.1.0：重复区域截图（借鉴 Snapzy）。无历史区域/区域失效时后端 reject，
-// 把可读文案直接弹给用户；成功时复制结果走后端 screenshot-done 全局 toast，无需重复提示。
-async function onShotRepeat() {
-  try {
-    await screenshot.repeatRegion(false);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    const readable = /还没有可重复的区域|已失效/.test(msg)
-      ? msg
-      : t("settings.shotRepeatNone");
-    showAlert("warn", t("settings.shotTitle"), readable);
   }
 }
 
@@ -2354,7 +2397,8 @@ async function onCheckUpdate() {
   box-shadow: 0 0 0 3px rgba(255, 126, 39, 0.10);
 }
 .pet-skin-head { display: flex; align-items: center; gap: 6px; }
-.pet-skin-emoji { font-size: 18px; line-height: 1; }
+/* v1.2.2: emoji 换成 AppIcon 矢量图标，颜色随主题橙 */
+.pet-skin-icon { color: #FF7E27; }
 .pet-skin-name { font-weight: 600; font-size: 13px; }
 .pet-skin-desc { font-size: 11px; opacity: 0.7; line-height: 1.3; }
 

@@ -86,6 +86,16 @@
 //!     证据见该函数头）；`CaptureReadyPayload` 四字段改为由 `capture_scale` 单一派生
 //!     （`physical == round(logical × scale_factor)`，加 `debug_assert_eq!` 守着）。
 //!     ⚠️ 前端只读 `physical_*`，payload 其余字段属排障信息 —— 保留是为了可观测性。
+//!   - 2026-10-21 @v1.2.2: 废弃 - **移除「重复上次截图」**（用户要求，功能价值低于认知成本）。
+//!     删除项：IPC `screenshot_repeat_region`、`ScreenshotState::last_region` 状态、
+//!     `screenshot_commit` 的 `region` 入参（它只服务于 last_region 记录）、
+//!     辅助函数 `save_cropped`（唯一调用方就是被删的命令；`screenshot_commit` 里那段
+//!     落盘逻辑与它**同构但未复用**，删掉不会影响正常截图归档）、设置页按钮与 3 个 i18n 键。
+//!     截图 IPC 22→**21**，全项目 IPC **83→82**。
+//!   - 2026-10-21 @v1.2.2: 修复 - macOS 截图遮罩缺顶部菜单栏一行 / 「全屏变画中画」。
+//!     根因见 `capture_window.rs` 模块头（tao 的 `always_on_top` → `NSFloatingWindowLevel`(3)
+//!     低于菜单栏 24，AppKit 把 frame 收进 `visibleFrame`）。本文件只在 `show()` 前
+//!     调一次 `capture_window::raise_capture_window`、`hide` 时调 `restore_capture_window`。
 //!
 
 /// macOS 截图专属逻辑（屏幕录制授权闸门 / 授权失效根因诊断 / 一键重置授权）。
@@ -101,6 +111,12 @@ pub(crate) mod macos_sck;
 
 /// 全局光标坐标（v1.2.0 多屏截图「鼠标在哪截哪屏」的坐标源）。平台原生坐标。
 mod cursor;
+
+/// 截图遮罩窗的平台层修正（v1.2.2）：macOS 需把 NSWindow level 提到
+/// screenSaver 级，否则始终被菜单栏压住 → 「全屏截图缺菜单栏那行」+「窗口
+/// 被 AppKit 约束到 visibleFrame 导致画面纵向压扁，看起来像画中画」。
+/// 非 macOS 上为空实现（Windows/Linux 的 always_on_top 已足够）。
+mod capture_window;
 
 mod ocr;
 mod ocr_engine;
@@ -148,10 +164,6 @@ pub struct ScreenshotState {
     /// 本次截图被临时隐藏的自家窗口 label（只为这些恢复可见）
     pub hidden: Mutex<Vec<String>>,
     pub config: Mutex<ScreenshotConfig>,
-    /// 上次框选的物理像素矩形 (x, y, w, h)——相对**冻结帧**（即主屏原点）。
-    /// v0.10.0「重复区域截图」：commit 时记录，`screenshot_repeat_region` 复用。
-    /// 只存内存（重启即忘）：区域是临时性快捷操作，跨会话恢复反而可能截到已变化的界面。
-    pub last_region: Mutex<Option<(i32, i32, u32, u32)>>,
 }
 
 impl ScreenshotState {
@@ -160,13 +172,13 @@ impl ScreenshotState {
             frame: Mutex::new(None),
             hidden: Mutex::new(Vec::new()),
             config: Mutex::new(config),
-            last_region: Mutex::new(None),
         }
     }
 }
 
 // ===== 配置 =====
-// 落 settings 表 8 个 key；默认值面向「QQ 式」肌肉记忆：确认即复制到剪贴板。
+// 落 settings 表 7 个 key（v1.2.2：`screenshot_shadow` 随投影功能移除，8→7）；
+// 默认值面向「QQ 式」肌肉记忆：确认即复制到剪贴板。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ScreenshotConfig {
     /// 截图总开关（关掉后快捷键与托盘「截图」均不响应）
@@ -177,8 +189,6 @@ pub struct ScreenshotConfig {
     pub auto_save: bool,
     /// 默认圆角（逻辑像素；0 = 直角）
     pub corner_radius: u32,
-    /// 默认是否给导出图加投影
-    pub shadow: bool,
     /// 历史截图 FIFO 上限（超出后最旧的移入回收站）
     pub max_count: u32,
     /// 取字引擎（v0.9.0）：`system` = 系统内置 / `enhanced` = PaddleOCR-ONNX 本地模型。
@@ -199,7 +209,6 @@ impl Default for ScreenshotConfig {
             shortcut: "CmdOrCtrl+Shift+A".into(),
             auto_save: false,
             corner_radius: 8,
-            shadow: false,
             max_count: 200,
             // 默认引擎**按平台定**（v0.9.0 修复）：Windows 用标准（零体积零依赖、
             // 无模型加载耗时）；macOS / Linux 没有标准引擎实现，默认必须直接给「增强」，
@@ -264,10 +273,6 @@ impl ScreenshotConfig {
                 .get_setting("screenshot_corner_radius")
                 .and_then(|s| s.parse::<u32>().ok())
                 .unwrap_or(d.corner_radius),
-            shadow: db
-                .get_setting("screenshot_shadow")
-                .map(|s| s == "true")
-                .unwrap_or(d.shadow),
             max_count: db
                 .get_setting("screenshot_max_count")
                 .and_then(|s| s.parse::<u32>().ok())
@@ -288,7 +293,6 @@ impl ScreenshotConfig {
         db.set_setting("screenshot_shortcut", &self.shortcut)?;
         db.set_setting("screenshot_auto_save", Self::b(self.auto_save))?;
         db.set_setting("screenshot_corner_radius", &self.corner_radius.to_string())?;
-        db.set_setting("screenshot_shadow", Self::b(self.shadow))?;
         db.set_setting("screenshot_max_count", &self.max_count.to_string())?;
         // 存「归一化后」的引擎值，脏值不落库（读侧也有兜底，这里是第二道保险）
         db.set_setting("screenshot_ocr_engine", self.normalized_engine())?;
@@ -409,6 +413,9 @@ fn ensure_capture_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String
 }
 
 fn hide_capture_window(app: &AppHandle) {
+    // 恢复 tao 默认的浮动层级：遮罩窗只应在截图期间压着菜单栏。
+    // 内部已做 run_on_main_thread 派发（NSWindow 属性只能在主线程改）。
+    capture_window::restore_capture_window(app, CAPTURE_WINDOW_LABEL);
     if let Some(w) = app.get_webview_window(CAPTURE_WINDOW_LABEL) {
         let _ = w.hide();
     }
@@ -725,6 +732,21 @@ async fn begin_capture_inner(app: &AppHandle) -> Result<(), String> {
         mh as f64 / window_scale,
     ))
     .map_err(|e| format!("调整遮罩窗尺寸失败: {e}"))?;
+
+    // ③' 提升窗口层级（v1.2.2，macOS 专有修复，非 macOS 为空实现）
+    //
+    // ⚠️ 必须在 `show()` **之前**：tao 的 `always_on_top` 在 macOS 上只映射到
+    // `NSFloatingWindowLevel`(3)，低于菜单栏 `NSMainMenuWindowLevel`(24) →
+    // AppKit 把窗口 frame 约束进 `visibleFrame`（扣掉菜单栏那条），造成
+    //   ① 顶部菜单栏那一行盖不到，"全屏"也选不进去；
+    //   ② 窗口高度被砍 ~25pt，而冻结帧是整屏物理像素、`.shot` 用 100% 拉伸 →
+    //      画面纵向压扁，视觉上像「全屏变画中画」。
+    // 提到 `NSScreenSaverWindowLevel`(1000) 后可覆盖菜单栏 / Dock / 全屏 App。
+    // 失败只记 warn 不阻断：截图本身仍可用，只是顶部那行盖不到。
+    if let Err(e) = capture_window::raise_capture_window(app, CAPTURE_WINDOW_LABEL) {
+        tracing::warn!(error = %e, "提升遮罩窗层级失败，顶部菜单栏可能盖不到");
+    }
+
     win.show().map_err(|e| format!("显示遮罩窗失败: {e}"))?;
     let _ = win.set_focus();
     // 事件只带元信息（尺寸/DPI/默认样式），整屏图由前端在收到事件后调
@@ -739,7 +761,6 @@ async fn begin_capture_inner(app: &AppHandle) -> Result<(), String> {
             physical_height: phys_h,
             scale_factor: capture_scale,
             default_radius: cfg.corner_radius,
-            default_shadow: cfg.shadow,
         },
     );
     Ok(())
@@ -770,7 +791,6 @@ pub struct CaptureReadyPayload {
     /// `scale_factor`（那个值只用于窗口定位/尺寸的逻辑化换算，不进 payload）。
     pub scale_factor: f64,
     pub default_radius: u32,
-    pub default_shadow: bool,
 }
 
 /// xcap 抓**光标所在**显示器整屏（v0.9.4 从 `begin_capture_inner` 提取；
@@ -904,27 +924,16 @@ pub struct ScreenshotResult {
 ///
 /// 入参是遮罩窗 canvas 合成后的**最终图**（已含裁剪、标注、圆角、投影），
 /// 本模块不再做任何像素加工——保证「屏幕上预览到的」与「导出的」逐像素一致。
-///
-/// v0.10.0：新增 `region` 可选参数（选区在冻结帧上的物理像素矩形 x/y/w/h）。
-/// 传了就记入 `last_region`，供 `screenshot_repeat_region` 重复截图；不传（旧调用方）
-/// 不影响任何行为。
 #[tauri::command]
 pub async fn screenshot_commit(
     app: AppHandle,
     png_base64: String,
     copy: bool,
     save: bool,
-    region: Option<(i32, i32, u32, u32)>,
 ) -> Result<ScreenshotResult, String> {
     let state = app
         .try_state::<ScreenshotState>()
         .ok_or_else(|| "截图状态未初始化".to_string())?;
-
-    // v0.10.0：记录本次选区（重复区域截图的数据源）。先记再干活——
-    // 即便后续剪贴板/落盘失败，用户框过的区域也是事实，下次重复仍应可用。
-    if let Some(r) = region {
-        *state.last_region.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
-    }
 
     // 前端可能带 `data:image/png;base64,` 前缀，两种写法都容忍
     let b64 = png_base64
@@ -1065,193 +1074,6 @@ pub fn screenshot_trigger_delayed(
     let seconds = seconds.clamp(1, 30);
     begin_capture_delayed(&app, seconds);
     true
-}
-
-/// 对上次框选的区域直接重新截图（v0.10.0，借鉴 Snapzy「重复区域截图」）。
-///
-/// 与 `begin_capture` 的差异：**跳过遮罩框选**，走「重入守卫 → hide-self → 权限闸门 →
-/// 抓屏 → 裁剪 → commit 管道」的精简路径，结果直接进剪贴板（可选落盘）。
-///
-/// 区域语义：`last_region` 是相对**冻结帧**的物理像素矩形（冻结帧 = 主屏整屏，
-/// 原点即主屏左上角），新抓屏与旧冻结帧同源同尺寸（同一显示器、同一分辨率）时逐像素对齐。
-/// 以下情况会**拒绝执行**并提示用户重新框选，绝不静默截错区域：
-/// - 从未框选过（last_region 为空）；
-/// - 新抓屏尺寸与旧冻结帧不一致（改了分辨率 / 缩放 / 显示器排布）；
-/// - 选区相对新帧越界（分辨率变了但宽高碰巧相同的兜底防御）。
-///
-/// 失败用「区域失效」专用错误文案返回，前端 toast 提示；成功走 screenshot-done 事件。
-#[tauri::command]
-pub async fn screenshot_repeat_region(
-    app: AppHandle,
-    save: bool,
-) -> Result<ScreenshotResult, String> {
-    const ERR_NO_REGION: &str = "还没有可重复的区域：先用快捷键正常截一次图";
-    const ERR_REGION_STALE: &str = "上次区域已失效（屏幕分辨率或布局变化），请重新框选";
-
-    let state = app
-        .try_state::<ScreenshotState>()
-        .ok_or_else(|| "截图状态未初始化".to_string())?;
-    let cfg = state
-        .config
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone();
-    if !cfg.enabled {
-        return Err("截图总开关已关闭".into());
-    }
-
-    // ① 重入守卫：与 begin_capture 同一闸门，遮罩亮着/长图会话进行中都不允许重入
-    let Some(_guard) = CaptureInFlightGuard::acquire() else {
-        return Err("已有截图会话进行中".into());
-    };
-    // 守卫覆盖整个 async 块（RAII，任何 return 路径都会复位）
-    let _guard = _guard;
-
-    // ② 读上次区域（在守卫内快照，避免与并发 commit 竞争）
-    let region = (*state
-        .last_region
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()))
-    .ok_or_else(|| ERR_NO_REGION.to_string())?;
-    let (rx, ry, rw, rh) = region;
-
-    // ③ 权限闸门（macOS；逻辑与 begin_capture_inner 一致，权限失败走事件引导不报错）
-    if let Err(reason_code) = tauri::async_runtime::spawn_blocking(
-        crate::screenshot::platform::Backend::ensure_ready,
-    )
-    .await
-    .unwrap_or_else(|e| Err(format!("__THREAD__:{e}")))
-    {
-        if let Some(reason) = reason_code.strip_prefix("__PERM__:") {
-            let _ = app.emit_to("main", "screenshot-permission-blocked", reason);
-            return Ok(ScreenshotResult {
-                id: None,
-                file_name: None,
-                path: None,
-                width: 0,
-                height: 0,
-                copied: false,
-                saved: false,
-            });
-        }
-        return Err(reason_code
-            .strip_prefix("__THREAD__:")
-            .map(|e| format!("屏幕录制权限检查线程异常: {e}"))
-            .unwrap_or(reason_code));
-    }
-
-    // ④ hide-self → 等合成器稳定 → 抓屏（与 begin_capture_inner 同参数同节奏）
-    // ⚠️ 此行之后的所有 return 路径都必须先 restore_self，否则桌宠/浮窗永久消失
-    //（审计修复：原实现成功路径与 join 失败、剪贴板失败三处都漏了恢复）。
-    hide_self(&app, &state);
-    tokio::time::sleep(Duration::from_millis(160)).await;
-
-    let (img, _mx, _my, _mw, _mh, _scale) = match tauri::async_runtime::spawn_blocking(
-        crate::screenshot::platform::Backend::capture,
-    )
-    .await
-    {
-        // 抓屏线程异常 / 抓屏失败：都要先把自家窗还回来
-        Err(e) => {
-            restore_self(&app, &state);
-            return Err(format!("截图线程异常: {e}"));
-        }
-        Ok(Err(e)) => {
-            restore_self(&app, &state);
-            return Err(e);
-        }
-        Ok(Ok(c)) => c,
-    };
-    let (fw, fh) = (img.width(), img.height());
-
-    // ⑤ 区域有效性校验：分辨率变了绝不静默截错（这是与 Snapzy 一致的「失效 toast」策略）
-    let rx_u = rx.max(0) as u32;
-    let ry_u = ry.max(0) as u32;
-    if rx_u + rw > fw || ry_u + rh > fh {
-        restore_self(&app, &state);
-        tracing::warn!(
-            region = ?region,
-            frame = format!("{fw}x{fh}"),
-            "重复区域截图：选区超出当前屏幕，判定已失效"
-        );
-        return Err(ERR_REGION_STALE.to_string());
-    }
-
-    // ⑥ 裁剪 → 复用 commit 的落盘/剪贴板管道（裁剪图无标注/圆角，所见即所得）
-    let cropped = image::imageops::crop_imm(&img, rx_u, ry_u, rw, rh).to_image();
-
-    let out = ScreenshotResult {
-        id: None,
-        file_name: None,
-        path: None,
-        width: rw,
-        height: rh,
-        copied: false,
-        saved: false,
-    };
-
-    // ⑦ 剪贴板（重复截图的主用途就是快速拿到同一区域的最新内容）
-    if let Err(e) = write_clipboard(&cropped) {
-        restore_self(&app, &state);
-        return Err(e);
-    }
-    let mut result = ScreenshotResult { copied: true, ..out };
-    tracing::info!(w = rw, h = rh, "重复区域截图已复制到剪贴板");
-
-    // ⑧ 可选落盘（复用 commit 的归档 + FIFO 清理逻辑）
-    if save {
-        match save_cropped(&app, &state, &cropped).await {
-            Ok((id, file_name, path)) => {
-                result.id = Some(id);
-                result.file_name = Some(file_name);
-                result.path = Some(path);
-                result.saved = true;
-            }
-            Err(e) => {
-                // 落盘失败不回滚剪贴板：主用途（复制）已达成
-                tracing::warn!(error = %e, "重复区域截图落盘失败（剪贴板已复制）");
-            }
-        }
-    }
-
-    // ⑨ 恢复自家窗（审计修复：原实现成功路径漏了这步，桌宠/浮窗会一直藏着）
-    restore_self(&app, &state);
-
-    // ⑩ 通知主窗（前端 toast 文案按 copied/saved 组合渲染）
-    let _ = app.emit_to("main", "screenshot-done", result.clone());
-    Ok(result)
-}
-
-/// 落盘 + 入库 + FIFO 清理（v0.10.0 从 `screenshot_commit` 的 ② 段提取复用）。
-async fn save_cropped(
-    app: &AppHandle,
-    state: &ScreenshotState,
-    img: &RgbaImage,
-) -> Result<(i64, String, String), String> {
-    let png = encode_png(img)?;
-    let dir = screenshots_dir(app)?;
-    let file_name = default_file_name();
-    let path = dir.join(&file_name);
-    std::fs::write(&path, &png).map_err(|e| format!("写入截图文件失败: {e}"))?;
-
-    let app_state = app
-        .try_state::<Arc<AppState>>()
-        .ok_or_else(|| "应用状态未初始化".to_string())?;
-    let created_at = chrono::Local::now().to_rfc3339();
-    let id = app_state
-        .db
-        .insert_screenshot(
-            &file_name,
-            img.width(),
-            img.height(),
-            png.len() as i64,
-            &created_at,
-            &app_state.device_id,
-        )
-        .map_err(|e| format!("写入截图索引失败: {e}"))?;
-    tracing::info!(path = %path.display(), bytes = png.len(), "截图已归档");
-    prune_history(app, &app_state, state);
-    Ok((id, file_name, path.to_string_lossy().to_string()))
 }
 
 #[tauri::command]

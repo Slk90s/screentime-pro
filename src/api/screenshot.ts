@@ -46,7 +46,6 @@ export const DEFAULT_SCREENSHOT_CONFIG: ScreenshotConfig = {
   shortcut: "CmdOrCtrl+Shift+A",
   auto_save: false,
   corner_radius: 8,
-  shadow: false,
   max_count: 200,
   // v0.9.0：仅预览兜底。真实默认按平台定（Rust `default_engine()`：
   // Windows = "system"；macOS / Linux 无系统引擎 → "enhanced"），
@@ -62,11 +61,6 @@ export interface CommitArgs {
   copy: boolean;
   /** 落盘到截图历史 */
   save: boolean;
-  /**
-   * v1.1.0：选区在冻结帧上的物理像素矩形 [x, y, w, h]。
-   * 传入后 Rust 记为「上次区域」，供 repeatRegion 重复截图；缺省不记录。
-   */
-  region?: [number, number, number, number];
 }
 
 export const screenshot = {
@@ -92,14 +86,6 @@ export const screenshot = {
 
   /** v1.1.0：取消进行中的延时截图倒计时（无倒计时时为 no-op，返回 true 表示已置位） */
   cancelCountdown: (): Promise<boolean> => invoke<boolean>("screenshot_cancel_countdown"),
-
-  /**
-   * v1.1.0：对上次框选的区域直接重新截图（跳过框选，直接进剪贴板）。
-   * 从未截过图或屏幕分辨率变化时 reject，错误文案可直接 toast 给用户。
-   * save=true 时同时落盘进历史。
-   */
-  repeatRegion: (save = false): Promise<ScreenshotResult> =>
-    invoke<ScreenshotResult>("screenshot_repeat_region", { save }),
 
   /**
    * 取本次截图会话的整屏冻结帧（PNG data URL，物理像素原始分辨率）。

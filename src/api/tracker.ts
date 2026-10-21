@@ -22,6 +22,8 @@ import type {
   RuleOut,
   SettingsOut,
   StatusBarConfig,
+  // v1.2.2（2026-10-21）：液态玻璃能力探测返回体
+  FloatGlassSupport,
   TrendsOut,
   UpdateInfo,
   Webview2Status,
@@ -171,4 +173,8 @@ export const tracker = {
   getStatusBarConfig: () => call<StatusBarConfig>("get_status_bar_config"),
   setStatusBarConfig: (config: StatusBarConfig) =>
     call<boolean>("set_status_bar_config", { config }),
+  // ===== v1.2.2（2026-10-21）：悬浮窗液态玻璃能力探测 =====
+  // 纯探测、无副作用；设置页打开时调一次，用来决定玻璃开关是否置灰并给出原因。
+  // 不缓存：用户可能中途换系统 / 升级 macOS，每次进设置页重查成本可忽略。
+  getFloatGlassSupport: () => call<FloatGlassSupport>("float_glass_support"),
 };

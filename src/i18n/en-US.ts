@@ -139,9 +139,7 @@ export default {
     ocrEngineEnhanced: "On-device enhanced engine",
     ocrLines: "{n} lines",
     close: "Close",
-    radiusShadow: "Corner radius & shadow",
     radius: "Radius",
-    shadow: "Shadow",
     strength: "Redact strength",
     strengthWeak: "Low",
     strengthMedium: "Medium",
@@ -209,18 +207,13 @@ export default {
       "The Enhanced engine's runtime library (~30–45 MB, SHA256-verified) isn't bundled: once you select it, it downloads automatically in the background the first time you open the capture overlay. Until it finishes, recognition asks you to retry shortly — no manual action needed.",
     shotExportStyle: "Default export style",
     shotRadius: "Default corner radius",
-    shotShadow: "Default drop shadow",
     shotRadiusHint:
-      "Only the initial value for new captures; you can change radius and shadow anytime from the toolbar while capturing.",
+      "Only the initial value for new captures; you can change the radius anytime from the toolbar while capturing.",
     shotMaxCount: "History limit",
     shotMaxCountHint:
       "Older screenshots move to the system trash (not permanently deleted).",
     shotDir: "Screenshots folder",
     shotOpenDir: "Open folder",
-    shotNow: "Capture now",
-    shotRepeat: "Repeat last region",
-    shotRepeatHint: "Capture the last selected region again and copy it to the clipboard, skipping region selection. Available after one capture.",
-    shotRepeatNone: "No region to repeat yet: take a normal capture first",
     shotDelay: "Delayed capture",
     shotDelayHint: "Starts capture after a countdown. The countdown never steals focus, so you can arrange menus or windows first (cancel via the floating badge or Esc).",
     shotHistory: "Screenshot history",
@@ -277,6 +270,11 @@ export default {
     statusBarHint: "CPU / memory / disk / network are supported on all three platforms (disk = system volume); changes apply instantly.",
     statusBarFloat: "Floating metrics bar",
     statusBarFloatHint: "A draggable transparent bar on your desktop showing the metrics you enable. It auto-sizes to its content and hides in fullscreen; governed by the master switch.",
+    // v1.2.2（2026-10-21）：液态玻璃外观
+    statusBarGlass: "Liquid glass style",
+    statusBarGlassHint: "Enlarges the bar into a 44px capsule with a highly translucent material so the desktop shows through. On macOS 26+ it also adds the system background blur and refraction.",
+    statusBarGlassWindows: "Enlarges the bar into a 44px capsule with a highly translucent material. On Windows there is no background blur (the system material renders borderless windows as an opaque colour block), so the glass look comes from translucency and the outline only.",
+    statusBarGlassUnsupported: "Liquid glass is not available on this system.",
     languageTitle: "Language",
     languageDesc: "Choose interface language, persists after restart",
     generalTitle: "General",
@@ -481,6 +479,16 @@ export default {
       skinNewBadge: "New",
       on: "On",
       off: "Off",
+    },
+    // v1.2.2: Skin description localization (manifest.description is hardcoded Chinese; Settings page and
+    // context-menu tooltip both read these keys, falling back to the manifest text when a key is missing)
+    skins: {
+      "popmart-3d": {
+        desc: "Pop Mart style 3D figure: a transparent-background panda in a yellow hat holding a guitar floats on your desktop, with status shown via floating badges",
+      },
+      spiderman: {
+        desc: "Red-and-blue web-suit chibi hero floats on your desktop with a 6-frame breathing loop, with status shown via floating badges",
+      },
     },
     state: {
       idle: "Idle",

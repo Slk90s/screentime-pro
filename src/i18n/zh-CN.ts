@@ -140,9 +140,7 @@ export default {
     ocrEngineEnhanced: "本地增强引擎",
     ocrLines: "{n} 行",
     close: "关闭",
-    radiusShadow: "圆角与投影",
     radius: "圆角",
-    shadow: "投影",
     strength: "打码强度",
     strengthWeak: "弱",
     strengthMedium: "中",
@@ -197,17 +195,11 @@ export default {
       "「增强」引擎的运行库（约 30~45MB，带 SHA256 校验）不随包，选中后首次打开截图遮罩时会自动后台下载，完成后即可取字。下载期间取字会提示稍后重试，无需手动操作。",
     shotExportStyle: "默认导出样式",
     shotRadius: "默认圆角",
-    shotShadow: "默认投影",
-    shotRadiusHint: "这里只是新建截图时的初始值；截图时可在工具栏的「圆角与投影」里随时调整。",
+    shotRadiusHint: "这里只是新建截图时的初始值；截图时可在工具栏的「圆角」里随时调整。",
     shotMaxCount: "历史保留张数",
     shotMaxCountHint: "超出后最旧的截图会移入系统回收站（不是直接删除）。",
     shotDir: "截图目录",
     shotOpenDir: "打开目录",
-    shotNow: "立即截图",
-    // v1.1.0：重复区域截图（借鉴 Snapzy）——对上次框选的区域一键重截，跳过框选流程
-    shotRepeat: "重复上次区域",
-    shotRepeatHint: "对上次框选的区域直接重新截图并复制到剪贴板，不再进入框选流程。截过一次图后可用。",
-    shotRepeatNone: "还没有可重复的区域：先用快捷键正常截一次图",
     shotDelay: "延时截图",
     shotDelayHint: "倒计时结束后自动进入截图流程。倒计时不抢焦点，可以先摆好目标界面或展开菜单（悬浮倒计时可点取消或按 Esc 中止）。",
     shotHistory: "截图历史",
@@ -261,6 +253,11 @@ export default {
     statusBarHint: "CPU / 内存 / 磁盘 / 网速四项三端均支持（磁盘取系统盘），勾选即时生效。",
     statusBarFloat: "悬浮指标条",
     statusBarFloatHint: "桌面常驻一块可拖拽的透明指标条，实时显示已勾选的指标，宽度随内容自适应、全屏时自动隐藏；受「启用状态栏」总开关控制。",
+    // v1.2.2（2026-10-21）：液态玻璃外观
+    statusBarGlass: "液态玻璃外观",
+    statusBarGlassHint: "把悬浮指标条放大为 44px 胶囊形，并改为高透光半透明材质，能透过它看到桌面。macOS 26+ 还会叠加系统级的背景模糊与折射。",
+    statusBarGlassWindows: "把悬浮指标条放大为 44px 胶囊形，并改为高透光半透明材质。Windows 上不含背景模糊（系统材质对无边框窗口会渲染成不透明色块），仅靠高透光与描边呈现玻璃质感。",
+    statusBarGlassUnsupported: "当前系统不支持液态玻璃外观，此开关不可用。",
     languageTitle: "语言",
     languageDesc: "选择界面显示语言，重启后保持",
     generalTitle: "通用",
@@ -461,6 +458,15 @@ export default {
       skinNewBadge: "新",
       on: "已开启",
       off: "已关闭",
+    },
+    // v1.2.2: 皮肤描述本地化（manifest.description 是硬编码中文；设置页与右键菜单 tooltip 统一走这里，缺 key 回退 manifest 原文）
+    skins: {
+      "popmart-3d": {
+        desc: "潮玩 3D 卡：戴黄帽抱吉他的透明底熊猫浮在桌面，状态用表情浮层表达",
+      },
+      spiderman: {
+        desc: "红蓝战衣蛛网纹 Q 版英雄浮在桌面，6 帧呼吸微动态，状态用表情浮层表达",
+      },
     },
     state: {
       idle: "待机",

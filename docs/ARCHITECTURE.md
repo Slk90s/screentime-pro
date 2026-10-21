@@ -63,109 +63,20 @@
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-10-20（同步至 **v1.2.1**——三处跨平台实机修复）——
-> ① **状态栏开了却看不到（P0）**：浮窗 localStorage `float_pos` 保存的是副屏还在时的
-> 负坐标，副屏移除/分辨率变小后被无校验恢复，窗口整个落到屏幕外（实测物理坐标 (-695,159)，
-> 单屏 1536×864）。`float_window.rs` 新增 `clamp_to_visible_area`：show/move/resize 三条路径后
-> 用**物理像素**枚举所有显示器，窗口与任一屏水平重叠不足自身宽 1/3 即判定离屏、回落到主屏
-> 右上角；物理像素判定规避多屏混合 DPI 歧义。已本机移回验证状态栏显示正常。
-> ② **自家浮窗被录制成应用（Windows）**：顶部「记录中 screentime-pro · ScreenTime Float」。
-> float/pet/pet-menu/capture 与主窗口同进程同 exe，在辅助窗口按下（浮窗 startDragging）会让其
-> 短暂成为前台窗口，旧实现无差别采集入库（macOS 浮窗不夺 frontmost 故无此问题）。
-> `tracker/windows.rs` 新增 `SELF_HELPER_TITLES` 标题过滤，命中即返回 NoForeground 跳过、不建会话；
-> 主窗口 ScreenTime Pro 不过滤（操作设置页记录自身属预期）。
-> ③ **macOS 状态灯恒定橙色不变色**：v1.2.0 负载值取 `peak=max(cpu,mem)`，macOS 内存长期
-> 维持 70~80%（wired 联动 + compressor 压缩 + 文件缓存，属系统常态而非真紧张），峰值被内存
-> 长期钉在橙档、CPU 回落也不变绿（Windows 内存口径更低更跳故正常）。`float/FloatBar.vue` 的
-> loadLevel 改为 **CPU 瞬时值为主信号**，内存 `<80%`（`MEM_WARN`）不参与档位、`≥80%` 才抬升
-> （80~85% 深橙、≥85% 红），五档阈值不变。IPC 总数不变（**82**）。
->
-> 上一版 v1.2.0（2026-10-18）要点——
-> ① **多屏截图「鼠标在哪截哪屏」（微信式 Alt+A）**：截图从「固定主屏」改为「抓光标停靠的
-> 那块屏」。新增 `screenshot/cursor.rs`（平台原生坐标的全局光标位置：Windows `GetCursorPos`
-> 物理像素 / macOS `CGEventGetLocation` 点 / Linux X11 `query_pointer` 根窗口像素），
-> `capture_with_xcap` 用 `xcap::Monitor::from_point` 命中光标所在屏、macOS SCK 路径用
-> `SCDisplay::frame().contains` 选光标所在 display，均回落主屏/首屏；遮罩窗定位的
-> `window_scale` 改用 `capture_scale`（= 目标屏 scale），顺带修复多屏异 DPI 下抓副屏拿错
-> scale 的隐患。
-> ② **浮窗最左侧状态点由固定 accent 橙改为按系统负载动态变色**（`FloatBar.vue`）：负载值取
-> CPU / 内存使用率的较高者，5 档（idle 绿 / light 黄绿 / busy 橙 / heavy 深橙 / overload 红）
-> + unknown 灰，阈值 0.15/0.35/0.65/0.85，CSS 0.35s 平滑过渡；tooltip 显示档位 + 实时
-> CPU/内存百分比；颜色集中在 `LOAD_COLORS` 单一来源。
-> ③ **代码体检清理（凌霄渡体检后续）**：删 3 处死代码（孤儿组件 `PetBody.vue`、
-> `system_load/linux.rs` 的 `_unused_kernel` + `Cargo.toml` `procfs` 依赖、
-> `float_window.rs` 的 `create_float_window` / `hide_float_window` 两个死 IPC 命令）；
-> 消除 33 处 `Mutex::lock().unwrap()` 违规（统一 `.unwrap_or_else(|e| e.into_inner())`）；
-> 清理 `error.rs` 半死代码（`AppError` + `From<String>` + `TrackerError::Unsupported`）；
-> 浮窗移除「重复上次区域」按钮。IPC 84 → **82**（删 float_window 2 个死命令）。
-> 上一版 v1.1.1 为修复版——
-> ① **macOS 截图出图尺寸修复（P0「小窗口快照」）**：`screenshot/macos_sck.rs` 构建
-> `SCStreamConfiguration` 时**没有设宽高**，而 **Apple 的默认值就是 1920×1080**（官方
-> StackOverflow 答复 78847211 + DTS 论坛 765360 双源确认；**此前代码与文档注释声称
-> 「默认按显示器原生分辨率出图」是错的，已修正**）→ 冻结帧恒为 1920×1080，遮罩窗按
-> 1920×1080 布局，用户只看到屏幕左上角一小块。现显式 `with_width`/`with_height` =
-> `contentRect.size`（点）× `point_pixel_scale()`（**向上取整**）+ 出图尺寸自检
-> （偏差 > 2px 即回落 xcap）。⚠️ 不用 `SCScreenshotConfiguration`：它 gated 在
-> `macos_26_0` 之后，本项目目标 macOS 14+。
-> ② **多显示器几何口径统一为物理像素（宽高与原点都归一）**：SCK 路径原点由硬编码
-> `0,0` 改为透传 `SCDisplay.frame().origin`（macOS 允许显示器原点为负坐标）；xcap 路径的
-> **宽高**由 `xcap::Monitor::width()` 改为 `img.width()` —— 前者**三平台语义不同**
-> （Win = `dmPelsWidth` 物理像素 / mac = `CGDisplayBounds` **逻辑点** / Linux = 逻辑像素），
-> 与同一元组里代表物理像素的 `img` 构成混口径几何；**原点** `m.x()/m.y()` 是同一个坑，
-> macOS/Linux 侧乘 `scale` 归一、Windows 侧原样（单屏恒为 0，行为零变化）。
-> 依据：`tao-0.37.1` 的 `util::window_position`（`macos/util/mod.rs:94-99`）做 Y 轴翻转
-> 用的是 `CGDisplay::main().pixels_high()`（物理像素），传入量须同量纲。
-> ③ **payload 单一 scale 派生 + 去 shadow**：`begin_capture_inner` 的两个 `scale` 分名
-> `capture_scale`（抓屏侧，决定 payload 冻结帧 CSS 尺寸）与 `window_scale`（显示器侧，
-> **只**用于窗口几何逻辑化以绕开 tao 隐式换算 —— v0.9.8 画中画修复）—— 二者**职责不同、
-> 不可合并**。`CaptureReadyPayload` 四字段统一由 `capture_scale` 派生，满足
-> `physical == round(logical × scale_factor)`，加 `debug_assert_eq!` 守着。
-> （实测：前端只读 `physical_width/height`，其余属排障信息。）
-> ④ **滑动截长图移除**（`screenshot/long.rs` 全文 + 4 个 IPC
-> `screenshot_long_start/capture/finish/cancel` + `LongShotState` managed state +
-> 前端长图面板 + 双语 9 个 i18n key）：**截图 IPC 26 → 22，全项目 95 → 84**
-> （净减 11 = 长图 4 + `commands.rs` 清理 7；后者是工作区既有的、与本次截图修复无关的改动）。
-> 移除原因（三条独立证据同时成立，详见 `docs/SHOTFIX-ARCHITECTURE-2026-10-17.md`）：
-> 遮罩窗是 `always_on_top` 全屏置顶窗、**本身就是用户要滚动的那块屏幕的遮挡物**，项目从未
-> 对遮罩窗调 `set_ignore_cursor_events(true)` → **用户根本无法滚动**（这不是算法缺陷）；
-> macOS 因SCK/xcap 出图尺寸不一致而 100% 不可用；自动滚动需 `enigo`（MSRV 1.77→1.85）+
-> macOS 辅助功能新权限 + Linux Wayland 不支持，三平台无法拉齐。
-> ⚠️ **macOS 部分仅验证到「交叉编译通过 + 逻辑自洽」**（探针 `.tmp-ocr/vision-probe`，
-> `DOCS_RS=1` + `cargo check --target aarch64-apple-darwin`，探针可信度已用 `compile_error!`
-> 注入自证），**运行时出图尺寸未在 Retina 真机验证**。
-> 上一版v1.0.0 为首个正式版——
-> ① 滑动截长图（`screenshot/long.rs`：Rust 侧长图会话 `LongShotState` + 重叠检测拼接
-> [探针行=新图顶 1/8、底图底部 600px 带内滑动、列采样 8px、通道容差 12、取最低匹配]；
-> 四件套 IPC `screenshot_long_start/capture/finish/cancel`，88→**92**；首屏必须用冻结帧，
-> 完成复用 `screenshot_commit`；前端 Enter=续捕 / Shift+Enter=完成 / Esc=退出
-> ——⚠️ **该功能已于 v1.1.1 移除**，本段仅作历史留档）
-> ② macOS 截图画中画 Retina 几何换算修复（逻辑像素↔物理像素 2x 混用）③ 文字标注敲定后可再拖动
-> ④ 工程收口：子进程统一 `proc::hidden`；跨平台 cfg 收口到 `system_load/platform` 与
-> `screenshot/platform`。上一版 v0.9.7 为四缺陷修复版（用户实测反馈）——
-> ① Windows 录制应用名重复（`windows.rs` 的 name 曾填窗口标题，与 UI「name · 窗口标题」
-> 拼接必然重复；改用进程名去 `.exe`）② macOS 状态栏「Item-0」入镜（NSStatusItem 占位标题
-> 被当窗口标题记库；`get_foreground_window_title` 加 `kCGWindowLayer==0` 过滤）
-> ③ 截图重入工具条入镜（`begin_capture` 加 `CAPTURE_IN_FLIGHT` RAII 闸门 +
-> `SELF_OVERLAY_LABELS` 纳入 `capture`）④ 截图历史单选失效（`.shot-item` 漏
-> `position:relative` 致勾选框脱锚；补锚 + 整卡可点）。上一版 v0.9.6 为弹窗交互修复版。
-> 上一版 v0.9.5 为 Windows 升级卸载修复（NSIS 卸载钩子重写）——
-> 失败文案精简为一句话（`__PERM__:<reason>` 短码，证据转日志）+ 前端紧凑授权弹窗 `PermissionDialog.vue`
-> （2s 轮询翻转「已授权点此重启」+ 详情折叠）+ 启动 3s 后台预请求授权 + macOS 14+ 截图引擎升级 SCK
-> （`screenshot/macos_sck.rs` 单帧，低版本回落 xcap）+ Info.plist 补 `NSScreenCaptureUsageDescription`；
-> 新增权限四件套 IPC（84→**88**）：`screenshot_permission_status` / `screenshot_request_permission` /
-> `screenshot_open_permission_settings` / `screenshot_restart_app`。
-> 上一版 v0.9.3 为 macOS 截图修复 —— 屏幕录制授权判定由**单信号改双信号**（官方
-> `CGPreflightScreenCaptureAccess` 在「授权已生效」时仍可能持续返回过期 false，叠加**窗口标题探针**
-> 联合放行）+ `reset_screen_capture_permission` IPC + 「重置权限并重启」按钮 + 逻辑独立为 `screenshot/macos.rs`，
-> 并修 `CFRelease` 泄漏。
-> 上一版 v0.9.2 为日志可追溯性改造 —— 日志**每行带版本戳** + 新增用户行为
-> **`audit.<date>.log`** 独立审计文件 + 保留期 3→**14 天**（启动 + 运行时每小时双清理）+ 卸载前自动备份日志
-> 到「文档\ScreenTimePro-Logs」；截图失败提升为**主窗全局提示**（权限类错误带「打开系统设置 / 重启应用」）；
-> 修复 3 处监听器泄漏、自动建规则反向覆盖用户禁用项、空选区误取字，并补齐自 v0.8.0 起缺失的提示条样式；
-> 上一版 v0.9.1 为**截图历史多选 + macOS「屏幕录制」权限闸门**（`begin_capture` 预检 `CGPreflightScreenCaptureAccess`，
-> 未授权则 `CGRequestScreenCaptureAccess` 请求并由设置页弹窗引导到系统设置）；v0.9.0 取字新增「增强引擎」
-> （PaddleOCR-ONNX 本地模型）+ 引擎调度层与设置页引擎切换；**macOS「标准」引擎 = 系统 Vision**（`ocr_vision.rs`，零下载）；
-> **Windows 运行库与模型随包；macOS / Linux 模型随包、运行库改为首次使用时后台静默下载**（源 GitHub Release `ocr-runtime` → Gitee 镜像））
+> 最后更新：2026-10-21（同步至 **v1.2.2**——液态玻璃 + 五项反馈修复 + 三项功能精简）——
+> ① **悬浮窗液态玻璃（新功能）**：浮窗玻璃开关打开时放大为 44px 胶囊形并改高透光材质。
+> macOS 26+ 走 `NSGlassEffectView`（真折射），< 26 回落 `NSVisualEffectView`；
+> **Windows 停用全部系统材质**——真机像素实测 Acrylic/DWM backdrop 对无边框窗口渲染成
+> 不透明色块（透光率 0.001），反而不如纯 CSS（0.850），故 Windows 视觉 100% 交给 CSS。
+> 详见 `float_glass.rs` 模块头与 `CONVENTIONS-screentime-pro.md` 的「Windows 不要加回」红线。
+> ② **macOS 截图遮罩缺菜单栏行 / 「全屏变画中画」（P0）**：tao 的 `always_on_top` 只映射到
+> `NSFloatingWindowLevel`(3)，低于菜单栏 24 级 → AppKit 把 frame 约束进 `visibleFrame`，
+> 一条规则导致两个症状。修复：`screenshot/capture_window.rs` 把 level 提到
+> `NSScreenSaverWindowLevel`(1000)，`show()` 前调用、`hide` 时恢复。
+> ③ **Windows 液态玻璃矩形边框阴影**：浮窗窗口紧贴胶囊（`max-content` + 高度恰好 44px），
+> 外扩 `box-shadow` 被窗口矩形裁成四角暗块 → 玻璃模式只用 inset 高光。
+> ④ **功能精简（用户要求）**：移除「重复上次截图」整链（截图 IPC 22→21）、设置页「立即截图」、
+> 截图投影功能（配置键 8→7，`default_shadow` 与 canvas 投影绘制全删）。IPC 总数 **82**。
 
 ---
 
@@ -173,7 +84,7 @@
 
 跨平台应用使用时长追踪（macOS / Windows / Linux），对标 iOS「屏幕使用时间」。**数据 100% 本地（SQLite bundled），零上传，隐私优先**。
 
-栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v1.2.1**（详见 [`RELEASE.md`](RELEASE.md)）。
+栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v1.2.2**（详见 [`RELEASE.md`](RELEASE.md)）。
 
 > ⚠️ 本节版本号在 v0.7.0 → v0.7.5 期间**长期未更新**（曾停留在 v0.7.0），与 `tauri.conf.json` 脱节。
 > 版本号唯一真实来源是 **`src-tauri/tauri.conf.json` 的 `version`**，改版本时务必回来同步本节。

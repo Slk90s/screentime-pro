@@ -33,14 +33,13 @@
 <template>
   <div ref="rootRef" class="spidey-pet" :class="[containerClass, effectiveAction, { 'is-action': !!effectiveAction }]">
     <div class="spidey-pet__art">
+      <!-- v1.2.2: 同 popmart3d，6 帧叠加 <img> → 单 <img> JS 帧循环（预加载，零闪烁）；
+           动作期间（is-action / pet-anim-web）由下方 CSS 隐藏 idle 帧并切姿势图 -->
       <img
-        v-for="(url, i) in frameUrls"
-        :key="i"
-        :src="url"
+        :src="currentFrame"
         class="spidey-pet__frame"
-        :alt="`Spider-Man frame ${i}`"
+        alt="Spider-Man frame"
         draggable="false"
-        :style="{ animationDelay: `-${(FRAME_COUNT - i) * FRAME_DURATION}s` }"
       />
       <img
         v-if="actionPoseUrl"
@@ -114,6 +113,28 @@ const FRAME_COUNT = 6;
 /** 单帧时长 */
 const FRAME_DURATION = FRAME_TOTAL_DURATION / FRAME_COUNT;
 const frameUrls = [frame0, frame1, frame2, frame3, frame4, frame5];
+
+// v1.2.2: 单 <img> 帧循环（替代 6 个叠加 img），预加载全部帧切帧零闪烁；
+// 动作（effectiveAction 非空）期间暂停循环并隐藏 idle 帧，避免与姿势图叠加重影。
+const currentFrame = ref<string>(frameUrls[0]);
+let frameTimer: number | null = null;
+let frameIdx = 0;
+function startFrameLoop(): void {
+  frameUrls.forEach((u) => {
+    const im = new Image();
+    im.src = u;
+  });
+  frameTimer = window.setInterval(() => {
+    frameIdx = (frameIdx + 1) % FRAME_COUNT;
+    currentFrame.value = frameUrls[frameIdx];
+  }, FRAME_DURATION * 1000);
+}
+function stopFrameLoop(): void {
+  if (frameTimer !== null) {
+    clearInterval(frameTimer);
+    frameTimer = null;
+  }
+}
 
 /** 待机小动作对应的真姿势精灵图 */
 const props = defineProps<{
@@ -204,8 +225,23 @@ watch(
     }
   },
 );
-onMounted(scheduleNextIdleAction);
-onBeforeUnmount(clearIdleTimers);
+onMounted(() => {
+  scheduleNextIdleAction();
+  // v1.2.2: 无待机动作时才跑 idle 帧循环；动作期间由 watch 接管暂停
+  if (!effectiveAction.value) startFrameLoop();
+});
+onBeforeUnmount(() => {
+  clearIdleTimers();
+  stopFrameLoop();
+});
+// v1.2.2: 进入/退出待机小动作时暂停或恢复 idle 帧循环（动作期间隐藏 idle 帧，见下方 CSS）
+watch(
+  effectiveAction,
+  (a) => {
+    if (a) stopFrameLoop();
+    else startFrameLoop();
+  },
+);
 </script>
 
 <style scoped>
@@ -244,14 +280,9 @@ onBeforeUnmount(clearIdleTimers);
   object-fit: contain;
   display: block;
   pointer-events: none;
+  /* v1.2.2: 单帧元素，投影仅此一层（原 6 层叠加） */
   filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.28))
           drop-shadow(0 1px 2px rgba(0, 0, 0, 0.18));
-  opacity: 0;
-  animation: spidey-frame-play 1.2s infinite;
-}
-@keyframes spidey-frame-play {
-  0%, 16.66% { opacity: 1; }
-  16.67%, 100% { opacity: 0; }
 }
 
 /* 待机小动作的姿势精灵图：默认隐藏，动作时叠在 idle 帧之上并接管动画 */
@@ -273,10 +304,10 @@ onBeforeUnmount(clearIdleTimers);
 .spidey-pet.pet-anim-web .spidey-pet__art {
   animation: none;
 }
+/* 动作期间彻底隐藏 idle 帧（v1.2.2: 已无 CSS 动画，仅隐藏；循环由 JS 暂停） */
 .spidey-pet.is-action .spidey-pet__frame,
 .spidey-pet.pet-anim-web .spidey-pet__frame {
   opacity: 0 !important;
-  animation: none;
 }
 
 /* ========== 状态级动画（作用于整体 art） ========== */

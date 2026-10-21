@@ -10,6 +10,15 @@
 //!   - 2026-10-17 @v1.1.1: 废弃 - 移除滑动截长图：`app.manage(screenshot::long::LongShotState)`
 //!     与 `generate_handler!` 内 4 个 `screenshot_long_*` 命令（截图 IPC 26→22）。
 //!     原因见 `screenshot/mod.rs` 修改历史段。
+//!   - 2026-10-21 @v1.2.2: 新增 - 悬浮窗液态玻璃。
+//!     ① `mod float_glass;`（新模块，材质层 + 能力探测）；
+//!     ② 启动恢复段：`cfg.float_glass` 为真时**在 show 之前**应用材质并把窗口高度
+//!        拉到 44px。这里刻意不走 `apply_via_app`（它内部 run_on_main_thread 是异步
+//!        派发，无法保证早于 show），而 setup 本身跑在主线程，直接同步调用即可；
+//!     ③ `generate_handler!` 注册 `float_glass::float_glass_support`（IPC 82→83）。
+//!        （CONVENTIONS 里长期写着 84，那是 v1.1.1 的旧数；v1.2.0 删掉
+//!        `create_float_window`/`hide_float_window` 两个死命令后实际已是 82，
+//!        本次一并按实测校准。）
 //!
 
 mod categorizer;
@@ -17,6 +26,8 @@ mod classifier;
 mod commands;
 mod db;
 mod error;
+// v1.2.2（2026-10-21）：悬浮窗液态玻璃材质层（仅服务 float 窗口）
+mod float_glass;
 mod float_window;
 mod logging;
 mod tracker;
@@ -641,15 +652,40 @@ pub fn run() {
             // ===== v0.7.6：启动时若「悬浮指标条」可见（enabled + float_enabled 双条件）
             // → 创建并显示浮窗 =====
             // 位置由前端 FloatBar.vue 从 localStorage 恢复；透明空窗 show 不可见，无白闪
-            let float_resume = {
+            // v1.2.2：同时取出 float_glass，材质与 44px 高度都要在 show 之前落定
+            let (float_resume, float_glass_on) = {
                 let sb = app_state
                     .status_bar_config
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                sb.enabled && sb.float_enabled
+                (sb.enabled && sb.float_enabled, sb.float_glass)
             };
             if float_resume {
                 let handle = app.handle().clone();
+                // v1.2.2：**先建窗 → 上材质 → 定高 → 再 show**。
+                // ⚠️ 这里不走 `float_glass::apply_via_app()`：它内部用 run_on_main_thread
+                // 异步派发，回调可能在 show() 之后才执行，用户会先看到 36px 无材质的窗
+                // 再跳成 44px 玻璃。而 setup 本身就跑在主线程（tauri app.rs::setup 由
+                // 事件循环主线程驱动），可以直接同步调用，保证时序。
+                if let Err(e) = float_window::ensure_float_window(&handle) {
+                    tracing::warn!(error = %e, "启动恢复悬浮指标条失败");
+                } else if float_glass_on {
+                    if let Some(win) = handle.get_webview_window(float_window::FLOAT_WINDOW_LABEL) {
+                        if let Err(e) = float_glass::apply(&win, true) {
+                            tracing::warn!(error = %e, "启动恢复液态玻璃失败，退化为 CSS 兜底样式");
+                        }
+                        // 宽度沿用 conf 的 340，前端 fitsWidth 后会自动收缩
+                        let scale = win.scale_factor().unwrap_or(1.0);
+                        let cur_w = win
+                            .inner_size()
+                            .map(|s| s.to_logical::<f64>(scale).width)
+                            .unwrap_or(float_window::FLOAT_INITIAL_WIDTH);
+                        let _ = win.set_size(tauri::LogicalSize::new(
+                            cur_w,
+                            float_glass::FLOAT_HEIGHT_GLASS,
+                        ));
+                    }
+                }
                 if let Err(e) = float_window::set_float_visible(&handle, true) {
                     tracing::warn!(error = %e, "启动恢复悬浮指标条失败");
                 }
@@ -714,7 +750,7 @@ pub fn run() {
             screenshot::screenshot_trigger,
             screenshot::screenshot_trigger_delayed,
             screenshot::screenshot_cancel_countdown,
-            screenshot::screenshot_repeat_region,
+            // v1.2.2：`screenshot_repeat_region` 已移除（详见 screenshot/mod.rs 模块头）
             screenshot::screenshot_frame,
             screenshot::screenshot_commit,
             screenshot::screenshot_cancel,
@@ -752,6 +788,8 @@ pub fn run() {
             float_window::show_float_window,
             float_window::move_float_window,
             float_window::resize_float_window,
+            // v1.2.2（2026-10-21）：液态玻璃能力探测（设置页开关可用性依据），IPC 82→83
+            float_glass::float_glass_support,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -15,6 +15,8 @@
  */
 import type { PetState } from '../types';
 import defaultPhrases from '../config/bubble-phrases.json';
+import enPhrases from '../config/bubble-phrases.en-US.json';
+import { i18n } from '@/i18n';
 import { log } from "@/lib/logger";
 
 const STORAGE_KEY = 'pet_bubble_phrases';
@@ -54,9 +56,15 @@ function saveCustom(custom: CustomPhraseLibrary): void {
   }
 }
 
+/** 按当前语言选词库（v1.2.2：英文模式切到 en-US 气泡池，桌宠不再说中文） */
+function baseLibrary(): PhraseLibrary {
+  const loc = (i18n.global.locale.value as string) || '';
+  return (loc.toLowerCase().startsWith('en') ? enPhrases : defaultPhrases) as PhraseLibrary;
+}
+
 /** 取得某个皮肤的合并后配置（default < 皮肤默认 < 自定义覆盖） */
 function getSkinConfig(skinId?: string | null): SkinPhraseConfig {
-  const lib = defaultPhrases as PhraseLibrary;
+  const lib = baseLibrary();
   const custom = loadCustom();
   const base = lib.default ?? lib['popmart-3d'] ?? Object.values(lib)[0] ?? { common: [], state: {} };
   const skinDefault = skinId ? lib[skinId] : undefined;

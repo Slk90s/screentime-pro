@@ -11,6 +11,7 @@ import {
   ShoppingCart, Utensils, Moon, Coffee, Smile, Frown, Angry, SmilePlus,
   Sparkles, Globe, Settings as Cog, Info, Power, Database, Cpu, HardDrive,
   Clock, Copy, PowerOff, KeyRound,
+  Gift, Flame, Lock,
   // v0.8.0：屏幕截图卡片图标
   Crop,
 } from 'lucide-vue-next';
@@ -38,6 +39,7 @@ const ICONS: Record<string, any> = {
   language: Globe, settings: Cog, info: Info, power: Power, database: Database,
   cpu: Cpu, hardDrive: HardDrive, clock: Clock, copy: Copy, powerOff: PowerOff,
   keyRound: KeyRound,
+  gift: Gift, flame: Flame, lock: Lock,
   // v0.8.0：屏幕截图
   crop: Crop,
 };

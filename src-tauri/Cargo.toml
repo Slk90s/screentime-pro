@@ -64,11 +64,29 @@ tauri-plugin-global-shortcut = "2"
 # 升级 rc.14+ 时须同步改 ocr_onnx.rs 的 ensure_env / Session::builder 三处调用。
 ort = { version = "=2.0.0-rc.13", features = ["load-dynamic"] }
 ndarray = "0.17.2"
+# v1.2.2（2026-10-21）：悬浮窗液态玻璃的系统材质。
+# ⚠️ 必须显式声明 0.8.1：tauri 2.11.5 内部锁 window-vibrancy "0.6"（只有 NSVisualEffectMaterial，
+# 没有任何 liquid glass API）。0.8.1 才提供 apply_liquid_glass / LiquidGlassOptions。
+# 谱系核对：0.8.1 用 windows-sys 0.60/0.61（锁文件已有 0.60.2/0.61.2）+ objc2 0.6 /
+# objc2-app-kit 0.3.2（与本项目完全同代）→ 不新增版本谱系、不重复编译 objc2。
+# 代价：0.6.0 仍会被 tauri 拉入依赖树，有两份 window-vibrancy（体积增量可接受）。
+window-vibrancy = "0.8.1"
 
 # ---- macOS 专属依赖（对齐 Tauri 2.x 引入的 objc2 0.6，避免重复编译）----
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication", "NSApplication"] }
+# v1.2.2：液态玻璃需要 NSGlassEffectView（macOS 26 的公开 AppKit API），0.3.2 已内置
+# 该 feature，这里只是开启，不触发版本升级。
+# ⚠️ 不引入 objc2-web-kit：apply_liquid_glass 的 content_view()（重父化 WKWebView）
+# 方案已放弃（理由见 float_glass.rs 落地注意 #4），故无需直接依赖取 webview 指针。
+objc2-app-kit = { version = "0.3", features = [
+    "NSWorkspace",
+    "NSRunningApplication",
+    "NSApplication",
+    "NSGlassEffectView",
+    "NSView",
+] }
+
 # features 显式列全（默认也是开着的，但写清楚就不用担心将来有人关掉 default）
 # NSEnumerator 是 `Retained<NSArray<T>>: IntoIterator` 的前提；NSData 用于把 PNG 交给 Vision。
 objc2-foundation = { version = "0.3", features = [
@@ -98,6 +116,9 @@ screencapturekit = { version = "10.0.3", features = ["macos_14_0"] }
 
 # ---- Windows 专属依赖 ----
 [target.'cfg(target_os = "windows")'.dependencies]
+# v1.2.2：原先为液态玻璃引入 windows-version（按 build 号判 Acrylic 可用性）。
+# 真机实测后 Windows 侧改为纯 CSS 高透光、不再调系统材质，本依赖已无使用点，
+# 故移除（避免留一个只在注释里存在的依赖）。详见 float_glass.rs 模块头。
 # v0.8.0（2026-09-16）：0.58 → 0.62。截图引擎 xcap 0.9.8 已拉 windows 0.62，
 # 继续锁 0.58 会让依赖树同时编译两份 windows crate（体积与编译时间双损）。
 # 升到 0.62 后与 xcap 共用同一份，且 Media_Ocr（v0.8.x 本地 OCR）也在此版本内。

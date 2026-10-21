@@ -37,14 +37,14 @@
       用 CSS opacity + steps(1) 做逐帧播放；.popmart-pet__art 仍承载 idle / 状态 / 点击 / 拖拽走路 / 过载升温 的复合动画。
     -->
     <div class="popmart-pet__art">
+      <!-- v1.2.2: 6 帧序列由 6 个各带 drop-shadow 的叠加 <img> 改为单 <img> + JS 帧循环
+           （首轮前预加载全部帧，切帧零闪烁）；把 6 层投影合成层降为 1 层，
+           透明置顶窗每帧重绘成本减半，仍保留呼吸+眯眼的微动态观感 -->
       <img
-        v-for="(url, i) in frameUrls"
-        :key="i"
-        :src="url"
+        :src="currentFrame"
         class="popmart-pet__frame"
-        :alt="`Pop Mart panda frame ${i}`"
+        alt="Pop Mart panda"
         draggable="false"
-        :style="{ animationDelay: `-${(FRAME_COUNT - i) * FRAME_DURATION}s` }"
       />
     </div>
 
@@ -62,7 +62,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue';
 import type { PetState } from '../../types';
 import frame0 from './assets/popmart-panda-frame-0.png';
 import frame1 from './assets/popmart-panda-frame-1.png';
@@ -79,6 +79,30 @@ const FRAME_COUNT = 6;
 /** 单帧时长 */
 const FRAME_DURATION = FRAME_TOTAL_DURATION / FRAME_COUNT;
 const frameUrls = [frame0, frame1, frame2, frame3, frame4, frame5];
+
+// v1.2.2: 单 <img> 帧循环（替代 6 个叠加 img）。预加载全部帧，切帧不闪烁；
+// 帧间隔 = 单帧时长（0.2s），整轮 1.2s 与原本 6 帧 CSS 序列时长一致。
+const currentFrame = ref<string>(frameUrls[0]);
+let frameTimer: number | null = null;
+let frameIdx = 0;
+function startFrameLoop(): void {
+  frameUrls.forEach((u) => {
+    const im = new Image();
+    im.src = u;
+  });
+  frameTimer = window.setInterval(() => {
+    frameIdx = (frameIdx + 1) % FRAME_COUNT;
+    currentFrame.value = frameUrls[frameIdx];
+  }, FRAME_DURATION * 1000);
+}
+function stopFrameLoop(): void {
+  if (frameTimer !== null) {
+    clearInterval(frameTimer);
+    frameTimer = null;
+  }
+}
+onMounted(startFrameLoop);
+onBeforeUnmount(stopFrameLoop);
 
 const props = defineProps<{ state: PetState; overrideBadges?: string[] | null }>();
 const { getCustomBadge } = usePetBadges();
@@ -156,18 +180,10 @@ const containerClass = computed(() => `state-${props.state}`);
   object-fit: contain;
   display: block;
   pointer-events: none;
-  /* 投影放在静态 img 上（img 不跑动画）：投影只光栅化一次并缓存；
-     若放到上方 .art 会与 transform 动画同层，导致透明置顶窗每帧重算投影 → 卡顿 */
+  /* v1.2.2: 单帧元素，投影仅此一层（原 6 层叠加，透明置顶窗每帧重算投影成本高）；
+     帧切换由 JS 改 :src 完成，img 不跑 CSS 动画，合成层稳定 */
   filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.28))
           drop-shadow(0 1px 2px rgba(0, 0, 0, 0.18));
-  /* 帧序列：默认不可见，由 pm-frame-play 在各自时间窗内显示一帧；
-     不用 steps() —— 此处是逐帧 opacity 硬切，steps(1) 反而会让每帧整周期常显 */
-  opacity: 0;
-  animation: pm-frame-play 1.2s infinite;
-}
-@keyframes pm-frame-play {
-  0%, 16.66% { opacity: 1; }
-  16.67%, 100% { opacity: 0; }
 }
 
 /* ========== 状态级动画（作用于整体 art） ========== */

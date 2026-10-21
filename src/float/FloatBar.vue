@@ -41,6 +41,8 @@
   - 2026-10-17 @v1.2.0: 移除 - 取消浮窗尾部「重复上次区域」按钮（v1.1.0 引入的
       onShotRepeat + 图标）。用户反馈浮窗按钮与设置页入口重复、且无历史区域时点了没
       反应易困惑；设置页的同名功能保留不受影响。
+      ⚠️ v1.2.2 更新：设置页那个入口随后也一并删除了，「重复上次截图」功能现已整体下线
+      （后端 `screenshot_repeat_region` 与 `last_region` 状态同时移除）。
   - 2026-10-17 @v1.2.0: 新增 - 最左侧状态点 `.f-dot` 由固定 accent 橙改为**按系统负载
       动态变色**。负载值取 CPU/内存使用率的较高者，划分 5 档（idle 绿 / light 黄绿 /
       busy 橙 / heavy 深橙 / overload 红）+ unknown 灰（数据源不可用兜底），阈值
@@ -59,9 +61,41 @@
       ③ 内存**绝不降档**，也不会把 CPU 的低负载误判成繁忙。
       即 MEM 80% 这类 macOS 常态不再影响灯色，CPU 23% 会如实显示「轻载」黄绿。
       教训：跨平台阈值必须定在**各平台常态基线之上**，压在基线上等于永远触发的死阈值。
+  - 2026-10-21 @v1.2.2: 新增 - 液态玻璃外观（`cfg.float_glass` 为真时生效）。
+      ① 几何：36px/圆角 18 → **44px/圆角 22**（完全胶囊形）。44px 是折射可辨的下限，
+         36px 时折射扭曲区只有数像素宽，肉眼几乎看不出（见可行性评估 §4.2）。
+         ⚠️ 三个数值必须与 `float_glass.rs` 的 `FLOAT_HEIGHT_GLASS` / `FLOAT_RADIUS_GLASS`
+         以及 Rust 侧 `set_size` 保持一致，否则会出现「窗口 44 但内容按 36 排版」的错位。
+      ② **背景改为近乎全透明 + 去掉 backdrop-filter**：玻璃模式下模糊/折射由系统合成器
+         （macOS NSGlassEffectView）在窗口背后渲染，属于**窗口外**的采样；CSS
+         `backdrop-filter` 只采样**同文档 DOM 背景**，而本组件 onMounted 已把
+         html/body/#app 全设 transparent → 那条 blur 在本窗口里一直是空转（不是本次改动
+         引入的问题，是从来没生效）。玻璃模式下保留深色底反而会把系统模糊完全盖住，
+         故降到 rgba(255,255,255,0.06) 只留一点点「玻璃自身的乳白」。
+      ③ 文字配色不变（#f5f5f7 白系），靠 `.is-glass` 的细描边 + 文字阴影兜住对比度。
+      ④ 由根节点 `:class` 绑定切换，不新增任何 IPC；配置随既有 1Hz `get_status_bar_config`
+         轮询自动跟随，设置页翻开关 ≤1s 生效（与截图按钮同机制）。
+  - 2026-10-21 @v1.2.2 修订（真机实测后）：**Windows 上系统材质不可用，改为纯 CSS
+      高透光**。实测 Win11 25H2 build 26200：DWM backdrop 对本无边框窗口完全不透光
+      （浮窗亮度在背景 255/70 时都是 212，透光率 ρ=0.001），而纯 CSS 的 ρ=0.850。
+      也就是说原来的 `apply_acrylic` 反而把高透光盖成了不透明亮板（纯负优化）。
+      Windows 侧已停用系统材质（见 `float_glass.rs` 模块头），因此这里的 CSS 是
+      **Windows 上唯一的视觉来源**，必须自己撑起玻璃质感：
+        - 底色从 0.06 提到 0.10：Windows 下背后是**未模糊**的原始桌面，像素噪声大，
+          过低的底色会让统计数字直接溶进背景（白墙前尤其明显）。
+        - 描边升到 0.28 + 外阴影 0 6px 20px：无系统材质时，胶囊轮廓只能靠这两条读出来。
+        - 文字阴影加深到 0.55：白墙前 #f5f5f7 若不加阴影几乎不可读。
+      macOS 仍是真系统玻璃（底色 0.06 已够），故用 `@media` 无法区分平台 → 由 Rust 侧
+      `body` 的 `data-platform` 不太值当；这里取**两边都能接受**的折中值，
+      以 Windows（当前唯一实测平台）的可读性为准。
 -->
 <template>
-  <div ref="rootRef" class="float-bar" @pointerdown="onPointerDown" @contextmenu.prevent>
+  <div
+    ref="rootRef"
+    :class="['float-bar', { 'is-glass': cfg.float_glass }]"
+    @pointerdown="onPointerDown"
+    @contextmenu.prevent
+  >
     <span class="f-dot" :style="dotStyle" :title="dotTitle"></span>
     <span v-if="cfg.show_cpu" class="f-item">
       <i>CPU</i><b>{{ pct(metrics?.cpu_usage) }}</b>
@@ -129,6 +163,8 @@ const cfg = ref<StatusBarConfig>({
   show_net: true,
   float_enabled: true,
   screenshot_enabled: true,
+  // v1.2.2：默认 false，首次 tick 由后端配置覆盖
+  float_glass: false,
 });
 const metrics = ref<MetricsOut | null>(null);
 let timer: number | null = null;
@@ -430,6 +466,58 @@ onBeforeUnmount(() => {
 .float-bar:active {
   cursor: grabbing;
 }
+
+/* ===== v1.2.2：液态玻璃模式 =====
+ *
+ * 几何：44px 高 + 22px 圆角 = 完全胶囊形（与 float_glass.rs 的
+ * FLOAT_HEIGHT_GLASS / FLOAT_RADIUS_GLASS 严格同值，改一处必须同步另一处）。
+ *
+ * 背景：几乎全透明。模糊与折射由**操作系统合成器**在窗口背后绘制
+ * （macOS NSGlassEffectView / Windows DWM Acrylic）；CSS `backdrop-filter`
+ * 采样不到窗口外的桌面（只采样同文档 DOM 背景，而本窗口的 html/body/#app
+ * 全是 transparent），留着既是空转又会盖住系统材质，故明确关闭。
+ * 只保留极淡的白色底和细描边，模拟玻璃自身的乳白与高光边缘。
+ */
+.float-bar.is-glass {
+  height: 44px;
+  border-radius: 22px;
+  /* ⚠️ Windows 上这里是**唯一**的视觉来源（系统材质已停用，见文件头 v1.2.2 修订）：
+     背后是未模糊的原始桌面，噪声大，0.06 在白墙前会把数字溶掉，故用 0.10。
+     macOS 有真系统玻璃，0.10 会略厚一点，但仍在「清透」范围内，可接受。 */
+  background: rgba(255, 255, 255, 0.1);
+  /* 显式关掉：blur 交给系统合成器（macOS）；Windows 无系统材质，本就不该有 blur */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  /* 描边提亮到 0.28：无系统材质时，胶囊轮廓主要靠这条亮边读出来 */
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  /* 顶部内高光 = 玻璃的"上边缘反光"。
+     ⚠️ 这里**只用 inset，绝不加外阴影**（v1.2.2 修复）：float 窗口尺寸是
+     `width: max-content` + 高度恰好 44px，即窗口边界**紧贴**胶囊边缘。
+     任何向外扩散的 `box-shadow` 都会被窗口矩形裁掉，只剩四个角露出小块暗色，
+     在浅色桌面上看起来就是"胶囊外面套了一个带阴影的矩形边框"（用户实机截图证实）。
+     既然窗口无法为投影留出扩散空间，外阴影在本窗口上原理上不可用。 */
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.08);
+  /* 无模糊时背景对比度不可控，文字阴影必须够重才能保证白墙前的可读性 */
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+  /* 内边距略增：胶囊形两端是圆弧，文字贴边会视觉出血 */
+  padding: 0 14px;
+}
+/* 悬停：只提亮一点底色，不改变材质本身 */
+.float-bar.is-glass:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.36);
+}
+/* 玻璃模式下按钮底色也要相应减淡，否则深灰方块盖在玻璃上很突兀 */
+.float-bar.is-glass .f-shot:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+/* 分隔线在浅色桌面下会看不见，略提亮一档 */
+.float-bar.is-glass .f-sep {
+  background: rgba(255, 255, 255, 0.22);
+}
+
 .f-dot {
   flex: none;
   width: 7px;

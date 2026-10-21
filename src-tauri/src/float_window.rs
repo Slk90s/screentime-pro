@@ -27,11 +27,22 @@
 //!     被无校验地恢复，窗口整个落到屏幕外（实测物理坐标 (-695,159)，单屏 1536×864）。
 //!     新增 clamp_to_visible_area：show 前用物理像素枚举显示器，窗口与任一屏重叠不足
 //!     1/3 宽时回落到主屏右上角。纯 Rust 兜底，不依赖前端能否枚举显示器。
+//!   - 2026-10-21 @v1.2.2: 重构 - 高度改为「模式相关」动态取值，接液态玻璃。
+//!     ① FLOAT_HEIGHT 保留为普通模式高度（36），新增 FLOAT_HEIGHT_GLASS（44）+ 玻璃圆角；
+//!        实际取值统一走 `float_glass::height_for(glass)`，本文件不再直接读 FLOAT_HEIGHT。
+//!     ② **关键**：`resize_float_window` 原先把高度写死成 FLOAT_HEIGHT，而该命令被前端
+//!        `fitWidth()` 每秒调用（1Hz tick + ResizeObserver）——玻璃模式一开，下一秒就被
+//!        压回 36px。现改为按 AppState 里的 `status_bar_config.float_glass` 取值。
+//!     ③ `ensure_float_window` 不负责材质：conf 已预创建 float 窗口，本函数开头的
+//!        `if exists { return Ok(()) }` 会早返回，材质若放这里永远不生效。
+//!        材质由调用方（commands / lib）在 ensure 之后经 `float_glass::apply_via_app` 应用。
 
 use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalPosition, WebviewUrl,
     WebviewWindowBuilder,
 };
+
+use crate::float_glass;
 
 /// 浮窗固定 label（与 tauri.conf.json 的 windows[].label 一致）
 pub const FLOAT_WINDOW_LABEL: &str = "float";
@@ -41,8 +52,38 @@ pub const FLOAT_WINDOW_LABEL: &str = "float";
 /// 初始宽度取 340（与前端 BAR_W 一致）：这是「四项指标全开」时的安全上限，
 /// 保证首次布局不被裁切；FloatBar.vue 会在 show 之前先测量并收缩，用户看不到宽态。
 pub const FLOAT_INITIAL_WIDTH: f64 = 340.0;
-pub const FLOAT_HEIGHT: f64 = 36.0;
+/// 普通模式高度（逻辑像素）。玻璃模式取 `float_glass::FLOAT_HEIGHT_GLASS`。
+///
+/// ⚠️ 不要在本文件里直接用这个常量算 set_size —— 一律走 `float_glass::height_for()`
+/// 或本文件的 `current_height()`，否则玻璃模式会被压回 36px（v1.2.2 修复的坑）。
+///
+/// v1.2.2 起本文件内已无直接引用（全部改走 height_for），仅作为对外口径保留，
+/// 供外部/未来代码读取"普通模式高度"这一语义值。
+#[allow(dead_code)]
+pub const FLOAT_HEIGHT: f64 = float_glass::FLOAT_HEIGHT_PLAIN;
 pub const FLOAT_MIN_WIDTH: f64 = 140.0;
+
+/// 从 AppState 读当前是否处于玻璃模式（读不到按 false，退回普通态最安全）
+///
+/// 为什么经 AppHandle 读而不是加参数：`resize_float_window` 由前端 1Hz 调用，
+/// 让前端每次多传一个 glass 参数会把"配置真相"分散到两端；这里直接读后端缓存，
+/// 单一来源，且与 `set_status_bar_config` 写入的缓存天然一致。
+fn current_glass(app: &AppHandle) -> bool {
+    app.try_state::<std::sync::Arc<crate::AppState>>()
+        .map(|st| {
+            st.status_bar_config
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .float_glass
+        })
+        .unwrap_or(false)
+}
+
+/// 当前模式下的窗口高度（逻辑像素）
+fn current_height(app: &AppHandle) -> f64 {
+    float_glass::height_for(current_glass(app))
+}
+
 
 /// 幂等创建浮窗（已存在则直接复用）
 ///
@@ -52,14 +93,16 @@ pub fn ensure_float_window(app: &AppHandle) -> Result<(), String> {
     if app.get_webview_window(FLOAT_WINDOW_LABEL).is_some() {
         return Ok(());
     }
+    // v1.2.2：创建时就按当前模式定高，避免"先 36 后 44"的二次调整
+    let h = current_height(app);
     let window = WebviewWindowBuilder::new(
         app,
         FLOAT_WINDOW_LABEL,
         WebviewUrl::App("index.html".into()),
     )
     .title("ScreenTime Float")
-    .inner_size(FLOAT_INITIAL_WIDTH, FLOAT_HEIGHT)
-    .min_inner_size(FLOAT_MIN_WIDTH, FLOAT_HEIGHT)
+    .inner_size(FLOAT_INITIAL_WIDTH, h)
+    .min_inner_size(FLOAT_MIN_WIDTH, h)
     .resizable(false)
     .maximizable(false)
     .minimizable(false)
@@ -147,6 +190,18 @@ pub fn set_float_visible(app: &AppHandle, show: bool) -> Result<(), String> {
         .get_webview_window(FLOAT_WINDOW_LABEL)
         .ok_or_else(|| "float 窗口缺失".to_string())?;
     if show {
+        // v1.2.2：**补材质**。用户可能是「先开玻璃开关（浮窗当时关着，apply 无处可落）
+        // → 再打开浮窗」的顺序；也可能全屏自动隐藏后恢复、上一轮材质已被系统回收。
+        // 这两条路径都绕开了 commands.rs 的翻转分支，所以必须在每次 show 前补一次。
+        //
+        // 顺序上放在 clamp/show **之前**：apply_via_app 与 show 都会派发到主线程，
+        // 先入队先执行，材质先于窗口可见落定 → 不会出现「先露出深色底再变玻璃」的闪跳。
+        // 失败只记 warn（apply_via_app 内部已记），绝不阻断显示。
+        if current_glass(app) {
+            if let Err(e) = float_glass::apply_via_app(app, true) {
+                tracing::warn!(error = %e, "显示浮窗前应用液态玻璃失败，退化为 CSS 兜底样式");
+            }
+        }
         // 显示前先纠偏：前端随后会按 localStorage 恢复并 fitWidth，但恢复出的可能是
         // 离屏旧坐标；在此兜回可见区，避免「开了却看不到」（v1.2.1）
         clamp_to_visible_area(&window);
@@ -183,33 +238,43 @@ pub async fn move_float_window(app: AppHandle, x: f64, y: f64) -> Result<(), Str
 /// 按内容自适应调整浮窗宽度（逻辑像素；前端测量 DOM 宽度后调用）
 ///
 /// v0.7.7 新增：窗口宽度 = 内容宽度，避免固定 340px 时的右侧大片空白。
-/// 高度用常量（FLOAT_HEIGHT）保持稳定，只有宽度变化。
 ///
 /// **右边缘锚定**：宽度变化时同步平移窗口，使右上角位置保持不动
 /// （浮窗默认贴在屏幕右上，若只改宽度会看起来往右「长」或往左「缩」）。
 /// 锚定计算放在 Rust 侧完成，前端不需要额外申请 window 读取权限。
+///
+/// v1.2.2 修复：高度**不再写死**。原实现 `set_size(w, FLOAT_HEIGHT)` 会把玻璃模式的
+/// 44px 每秒压回 36px（本命令被前端 fitWidth() 以 1Hz + ResizeObserver 调用）。
+/// 现按 `status_bar_config.float_glass` 取 `float_glass::height_for()`。
+/// 高度变化时**顶部锚定**（只改 x 与 size，不改 y），窗口向下生长，符合"贴屏幕右上"预期。
 #[tauri::command]
 pub async fn resize_float_window(app: AppHandle, width: f64) -> Result<(), String> {
     let window = app
         .get_webview_window(FLOAT_WINDOW_LABEL)
         .ok_or_else(|| "float 窗口尚未创建".to_string())?;
     let target_w = width.max(FLOAT_MIN_WIDTH);
+    let target_h = current_height(&app);
     let scale = window.scale_factor().unwrap_or(1.0);
     // 当前物理尺寸/位置 → 换算成逻辑坐标做锚定
-    let cur = window
+    let (cur_w, cur_h) = window
         .inner_size()
-        .map(|s| s.to_logical::<f64>(scale).width)
-        .unwrap_or(FLOAT_INITIAL_WIDTH);
-    if (cur - target_w).abs() < 0.5 {
-        return Ok(()); // 宽度无变化，免抖动
+        .map(|s| {
+            let l = s.to_logical::<f64>(scale);
+            (l.width, l.height)
+        })
+        .unwrap_or((FLOAT_INITIAL_WIDTH, target_h));
+    // 宽高都无变化才免调整，避免无谓的 set_size/set_position 抖动
+    if (cur_w - target_w).abs() < 0.5 && (cur_h - target_h).abs() < 0.5 {
+        return Ok(());
     }
     if let Ok(pos) = window.outer_position() {
         let logical = pos.to_logical::<f64>(scale);
-        let new_x = logical.x + (cur - target_w);
+        // 右锚定：宽度变小时窗口左边缘右移，保持右上角不动
+        let new_x = logical.x + (cur_w - target_w);
         let _ = window.set_position(LogicalPosition::new(new_x, logical.y));
     }
     window
-        .set_size(LogicalSize::new(target_w, FLOAT_HEIGHT))
+        .set_size(LogicalSize::new(target_w, target_h))
         .map_err(|e| format!("调整悬浮指标条尺寸失败: {e}"))?;
     // 锚定后再兜底一次：异常初始位置/尺寸组合下右锚定可能把窗口送出屏（v1.2.1）
     clamp_to_visible_area(&window);

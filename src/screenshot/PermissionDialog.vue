@@ -31,6 +31,7 @@ import { useI18n } from "vue-i18n";
 import { screenshot } from "../api/screenshot";
 import { tracker } from "../api/tracker";
 import { isTauri } from "../api/tracker";
+import AppIcon from "../components/AppIcon.vue";
 
 const { t } = useI18n();
 
@@ -134,7 +135,8 @@ onBeforeUnmount(stopPoll);
     <div class="perm-dialog" role="dialog" aria-modal="true">
       <!-- 标题 + 关闭 -->
       <div class="perm-dialog-head">
-        <span class="perm-dialog-icon">🔒</span>
+        <!-- v1.2.2: emoji（🔒/✅）统一替换为 AppIcon 矢量图标 -->
+        <span class="perm-dialog-icon" :aria-hidden="true"><AppIcon name="lock" :size="18" /></span>
         <span class="perm-dialog-title">{{ t("settings.shotPermTitle") }}</span>
         <button class="perm-dialog-close" @click="emit('close')" :title="t('common.close')">
           ✕
@@ -155,7 +157,10 @@ onBeforeUnmount(stopPoll);
           </button>
         </template>
         <template v-else>
-          <div class="perm-dialog-granted">✅ {{ t("settings.shotPermGranted") }}</div>
+          <div class="perm-dialog-granted">
+            <AppIcon name="checkCircle" :size="14" />
+            {{ t("settings.shotPermGranted") }}
+          </div>
           <button class="perm-btn perm-btn--primary" @click="resetAndRestart" :disabled="resetting">
             {{ t("settings.shotPermRestart") }}
           </button>
@@ -256,6 +261,10 @@ onBeforeUnmount(stopPoll);
   cursor: not-allowed;
 }
 .perm-dialog-granted {
+  /* v1.2.2: emoji 换 AppIcon 后加 flex 对齐 */
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 13px;
   color: var(--success, #34c724);
   font-weight: 600;
