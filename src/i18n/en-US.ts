@@ -29,6 +29,14 @@ export default {
     select: "Select",
     backToToday: "Back to today",
     clickBarTip: "Click a day on the bar chart above to see that day's details",
+    // v1.2.4（2026-10-22）：automatic update check banner
+    updateBanner: {
+      title: "New version v{latest} available",
+      desc: "You are on v{current}. Update for new features and fixes.",
+      action: "View update",
+      dismiss: "Dismiss",
+      dismissTitle: "This version won't be shown again (newer versions still will)",
+    },
     calendar: {
       monthSummary: "Month at a glance",
       total: "Total",

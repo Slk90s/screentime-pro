@@ -30,6 +30,14 @@ export default {
     select: "选择",
     backToToday: "回到今天",
     clickBarTip: "点击上方柱状图的某一天，可查看当天详情",
+    // v1.2.4（2026-10-22）：自动检查更新后首页的提示横条
+    updateBanner: {
+      title: "发现新版本 v{latest}",
+      desc: "当前 v{current}，更新后可获得新功能与修复。",
+      action: "查看更新",
+      dismiss: "关闭",
+      dismissTitle: "关闭后本版本不再提示（更高版本仍会提示）",
+    },
     calendar: {
       monthSummary: "本月概况",
       total: "月总时长",

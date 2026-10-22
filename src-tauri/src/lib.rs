@@ -737,6 +737,8 @@ pub fn run() {
             commands::check_webview2,
             commands::open_webview2_download,
             commands::check_for_update,
+            commands::auto_check_update,
+            commands::dismiss_update,
             commands::open_url,
             commands::get_system_metrics,
             commands::get_status_bar_config,

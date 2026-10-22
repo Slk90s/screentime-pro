@@ -1,5 +1,13 @@
 <template>
-  <!-- Dashboard 主视图：组合总览卡片、柱状图、堆叠图、排行榜、趋势、设置 -->
+  <!--
+    Dashboard 主视图：组合总览卡片、柱状图、堆叠图、排行榜、趋势、设置
+
+    v1.2.4（2026-10-22）：新增「自动检查更新」的首页提示横条。
+      - 位置：统计概览页工具栏之下、所选日期之上（扫一眼能看到，且不遮挡图表）
+      - 触发：启动 15s 后静默调用一次 auto_check_update（后端做 24h 节流）
+      - 可关闭：关闭时把版本号写入 update_dismissed_version，同版本不再提示
+      - 失败静默：断网 / GitHub 被拦 / API 限流一律不打扰用户，只写日志
+  -->
   <div class="dashboard">
     <!-- 顶部标签页：统计概览 / 趋势对比 / 分类规则 / 设置 -->
     <div class="tabs">
@@ -26,6 +34,31 @@
           设置页「备份与多设备合并」板块有完整「导出备份」功能（JSON 全量 + 路径展示 + 复制），
           与本按钮功能重叠且功能更弱。v0.3.1 起移除。
         -->
+      </div>
+
+      <!--
+        v1.2.4（2026-10-22）：自动检查更新的提示横条。
+        放在工具栏之下、所选日期之上——这是「概览页顶部」，用户扫一眼就能看到，
+        又不遮挡任何图表；且它属于一次性通知，不该占据工具栏的常驻位置。
+        只在 has_update 为真时出现；关闭后写 dismissed_version，同版本不再提示。
+      -->
+      <div v-if="updateBanner" class="update-banner" role="status">
+        <span class="ub-icon"><AppIcon name="download" :size="15" /></span>
+        <div class="ub-text">
+          <b>{{ t("dashboard.updateBanner.title", { latest: updateBanner.latest }) }}</b>
+          <span>{{ t("dashboard.updateBanner.desc", { current: updateBanner.current }) }}</span>
+        </div>
+        <button class="ub-action" @click="goDownload">
+          {{ t("dashboard.updateBanner.action") }}
+        </button>
+        <button
+          class="ub-close"
+          :title="t('dashboard.updateBanner.dismissTitle')"
+          :aria-label="t('dashboard.updateBanner.dismiss')"
+          @click="dismissBanner"
+        >
+          <AppIcon name="x" :size="14" />
+        </button>
       </div>
 
       <!-- 所选日期（点击上方柱状图的某一天切换；默认今天） -->
@@ -67,7 +100,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from "vue";
+import { ref, onMounted, onBeforeUnmount, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import OverviewCard from "../components/OverviewCard.vue";
 import DailyBarChart from "../components/DailyBarChart.vue";
@@ -82,6 +115,7 @@ import { tracker } from "../api/tracker";
 import { todayStr } from "../utils/format";
 import type {
   AppRankingOut,
+  AutoUpdateInfo,
   CategoryOut,
   DailySummaryOut,
   DayCategoryOut,
@@ -193,10 +227,70 @@ async function loadDevices() {
 
 // 历史：doExport 已移除，导出功能统一在「设置 → 备份与多设备合并」
 
+// ===== v1.2.4（2026-10-22）：自动检查更新的首页提示 =====
+//
+// 设计取舍（为什么是「延迟 + 24h 节流 + 失败静默」）：
+//   ① 延迟 15s：启动瞬间在做 DB 迁移 / 采样循环 / 建窗，此时叠一个网络请求会拖慢首屏。
+//      15s 后界面已稳定，用户完全无感。
+//   ② 24h 节流在后端做（不在前端），因为重装/清缓存不会重置它，且手动检查不写入
+//      节流时间戳——两者互不干扰。
+//   ③ 失败静默：见 `auto_check_update` 的注释。这里连 catch 都只写 debug 日志，
+//      绝不进 UI。
+const updateBanner = ref<AutoUpdateInfo | null>(null);
+
+/** 定时器句柄：组件卸载时要清掉，否则窗口关闭后仍会触发一次 IPC */
+let updateTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function checkUpdateSilently() {
+  try {
+    const info = await tracker.autoCheckUpdate();
+    // has_update 已经包含了「已是最新 / 检查失败 / 该版本已忽略」三种情况，直接判它即可
+    if (info?.has_update && info.latest) {
+      updateBanner.value = info;
+    }
+  } catch (e) {
+    // 理论上 autoCheckUpdate 不会 reject（后端把所有失败折叠成 has_update:false），
+    // 但 IPC 层本身仍可能抛（如命令未注册）。静默处理，不影响首页任何功能。
+    log.debug("[update] 自动检查更新静默失败：", e);
+  }
+}
+
+/** 打开 GitHub Release 页（复用既有的 open_url 命令，协议白名单在 Rust 侧校验） */
+async function goDownload() {
+  const url = updateBanner.value?.url;
+  if (!url) return;
+  try {
+    await tracker.openUrl(url);
+  } catch (e) {
+    log.warn("[update] 打开下载页失败：", e);
+  }
+}
+
+/** 关闭横幅：记住这个版本号，同版本不再提示（更高版本仍会提示） */
+async function dismissBanner() {
+  const v = updateBanner.value?.latest;
+  updateBanner.value = null; // 先隐藏，避免等 IPC 往返造成的点击延迟感
+  if (!v) return;
+  try {
+    await tracker.dismissUpdate(v);
+  } catch (e) {
+    // 写失败只是「下次还会再提示」，不影响本次关闭的视觉效果，故不打扰用户
+    log.warn("[update] 记录关闭的版本失败：", e);
+  }
+}
+
 onMounted(() => {
   loadDevices();
   loadRange();
   loadDetails();
+  updateTimer = setTimeout(checkUpdateSilently, 15_000);
+});
+// 卸载时清掉定时器：否则用户 15s 内切走或关窗后，回调仍会打一次 IPC
+onBeforeUnmount(() => {
+  if (updateTimer) {
+    clearTimeout(updateTimer);
+    updateTimer = null;
+  }
 });
 // 切换时间范围或设备时重新拉取概览数据
 watch([range, device], () => {
@@ -236,6 +330,97 @@ watch([range, device], () => {
   gap: 12px;
   margin-bottom: 16px;
   flex-wrap: wrap;
+}
+/* ===== v1.2.4（2026-10-22）：自动更新提示横条 =====
+   配色刻意用 accent 系：既区别于「错误」（红）与「普通信息」（灰），
+   又不至于像警告条那样刺眼——它只是通知，不是需要立即处理的问题。
+   ⚠️ 这里刻意**不用 `color-mix()`**：它需要 Chromium 111+，而本项目
+   `tauri.conf.json` 声明的 `minimumWebview2Version` 是 **110.0.1587.50**，
+   在恰好 110 的机器上整条声明会失效（背景变透明、文字压桌面）。
+   `--accent` 是 #ff7e27 系列的橙色，用固定的 rgba 近似即可，效果等价。 */
+.update-banner {
+  display: flex;
+  /* ⚠️ 必须是 flex-start 而不是 center：窄窗口下文字会折成两行，
+     若用 center 则图标、按钮都会相对「整块文字」垂直居中，视觉上图标沉到第二行、
+     按钮悬在半空（实测 360px 宽时明显错位）。改用 flex-start 让各项都贴顶对齐，
+     再把图标自身下移 1px 与首行基线对齐。 */
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 12px;
+  margin-bottom: 14px;
+  border: 1px solid rgba(255, 126, 39, 0.38);
+  border-radius: 10px;
+  background: rgba(255, 126, 39, 0.1);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.ub-icon {
+  flex: none;
+  /* 与首行文字视觉对齐：行高 1.45×13px≈18.9px，图标 15px，下移 1.5px 居中于首行 */
+  margin-top: 1.5px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent);
+}
+.ub-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+}
+.ub-text b {
+  font-weight: 600;
+}
+.ub-text span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.ub-action {
+  flex: none;
+  /* 与首行文字对齐（见 .update-banner 的 flex-start 说明）。
+     首行基线区高约 18.9px，按钮高 12.5×1.45+10 ≈ 28px，上移 4px 让文字居中于首行 */
+  margin-top: -4px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  padding: 5px 12px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-weight: 500;
+  /* 按钮文案不折行：中文「查看更新」短，但英文 "View update" 在极窄容器里可能被拆成两行，
+     造成按钮高度跳动。主窗口 minWidth=860 时不会触发，这里只是兜底。 */
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.ub-action:hover {
+  background: var(--accent-strong);
+}
+.ub-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  /* 24px 高 vs 首行 18.9px：上移 2.5px 让叉号与首行文字居中对齐 */
+  margin-top: -2.5px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+.ub-close:hover {
+  background: rgba(128, 128, 128, 0.18);
+  color: var(--text);
 }
 /* 时间范围按钮 */
 .range {

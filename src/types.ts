@@ -97,6 +97,20 @@ export interface UpdateInfo {
   notes: string;
 }
 
+/**
+ * 自动检查更新的结果（v1.2.4）。
+ *
+ * `has_update` 为 false 时有三种情况，前端**无需区分**——它们对用户表现一致：
+ * 已是最新 / 检查失败（静默）/ 该版本已被用户点过关闭。
+ * 需要「明确结论」的场景走 `checkUpdate()`（设置页手动按钮），它会对失败返回错误。
+ */
+export interface AutoUpdateInfo {
+  has_update: boolean;
+  current: string;
+  latest: string;
+  url: string;
+}
+
 export interface DeviceStats {
   device_id: string;
   device_name: string;

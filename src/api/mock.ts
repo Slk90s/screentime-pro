@@ -297,6 +297,18 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
         url: "https://github.com/Slk90s/screentime-pro/releases/latest",
         notes: "mock: 浏览器预览场景无网络，返回假数据",
       };
+    case "auto_check_update":
+      // v1.2.4：浏览器预览场景模拟「发现新版本」，便于直接调样式。
+      // 改 has_update 为 false 即可验证「无更新时不渲染横幅」。
+      return {
+        has_update: true,
+        current: "1.2.3",
+        latest: "1.2.4",
+        url: "https://github.com/Slk90s/screentime-pro/releases/latest",
+      };
+    case "dismiss_update":
+      console.log("[mock] dismiss_update:", args?.version);
+      return true;
     case "open_url":
       // 浏览器预览场景：mock 不真的打开，只 console.log
       console.log("[mock] open_url:", args?.url);

@@ -63,20 +63,26 @@
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-10-21（同步至 **v1.2.2**——液态玻璃 + 五项反馈修复 + 三项功能精简）——
-> ① **悬浮窗液态玻璃（新功能）**：浮窗玻璃开关打开时放大为 44px 胶囊形并改高透光材质。
+> 最后更新：2026-10-22（同步至 **v1.2.4**——自动检查更新 + 首页提示横条）——
+> ① **自动检查更新（新功能，只检测提示不做应用内升级）**：启动 15s 后静默调
+> `auto_check_update`，发现新版本时 Dashboard 顶部显示可关闭横条。**该命令永不返回 Err**
+> ——所有失败折叠成 `has_update: false`（与设置页手动 `check_for_update` 的「必须报错」
+> 语义相反，两者共用 `fetch_latest_release()`）。两条状态复用 `settings` 表：
+> `update_last_check_at`（**只在成功抓取后写**，失败不写，否则一次断网锁死 24h）+
+> `update_dismissed_version`（`semver_gt` 严格大于才再提示）。IPC 总数 **84**（+2）。
+> ② **悬浮窗液态玻璃**：浮窗玻璃开关打开时放大为 44px 胶囊形并改高透光材质。
 > macOS 26+ 走 `NSGlassEffectView`（真折射），< 26 回落 `NSVisualEffectView`；
 > **Windows 停用全部系统材质**——真机像素实测 Acrylic/DWM backdrop 对无边框窗口渲染成
 > 不透明色块（透光率 0.001），反而不如纯 CSS（0.850），故 Windows 视觉 100% 交给 CSS。
 > 详见 `float_glass.rs` 模块头与 `CONVENTIONS-screentime-pro.md` 的「Windows 不要加回」红线。
-> ② **macOS 截图遮罩缺菜单栏行 / 「全屏变画中画」（P0）**：tao 的 `always_on_top` 只映射到
+> ③ **macOS 截图遮罩缺菜单栏行 / 「全屏变画中画」（P0）**：tao 的 `always_on_top` 只映射到
 > `NSFloatingWindowLevel`(3)，低于菜单栏 24 级 → AppKit 把 frame 约束进 `visibleFrame`，
 > 一条规则导致两个症状。修复：`screenshot/capture_window.rs` 把 level 提到
 > `NSScreenSaverWindowLevel`(1000)，`show()` 前调用、`hide` 时恢复。
-> ③ **Windows 液态玻璃矩形边框阴影**：浮窗窗口紧贴胶囊（`max-content` + 高度恰好 44px），
+> ④ **Windows 液态玻璃矩形边框阴影**：浮窗窗口紧贴胶囊（`max-content` + 高度恰好 44px），
 > 外扩 `box-shadow` 被窗口矩形裁成四角暗块 → 玻璃模式只用 inset 高光。
-> ④ **功能精简（用户要求）**：移除「重复上次截图」整链（截图 IPC 22→21）、设置页「立即截图」、
-> 截图投影功能（配置键 8→7，`default_shadow` 与 canvas 投影绘制全删）。IPC 总数 **82**。
+> ⑤ **功能精简（用户要求）**：移除「重复上次截图」整链、设置页「立即截图」、
+> 截图投影功能（配置键 8→7，`default_shadow` 与 canvas 投影绘制全删）。
 
 ---
 
@@ -84,7 +90,7 @@
 
 跨平台应用使用时长追踪（macOS / Windows / Linux），对标 iOS「屏幕使用时间」。**数据 100% 本地（SQLite bundled），零上传，隐私优先**。
 
-栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v1.2.2**（详见 [`RELEASE.md`](RELEASE.md)）。
+栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v1.2.4**（详见 [`RELEASE.md`](RELEASE.md)）。
 
 > ⚠️ 本节版本号在 v0.7.0 → v0.7.5 期间**长期未更新**（曾停留在 v0.7.0），与 `tauri.conf.json` 脱节。
 > 版本号唯一真实来源是 **`src-tauri/tauri.conf.json` 的 `version`**，改版本时务必回来同步本节。

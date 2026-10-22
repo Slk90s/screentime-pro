@@ -26,6 +26,8 @@ import type {
   FloatGlassSupport,
   TrendsOut,
   UpdateInfo,
+  // v1.2.4（2026-10-22）：自动检查更新的返回体（静默，失败也返回 has_update:false）
+  AutoUpdateInfo,
   Webview2Status,
   BackupConfig,
 } from "../types";
@@ -117,6 +119,13 @@ export const tracker = {
   checkWebview2: () => call<Webview2Status>("check_webview2"),
   openWebview2Download: () => call<void>("open_webview2_download"),
   checkUpdate: () => call<UpdateInfo>("check_for_update"),
+  /**
+   * 自动检查更新（v1.2.4）。启动后延迟调用，24h 节流，失败静默。
+   * 永不 reject：所有失败都折叠成 `has_update: false`，调用方可直接 await 无需 try/catch。
+   */
+  autoCheckUpdate: () => call<AutoUpdateInfo>("auto_check_update"),
+  /** 记录「用户不想装这个版本」，同版本不再提示；更高版本仍会提示。 */
+  dismissUpdate: (version: string) => call<boolean>("dismiss_update", { version }),
   openUrl: (url: string) => call<void>("open_url", { url }),
   trends: (period: string, device?: string) =>
     call<TrendsOut>("get_trends", { period, device: device ?? null }),

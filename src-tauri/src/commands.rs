@@ -830,9 +830,12 @@ pub struct UpdateInfo {
     pub notes: String,
 }
 
-#[tauri::command]
-pub async fn check_for_update(app: tauri::AppHandle) -> Result<UpdateInfo, String> {
-    let current = app.config().version.clone().unwrap_or_else(|| "0.0.0".to_string());
+/// 抓取远端最新版本，返回 `(latest, url, notes)`。
+///
+/// 双通道：GitHub releases.atom（不走 API 限额）优先，失败回落到 REST API。
+/// 抽成独立函数是为了让 `check_for_update`（手动）与 `auto_check_update`（自动）
+/// 共用同一份逻辑——两份拷贝迟早会漂移（比如只给其中一处加 Rustls 代理）。
+async fn fetch_latest_release() -> Result<(String, String, String), String> {
     let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(10)).user_agent("ScreenTime-Pro-Update-Checker").build().map_err(|e| format!("构建 HTTP 客户端失败: {}", e))?;
     let mut latest_info: Option<(String, String, String)> = None;
     let mut last_err: Option<String> = None;
@@ -871,10 +874,16 @@ pub async fn check_for_update(app: tauri::AppHandle) -> Result<UpdateInfo, Strin
             Err(e) => last_err = Some(format!("REST API 请求失败: {}", e)),
         }
     }
-    let (latest, url, notes) = match latest_info {
-        Some(v) => v,
-        None => return Err(last_err.unwrap_or_else(|| "未知错误：所有检查更新策略均失败".to_string())),
-    };
+    match latest_info {
+        Some(v) => Ok(v),
+        None => Err(last_err.unwrap_or_else(|| "未知错误：所有检查更新策略均失败".to_string())),
+    }
+}
+
+#[tauri::command]
+pub async fn check_for_update(app: tauri::AppHandle) -> Result<UpdateInfo, String> {
+    let current = app.config().version.clone().unwrap_or_else(|| "0.0.0".to_string());
+    let (latest, url, notes) = fetch_latest_release().await?;
     let has_update = semver_gt(&latest, &current);
     Ok(UpdateInfo { current, latest, has_update, url, notes })
 }
@@ -906,6 +915,103 @@ fn semver_gt(latest: &str, current: &str) -> bool {
         if lv < cv { return false; }
     }
     false
+}
+
+// ===== v1.2.4（2026-10-22）：自动检查更新 =====
+//
+// 与手动 `check_for_update` 的分工：自动 =「告知」，手动 =「问询」。
+//   - 自动：静默、节流、只在发现新版本且未被忽略时给前端一个横幅信息。
+//   - 手动：用户点了按钮，必须给出明确结论（含错误），由 check_for_update 负责。
+//
+// 两条 settings 键（复用既有 settings 表，不新建表）：
+//   - update_last_check_at   上次**成功**检查的时间戳（秒）。失败不写入，
+//     否则一次断网就会把接下来 24 小时全部锁死（用户再没机会知道有新版本）。
+//   - update_dismissed_version  用户点过「关闭」的版本号。只有版本号**严格大于**
+//     它才再次提示——即「这个版本我不想装」，但下个版本仍然会提示。
+//
+// ⚠️ 为什么失败必须静默：断网、公司网络拦 GitHub、API 限流（未认证 60 次/小时/IP）
+// 都是常态。给用户弹「检查更新失败」等于把基础设施问题伪装成软件故障，
+// 用户既无法处理也不需要知道。失败只写日志，UI 完全不出现任何痕迹。
+
+/// 自动检查的最小间隔：24 小时。
+/// 取 24h 而不是「每次启动」的原因：重度用户一天会开十几次应用，
+/// 不节流就是十几次无效请求，且 GitHub 未认证 API 有 60 次/小时/IP 的限流。
+const UPDATE_CHECK_INTERVAL_SECS: i64 = 24 * 60 * 60;
+
+#[derive(serde::Serialize, Clone)]
+pub struct AutoUpdateInfo {
+    /// 是否需要向用户提示。
+    /// **为 false 时**涵盖三种情况：已是最新 / 检查失败（静默）/ 该版本已被用户点过关闭。
+    /// 前端只需判这一个字段，无需区分——它们对用户的表现完全一致：不显示横幅。
+    pub has_update: bool,
+    pub current: String,
+    pub latest: String,
+    pub url: String,
+}
+
+/// 启动后的静默检查。**永不返回 Err**——所有失败路径都折叠成 `has_update: false`。
+///
+/// 静默是刻意的：这个命令由前端在启动 15 秒后自动调用，用户没有"发起"这个动作，
+/// 因此不应该看到任何失败提示（见上方注释）。
+#[tauri::command]
+pub async fn auto_check_update(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<AutoUpdateInfo, String> {
+    let current = app.config().version.clone().unwrap_or_else(|| "0.0.0".to_string());
+    let no_update = AutoUpdateInfo { has_update: false, current: current.clone(), latest: String::new(), url: String::new() };
+
+    // ① 节流：距上次成功检查不足 24h 就跳过，不发请求
+    let now = Local::now().timestamp();
+    if let Some(last) = state.db.get_setting("update_last_check_at").and_then(|v| v.parse::<i64>().ok()) {
+        // 负值（系统时间被回拨）也视为需要重新检查，避免永久锁死
+        let elapsed = now - last;
+        if elapsed >= 0 && elapsed < UPDATE_CHECK_INTERVAL_SECS {
+            tracing::debug!(elapsed_secs = elapsed, "自动检查更新：24h 内已检查过，跳过");
+            return Ok(no_update);
+        }
+    }
+
+    // ② 抓取。失败静默：写日志、不写时间戳（下个启动周期重试）、返回 no_update
+    let (latest, url, _notes) = match fetch_latest_release().await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::debug!(error = %e, "自动检查更新失败（静默忽略）");
+            return Ok(no_update);
+        }
+    };
+
+    // ③ 成功才写时间戳：保证「失败不占用节流窗口」
+    if let Err(e) = state.db.set_setting("update_last_check_at", &now.to_string()) {
+        tracing::warn!(error = %e, "写入 update_last_check_at 失败");
+    }
+
+    // ④ 无新版本
+    if !semver_gt(&latest, &current) {
+        tracing::debug!(current = %current, latest = %latest, "自动检查更新：已是最新版本");
+        return Ok(no_update);
+    }
+
+    // ⑤ 用户已关闭过这个版本 → 不再提示（但更高版本仍会提示）
+    if let Some(dismissed) = state.db.get_setting("update_dismissed_version") {
+        if !semver_gt(&latest, &dismissed) {
+            tracing::debug!(latest = %latest, dismissed = %dismissed, "自动检查更新：该版本已被用户关闭");
+            return Ok(no_update);
+        }
+    }
+
+    tracing::info!(current = %current, latest = %latest, "自动检查更新：发现新版本");
+    Ok(AutoUpdateInfo { has_update: true, current, latest, url })
+}
+
+/// 用户点「关闭」时记录该版本，不再重复提示。
+/// 单独一个命令而不是复用 save_settings：这里只改一个键，
+/// 走 save_settings 会顺带覆写其他设置（它要求传全部字段）。
+#[tauri::command]
+pub fn dismiss_update(state: tauri::State<'_, Arc<AppState>>, version: String) -> Result<bool, String> {
+    state.db.set_setting("update_dismissed_version", version.trim()).map_err(|e| e.to_string())?;
+    crate::logging::audit("update_dismissed", &format!("version={version}"));
+    Ok(true)
 }
 
 // ===== v0.7.6：状态栏配置（取代 v0.7.5 的 metrics_enabled 总开关）=====
