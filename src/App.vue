@@ -6,7 +6,9 @@
   - 通过 isPetWindow 区分「主窗口」与「桌宠透明置顶窗口」两个 Tauri webview
   - isPetMenuWindow 区分桌宠菜单独立 webview（独立 Tauri 窗口，菜单可拖到全桌面）
   - 顶部实时指示栏读取 get_current_foreground 返回值（snake_case），用于验证确实在采集其他软件
-  - 路由用动态组件 + keep-alive，按侧边栏切换 Dashboard / Trends / Rules / Settings
+  - 页面切换：**没有路由库、没有 keep-alive**。主窗口只有一个 <Dashboard />，
+    Dashboard 内部用 v-if 在「统计概览 / 趋势 / 分类规则 / 设置」四个 tab 间切换。
+    （旧注释曾写「路由用动态组件 + keep-alive 按侧边栏切换」，与实现不符，v1.2.5 更正）
 
   修改历史：
     - 2026-07-08 @v0.2.0: 初始创建 - 主窗口骨架 + 桌宠窗口分支
@@ -14,6 +16,7 @@
     - 2026-07-25 @v0.6.2-beta.17: 新增 - 桌宠右键菜单独立 webview 分支
     - 2026-08-05 @v0.6.2-beta.26: 修复 - 浏览器预览时 getCurrentWebviewWindow() 抛错导致白屏
     - 2026-09-10 @v0.7.6: 新增 - 悬浮指标条独立 webview 分支（FloatBar，label='float'）
+    - 2026-10-22 @v1.2.5: 文档 - 更正「路由用动态组件 + keep-alive」的过时说明（实际无路由、无 keep-alive）
 -->
 <template>
   <!-- v0.6.0-beta 桌宠窗口分支：独立 webview 渲染 PetWindow（透明/置顶/无主 UI） -->

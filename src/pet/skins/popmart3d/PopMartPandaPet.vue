@@ -29,6 +29,10 @@
     - 2026-08-06 @v0.6.2-beta.27: 性能 - 投影由动画 art 层下移静态 sprite，消除透明置顶窗每帧重算投影的卡顿；升温态去掉 hue-rotate 滤镜动画（仅保留 transform 抖动）
     - 2026-08-06 @v0.6.2-beta.28: 体验 - 表情 emoji 浮层由压在脸上改为聚到熊猫头顶上方；idle 增加呼吸缩放让桌宠更"活"
     - 2026-08-06 @v0.6.2-beta.29: 动画 - 单张 PNG 升级为 6 帧序列（PIL 合成：呼吸缩放 + 眯眼），CSS 逐帧播放；idle 仅保留 translate/rotate 浮动，避免与帧序列双重缩放
+    - 2026-10-22 @v1.2.5: 体积 - 6 帧由 PNG 换为 WebP(q80, alpha_quality=100)。
+      6 帧合计 2095K → 387K（省 81.5%）。alpha 通道实测零损失（MAE 0.000），
+      半透明边缘 RGB 平均差 2.73/255（约 1%），肉眼不可辨。原始 PNG 备份于
+      `bak/png-originals-20261022/`。⚠️ 新增帧素材请同样导出 WebP，勿混用 PNG。
 -->
 <template>
   <div class="popmart-pet" :class="containerClass">
@@ -64,12 +68,12 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue';
 import type { PetState } from '../../types';
-import frame0 from './assets/popmart-panda-frame-0.png';
-import frame1 from './assets/popmart-panda-frame-1.png';
-import frame2 from './assets/popmart-panda-frame-2.png';
-import frame3 from './assets/popmart-panda-frame-3.png';
-import frame4 from './assets/popmart-panda-frame-4.png';
-import frame5 from './assets/popmart-panda-frame-5.png';
+import frame0 from './assets/popmart-panda-frame-0.webp';
+import frame1 from './assets/popmart-panda-frame-1.webp';
+import frame2 from './assets/popmart-panda-frame-2.webp';
+import frame3 from './assets/popmart-panda-frame-3.webp';
+import frame4 from './assets/popmart-panda-frame-4.webp';
+import frame5 from './assets/popmart-panda-frame-5.webp';
 import { usePetBadges } from '../../composables/usePetBadges';
 
 /** 帧动画总时长（秒） */

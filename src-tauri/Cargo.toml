@@ -163,3 +163,30 @@ x11rb = { version = "0.13", default-features = false, features = ["resource_mana
 # 默认启用 Tauri 自定义协议 + 系统托盘（关闭窗口时最小化到托盘而非退出）
 default = ["custom-protocol", "tauri/tray-icon"]
 custom-protocol = ["tauri/custom-protocol"]
+
+# ===== release 构建体积优化（2026-10-22 @v1.2.5）=====
+# 依据 Tauri v2 官方 App Size 文档（https://v2.tauri.app/concept/size/）的推荐配置原样落地。
+# 此前本文件没有任何 [profile.release]，即全部走 Rust 默认值
+# （opt-level=3 / lto=false / codegen-units=16 / panic=unwind / 不 strip），
+# 实测 exe 23.3 MB（.text 13.6 MB + .rdata 9.4 MB）。
+#
+# 逐项说明与前置条件核对：
+# - codegen-units = 1：让 LLVM 做全程序优化。代价是编译变慢（并行度下降），
+#   但本项目发版走 CI，本地只偶尔构建，可接受。
+# - lto = true：跨 crate 内联与死代码消除，对依赖树重（tauri / rusqlite / ort / xcap）的项目收益最明显。
+# - opt-level = "s"：优先体积。官方说想要速度用 3；本项目是常驻托盘的小工具，
+#   热点只有 1Hz 采样与 IPC，`"s"` 的体积收益大于性能损失。
+# - panic = "abort"：去掉 unwind 表。
+#   ⚠️ 前置条件：代码中不得依赖 catch_unwind 捕获 panic。已全仓核查
+#   `grep -rn catch_unwind src-tauri/src` → 0 处，安全。
+# - strip = true：移除符号表。
+#   ⚠️ 前置条件核查：现有 exe 已无 .debug 节（PE 节表仅 .text/.rdata/.data/.pdata/.rsrc/.reloc），
+#   且 bundle 不打包 .pdb → 本项收益小，但零风险，按官方推荐保留。
+#
+# ⚠️ 若将来需要线上调试崩溃，临时改回 `panic = "unwind"` + `strip = false` 再构建。
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

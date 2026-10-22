@@ -29,6 +29,10 @@
     - 2026-08-08 @v0.6.2-36: 优化 - 表情编辑器新增 previewAction prop，可外部强制预览待机小动作；
       swing 动作隐藏叠加的静态 SVG 绳索（姿势图本身已含绳索并随摆动），避免“白丝不动”；
       清理 poseWeb 中残留的静态蛛网碎片。
+    - 2026-10-22 @v1.2.5: 体积 - 6 帧 + 4 姿势图由 PNG 换为 WebP(q80, alpha_quality=100)。
+      10 张合计 3334K → 268K（省 92.0%）。本皮肤 alpha 为二值（无半透明像素），
+      实测 alpha 与边缘 RGB 均零误差。原始 PNG 备份于 `bak/png-originals-20261022/`。
+      ⚠️ 新增素材请同样导出 WebP，勿混用 PNG。
 -->
 <template>
   <div ref="rootRef" class="spidey-pet" :class="[containerClass, effectiveAction, { 'is-action': !!effectiveAction }]">
@@ -94,16 +98,16 @@
 <script setup lang="ts">
 import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import type { PetState } from '../../types';
-import frame0 from './assets/spiderman-frame-0.png';
-import frame1 from './assets/spiderman-frame-1.png';
-import frame2 from './assets/spiderman-frame-2.png';
-import frame3 from './assets/spiderman-frame-3.png';
-import frame4 from './assets/spiderman-frame-4.png';
-import frame5 from './assets/spiderman-frame-5.png';
-import poseSwing from './assets/spiderman-pose-swing.png';
-import poseHero from './assets/spiderman-pose-hero.png';
-import poseWeb from './assets/spiderman-pose-web.png';
-import poseCrouch from './assets/spiderman-pose-crouch.png'; // v0.6.2-33: fix typo crouch→crouch
+import frame0 from './assets/spiderman-frame-0.webp';
+import frame1 from './assets/spiderman-frame-1.webp';
+import frame2 from './assets/spiderman-frame-2.webp';
+import frame3 from './assets/spiderman-frame-3.webp';
+import frame4 from './assets/spiderman-frame-4.webp';
+import frame5 from './assets/spiderman-frame-5.webp';
+import poseSwing from './assets/spiderman-pose-swing.webp';
+import poseHero from './assets/spiderman-pose-hero.webp';
+import poseWeb from './assets/spiderman-pose-web.webp';
+import poseCrouch from './assets/spiderman-pose-crouch.webp'; // v0.6.2-33: fix typo crouch→crouch
 import { usePetBadges } from '../../composables/usePetBadges';
 
 /** 帧动画总时长（秒） */

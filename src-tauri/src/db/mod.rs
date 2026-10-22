@@ -3,6 +3,19 @@
 //! 所有使用记录仅保存在本机 SQLite，零上传，隐私优先。
 //! 数据库文件位于应用数据目录（macOS: ~/Library/Application Support/com.screentime.pro/screentime.db）。
 //! 建表语句见 `sql/schema.sql`，分类种子见 `sql/seed_categories.sql`，规则种子见 `sql/seed_rules.sql`。
+//!
+//! ## daily_summaries 已停写（2026-10-22 @v1.2.5）
+//!
+//! `daily_summaries` 原本是 `(date, app_id)` 的预聚合表，每次 `insert_session`
+//! 与备份导入都会额外跑一条 UPSERT 维护它。**但全仓库自始至终没有任何 SELECT 从它读**：
+//! `get_daily_summaries()` 虽然同名，实际 SQL 是从 `sessions` 现场 `GROUP BY` 聚合的
+//! （见本文件 `get_daily_summaries` 实现）。也就是说这张表只写不读，
+//! 每笔记录白白多付一次写放大 + B-tree 维护 + WAL 帧增长。
+//!
+//! 处置：**停写**（两处 INSERT 已移除），**保留表结构与 `prune_old` 的 DELETE**——
+//! 老库里的历史行继续留着不碍事（无人读），将来若真要做预聚合可直接复用该表。
+//! ⚠️ 若将来启用预聚合，必须同时补 `device` 列并同步补齐所有读取路径，
+//!    否则会重现「按设备清理 / 多设备合并统计错乱」的问题（旧注释曾提及此隐患）。
 
 mod models;
 pub use models::*;
@@ -92,9 +105,16 @@ impl AppDb {
         )
     }
 
-    /// 写入一条使用时段，并同步更新每日聚合
+    /// 写入一条使用时段
     ///
     /// `device` 为来源设备 id（多设备合并用，默认本机）。
+    ///
+    /// ⚠️ v1.2.5（2026-10-22）：**不再同步写 `daily_summaries`**。
+    /// 该表此前每次落库都要多跑一条 UPSERT，但全仓库**没有任何 SELECT 从它读**
+    /// （`get_daily_summaries()` 名字相似，实际是从 `sessions` 现场聚合的）。
+    /// 即：纯写入、零读取的死数据，白付一倍写放大与 B-tree 维护成本。
+    /// 表结构与其 `DELETE` 保留不动（老库兼容 + 将来若真要做预聚合可直接复用）。
+    /// 详见 `db::mod` 模块头「daily_summaries 已停写」条。
     pub fn insert_session(
         &self,
         app_id: i64,
@@ -111,14 +131,6 @@ impl AppDb {
             "INSERT INTO sessions (app_id, start_at, end_at, duration_seconds, date, window_title, device)
              VALUES (?1,?2,?3,?4,?5,?6,?7)",
             params![app_id, start_rfc3339, end_rfc3339, duration, date, window_title, device],
-        )?;
-        conn.execute(
-            "INSERT INTO daily_summaries (date, app_id, total_seconds, session_count)
-             VALUES (?1,?2,?3,1)
-             ON CONFLICT(date, app_id) DO UPDATE SET
-               total_seconds = total_seconds + excluded.total_seconds,
-               session_count = session_count + 1",
-            params![date, app_id, duration],
         )?;
         // category_id 冗余写入 apps（若用户手动改过分类，以 apps 为准；此处不动）
         let _ = category_id;
@@ -920,15 +932,8 @@ impl AppDb {
                     s.device
                 ],
             )?;
-            // 同步更新每日聚合
-            conn.execute(
-                "INSERT INTO daily_summaries (date, app_id, total_seconds, session_count)
-                 VALUES (?1,?2,?3,1)
-                 ON CONFLICT(date, app_id) DO UPDATE SET
-                   total_seconds = total_seconds + excluded.total_seconds,
-                   session_count = session_count + 1",
-                params![s.date, app_id, s.duration_seconds],
-            )?;
+            // v1.2.5：原此处同步写 daily_summaries，已移除（该表只写不读，
+            // 原因详见 insert_session 的文档注释）。导入只落 sessions 即可。
             imported += 1;
         }
         Ok(imported)

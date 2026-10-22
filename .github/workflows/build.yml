@@ -32,30 +32,20 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v1.2.4
-            #### ✨ 新增：自动检查更新
-            - **启动时自动检查更新 + 首页可关闭提示横条**：启动 **15 秒后**静默检查 GitHub 最新版本，发现新版本时在统计概览页顶部显示可关闭的提示横条，点「查看更新」跳转 Release 页。关闭时记住该版本号，**同版本不再提示，更高版本仍会提示**。推送逻辑：**24h 节流**在后端强制（重度用户一天开十几次；GitHub 未认证 API 限流 60 次/小时/IP）；**失败完全静默**——断网 / 公司网络拦 GitHub / 限流都是常态，弹「检查失败」等于把基础设施问题伪装成软件故障，故只写日志不打扰用户。**为何不做应用内自动升级**：Tauri updater 需一对签名密钥，且一旦用某密钥发布带 updater 的版本，此后所有版本必须同密钥签名——密钥丢失 = 所有用户只能手动重装；当前 CI 无 `TAURI_SIGNING_PRIVATE_KEY`，为一个提示功能背长期密钥托管责任不划算。设置页原有手动检查按钮**保持不变**（自动 = 告知，手动 = 问询，两套命令并存）
-            #### ✨ 新增：悬浮窗液态玻璃
-            - **悬浮窗液态玻璃外观**：设置页「悬浮指标条」下新增独立开关。开启后浮窗从 **36px / 圆角 18** 放大为 **44px / 圆角 22（完全胶囊形）**，改为高透光材质、能透过它看到桌面。macOS 26+ 走公开的 `NSGlassEffectView`（半透明 + 背景模糊 + **真实折射**），macOS < 26 回落 `NSVisualEffectView`；普通弹窗 / 桌宠 / 主窗口一律不动
-            - **Windows 为何不含背景模糊**：真机像素实测发现系统 Acrylic 对无边框透明窗会渲染成**不透明色块**（背景亮度 255 与 70 时浮窗恒为 212，透光率 0.001），开了反而把原本能透 85% 的 CSS 透明盖死，属负优化 → 明确停用系统材质，改用高透光 CSS（实测透光率 0.80，是普通模式的 3.86 倍）
+            ### 屏幕时间管家 ScreenTime Pro — v1.2.5
+            #### 🚀 体积与性能优化（本版重点）
+            - **安装包与前端资源大幅瘦身**：桌宠皮肤帧图由 PNG 换为 WebP（q80 + alpha 无损）。实测 **16 张图 5.30 MB → 0.64 MB（省 88.0%）**，前端构建产物 `dist` **5.08 MB → 1.17 MB（省 77%）**，其中图片体积占比从 87.0% 降到 43.6%。透明通道经逐像素比对**零损失**（alpha MAE 0.000），半透明边缘 RGB 平均差 2.73/255（约 1%），肉眼不可辨；蜘蛛侠皮肤为二值 alpha，alpha 与边缘 RGB 均无误差
+            - **Rust release 构建启用官方推荐优化**：新增 `[profile.release]` —— `codegen-units=1` + `lto=true` + `opt-level="s"` + `panic="abort"` + `strip=true`（依据 Tauri v2 官方 App Size 指南）。此前项目完全没有该配置，全部走 Rust 默认值（`opt-level=3` / `lto=false` / `codegen-units=16` / `panic=unwind`）
+            - **移除每次落库的冗余聚合写入**：`daily_summaries` 是一张 `(date, app_id)` 预聚合表，每次记录都要多跑一条 UPSERT 维护它 —— 但经全仓核查，**没有任何 SELECT 从它读**（同名的 `get_daily_summaries()` 实际是从 `sessions` 现场 `GROUP BY`）。现已停写该表，每笔使用记录少一次写放大与 B-tree 维护；表结构与清理逻辑保留，老库数据不受影响、**统计口径完全不变**
+            - **清理死代码与死资源**：移除全仓无人引用的 `PetCanvas.vue` / `PetPreviewStage.vue` / `PetLayer.vue` / `spriteLayout.ts`，及其独占的 23 张 sprite 素材（3.4 MB）与 7 张废弃的熊猫切图（2.2 MB）。这些文件**从未进入过构建产物**（Vite tree-shake 已排除），故不影响任何运行时行为，只减负源码与仓库
             #### 🐞 修复
-            - **macOS 全屏截图缺顶部菜单栏一行 / 「全屏变画中画」（P0）**：Tauri 把 `always_on_top` 只映射到 `NSFloatingWindowLevel`(3)，低于菜单栏的 24 级，AppKit 于是把遮罩窗 frame 约束进 `visibleFrame`（扣掉菜单栏那条）—— 菜单栏那块永远选不进去，同时窗口高度被砍约 25pt、整屏冻结帧被拉伸进矮窗口，看着就像画中画。现新增 `screenshot/capture_window.rs` 把遮罩窗提到 `NSScreenSaverWindowLevel`(1000)，两个症状同时消除
-            - **Windows 液态玻璃出现矩形边框阴影**：浮窗窗口尺寸为 `max-content` 且高度恰好等于胶囊高度（窗口边界紧贴胶囊），外扩的 `box-shadow` 被窗口矩形裁掉只剩四角暗块。已改为只用 inset 内高光
-            - **macOS 状态灯仍恒橙**：v1.2.1 把内存门槛设成 0.8 且用 `>=` 判断，而 macOS 内存日常基线就是 70~80% → 门槛与常态线重合成了死阈值。现改为 CPU 独立决定基础档位，内存只做高水位抬升，绝不降档
-            - **macOS 设置面板里本应用图标显示为彩色噪点（P0）**：系统设置「录屏与系统录音」列表中 ScreenTime Pro 的图标渲染成一团绿/洋红色噪点、无法辨认（Dock / Finder 正常）。根因在 `.icns` 容器格式而非图像本身——16px / 32px 两个小尺寸被写成 `icp4` / `icp5` 老式段 + **PNG 载荷**，而 Apple 规范中这两个键的载荷是 24-bit RGB，macOS 10.15.7+ 在 App Bundle 场景下会按 24-bit RGB 解析那段 PNG 压缩流、把压缩字节当像素渲染（同一份 .icns 单独打开却正常，正是该已知缺陷特征）。修复：小尺寸改用现代键 `ic04` / `ic05` + ARGB 载荷（`ARGB` 魔数 + A/R/G/B 四通道各自 PackBits RLE），大尺寸沿用 `ic07`~`ic14` + PNG；生成脚本的 ARGB 编解码器已与 Apple `iconutil` 产出做过字节级等价验证（569B↔569B、1514B↔1514B 逐字节一致）。**v1.2.2 的 Dock 图标留白修复（824/1024）完整保留，不回退**
-            - **macOS Dock 图标比其他应用大一圈**：`icon.icns` 图形 100% 铺满画布，而 Big Sur 之后规范要求约 80.5%。已按规范比例重绘并留透明边距
-            #### 🧹 精简（按用户要求移除）
-            - **移除「重复上次截图」**：设置页入口 + 后端 IPC + 上次区域状态一并删除（截图 IPC 22→21）
-            - **移除设置页「立即截图」按钮**：触发入口保留浮窗按钮与全局快捷键
-            - **移除截图投影功能**：投影开关、配置项、遮罩窗投影绘制与四周留白全删，导出图恒无投影（画布尺寸 == 选区尺寸）
-            - IPC 总数 **82**（新增 `float_glass_support` +1、移除 `screenshot_repeat_region` −1）
+            - **补齐 `*.webp` 的 TypeScript 模块声明**：`vue-tsc --noEmit`（`npm run build` 的第一步）不认 `.webp`，换图后会报 `TS2307 找不到模块`，而 `vite build` 单独跑却能通过 —— 两套解析器行为不一致，属易漏的构建陷阱，已在 `src/env.d.ts` 补上声明
+            - **更正 `App.vue` 的过时架构注释**：旧注释称「路由用动态组件 + keep-alive 按侧边栏切换 Dashboard / Trends / Rules / Settings」，与实现不符 —— 实际无路由库、无 keep-alive，四个 tab 在 `Dashboard.vue` 内部用 `v-if` 切换
             #### 📊 包体积
-            | 平台 | 产物 | 体积 |
+            | 项目 | 优化前 | 优化后 |
             |---|---|---|
-            | Windows | `-setup.exe`（NSIS 安装器） | ~27 MB |
-            | macOS（Apple Silicon） | `.dmg` | ~27 MB |
-            | Linux | `.deb` / `.rpm` | ~27 MB |
-            | Linux | `.AppImage` | ~107 MB |
+            | 前端 `dist` | 5.08 MB | 1.17 MB（−77%） |
+            | 桌宠图片（16 张） | 5.30 MB | 0.64 MB（−88%） |
             > 完整版本历史见仓库 README。
           releaseDraft: false
           prerelease: false
@@ -96,30 +86,20 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v1.2.4
-            #### ✨ 新增：自动检查更新
-            - **启动时自动检查更新 + 首页可关闭提示横条**：启动 **15 秒后**静默检查 GitHub 最新版本，发现新版本时在统计概览页顶部显示可关闭的提示横条，点「查看更新」跳转 Release 页。关闭时记住该版本号，**同版本不再提示，更高版本仍会提示**。推送逻辑：**24h 节流**在后端强制（重度用户一天开十几次；GitHub 未认证 API 限流 60 次/小时/IP）；**失败完全静默**——断网 / 公司网络拦 GitHub / 限流都是常态，弹「检查失败」等于把基础设施问题伪装成软件故障，故只写日志不打扰用户。**为何不做应用内自动升级**：Tauri updater 需一对签名密钥，且一旦用某密钥发布带 updater 的版本，此后所有版本必须同密钥签名——密钥丢失 = 所有用户只能手动重装；当前 CI 无 `TAURI_SIGNING_PRIVATE_KEY`，为一个提示功能背长期密钥托管责任不划算。设置页原有手动检查按钮**保持不变**（自动 = 告知，手动 = 问询，两套命令并存）
-            #### ✨ 新增：悬浮窗液态玻璃
-            - **悬浮窗液态玻璃外观**：设置页「悬浮指标条」下新增独立开关。开启后浮窗从 **36px / 圆角 18** 放大为 **44px / 圆角 22（完全胶囊形）**，改为高透光材质、能透过它看到桌面。macOS 26+ 走公开的 `NSGlassEffectView`（半透明 + 背景模糊 + **真实折射**），macOS < 26 回落 `NSVisualEffectView`；普通弹窗 / 桌宠 / 主窗口一律不动
-            - **Windows 为何不含背景模糊**：真机像素实测发现系统 Acrylic 对无边框透明窗会渲染成**不透明色块**（背景亮度 255 与 70 时浮窗恒为 212，透光率 0.001），开了反而把原本能透 85% 的 CSS 透明盖死，属负优化 → 明确停用系统材质，改用高透光 CSS（实测透光率 0.80，是普通模式的 3.86 倍）
+            ### 屏幕时间管家 ScreenTime Pro — v1.2.5
+            #### 🚀 体积与性能优化（本版重点）
+            - **安装包与前端资源大幅瘦身**：桌宠皮肤帧图由 PNG 换为 WebP（q80 + alpha 无损）。实测 **16 张图 5.30 MB → 0.64 MB（省 88.0%）**，前端构建产物 `dist` **5.08 MB → 1.17 MB（省 77%）**，其中图片体积占比从 87.0% 降到 43.6%。透明通道经逐像素比对**零损失**（alpha MAE 0.000），半透明边缘 RGB 平均差 2.73/255（约 1%），肉眼不可辨；蜘蛛侠皮肤为二值 alpha，alpha 与边缘 RGB 均无误差
+            - **Rust release 构建启用官方推荐优化**：新增 `[profile.release]` —— `codegen-units=1` + `lto=true` + `opt-level="s"` + `panic="abort"` + `strip=true`（依据 Tauri v2 官方 App Size 指南）。此前项目完全没有该配置，全部走 Rust 默认值（`opt-level=3` / `lto=false` / `codegen-units=16` / `panic=unwind`）
+            - **移除每次落库的冗余聚合写入**：`daily_summaries` 是一张 `(date, app_id)` 预聚合表，每次记录都要多跑一条 UPSERT 维护它 —— 但经全仓核查，**没有任何 SELECT 从它读**（同名的 `get_daily_summaries()` 实际是从 `sessions` 现场 `GROUP BY`）。现已停写该表，每笔使用记录少一次写放大与 B-tree 维护；表结构与清理逻辑保留，老库数据不受影响、**统计口径完全不变**
+            - **清理死代码与死资源**：移除全仓无人引用的 `PetCanvas.vue` / `PetPreviewStage.vue` / `PetLayer.vue` / `spriteLayout.ts`，及其独占的 23 张 sprite 素材（3.4 MB）与 7 张废弃的熊猫切图（2.2 MB）。这些文件**从未进入过构建产物**（Vite tree-shake 已排除），故不影响任何运行时行为，只减负源码与仓库
             #### 🐞 修复
-            - **macOS 全屏截图缺顶部菜单栏一行 / 「全屏变画中画」（P0）**：Tauri 把 `always_on_top` 只映射到 `NSFloatingWindowLevel`(3)，低于菜单栏的 24 级，AppKit 于是把遮罩窗 frame 约束进 `visibleFrame`（扣掉菜单栏那条）—— 菜单栏那块永远选不进去，同时窗口高度被砍约 25pt、整屏冻结帧被拉伸进矮窗口，看着就像画中画。现新增 `screenshot/capture_window.rs` 把遮罩窗提到 `NSScreenSaverWindowLevel`(1000)，两个症状同时消除
-            - **Windows 液态玻璃出现矩形边框阴影**：浮窗窗口尺寸为 `max-content` 且高度恰好等于胶囊高度（窗口边界紧贴胶囊），外扩的 `box-shadow` 被窗口矩形裁掉只剩四角暗块。已改为只用 inset 内高光
-            - **macOS 状态灯仍恒橙**：v1.2.1 把内存门槛设成 0.8 且用 `>=` 判断，而 macOS 内存日常基线就是 70~80% → 门槛与常态线重合成了死阈值。现改为 CPU 独立决定基础档位，内存只做高水位抬升，绝不降档
-            - **macOS 设置面板里本应用图标显示为彩色噪点（P0）**：系统设置「录屏与系统录音」列表中 ScreenTime Pro 的图标渲染成一团绿/洋红色噪点、无法辨认（Dock / Finder 正常）。根因在 `.icns` 容器格式而非图像本身——16px / 32px 两个小尺寸被写成 `icp4` / `icp5` 老式段 + **PNG 载荷**，而 Apple 规范中这两个键的载荷是 24-bit RGB，macOS 10.15.7+ 在 App Bundle 场景下会按 24-bit RGB 解析那段 PNG 压缩流、把压缩字节当像素渲染（同一份 .icns 单独打开却正常，正是该已知缺陷特征）。修复：小尺寸改用现代键 `ic04` / `ic05` + ARGB 载荷（`ARGB` 魔数 + A/R/G/B 四通道各自 PackBits RLE），大尺寸沿用 `ic07`~`ic14` + PNG；生成脚本的 ARGB 编解码器已与 Apple `iconutil` 产出做过字节级等价验证（569B↔569B、1514B↔1514B 逐字节一致）。**v1.2.2 的 Dock 图标留白修复（824/1024）完整保留，不回退**
-            - **macOS Dock 图标比其他应用大一圈**：`icon.icns` 图形 100% 铺满画布，而 Big Sur 之后规范要求约 80.5%。已按规范比例重绘并留透明边距
-            #### 🧹 精简（按用户要求移除）
-            - **移除「重复上次截图」**：设置页入口 + 后端 IPC + 上次区域状态一并删除（截图 IPC 22→21）
-            - **移除设置页「立即截图」按钮**：触发入口保留浮窗按钮与全局快捷键
-            - **移除截图投影功能**：投影开关、配置项、遮罩窗投影绘制与四周留白全删，导出图恒无投影（画布尺寸 == 选区尺寸）
-            - IPC 总数 **82**（新增 `float_glass_support` +1、移除 `screenshot_repeat_region` −1）
+            - **补齐 `*.webp` 的 TypeScript 模块声明**：`vue-tsc --noEmit`（`npm run build` 的第一步）不认 `.webp`，换图后会报 `TS2307 找不到模块`，而 `vite build` 单独跑却能通过 —— 两套解析器行为不一致，属易漏的构建陷阱，已在 `src/env.d.ts` 补上声明
+            - **更正 `App.vue` 的过时架构注释**：旧注释称「路由用动态组件 + keep-alive 按侧边栏切换 Dashboard / Trends / Rules / Settings」，与实现不符 —— 实际无路由库、无 keep-alive，四个 tab 在 `Dashboard.vue` 内部用 `v-if` 切换
             #### 📊 包体积
-            | 平台 | 产物 | 体积 |
+            | 项目 | 优化前 | 优化后 |
             |---|---|---|
-            | Windows | `-setup.exe`（NSIS 安装器） | ~27 MB |
-            | macOS（Apple Silicon） | `.dmg` | ~27 MB |
-            | Linux | `.deb` / `.rpm` | ~27 MB |
-            | Linux | `.AppImage` | ~107 MB |
+            | 前端 `dist` | 5.08 MB | 1.17 MB（−77%） |
+            | 桌宠图片（16 张） | 5.30 MB | 0.64 MB（−88%） |
             > 完整版本历史见仓库 README。
           releaseDraft: false
           prerelease: false
@@ -154,30 +134,20 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v1.2.4
-            #### ✨ 新增：自动检查更新
-            - **启动时自动检查更新 + 首页可关闭提示横条**：启动 **15 秒后**静默检查 GitHub 最新版本，发现新版本时在统计概览页顶部显示可关闭的提示横条，点「查看更新」跳转 Release 页。关闭时记住该版本号，**同版本不再提示，更高版本仍会提示**。推送逻辑：**24h 节流**在后端强制（重度用户一天开十几次；GitHub 未认证 API 限流 60 次/小时/IP）；**失败完全静默**——断网 / 公司网络拦 GitHub / 限流都是常态，弹「检查失败」等于把基础设施问题伪装成软件故障，故只写日志不打扰用户。**为何不做应用内自动升级**：Tauri updater 需一对签名密钥，且一旦用某密钥发布带 updater 的版本，此后所有版本必须同密钥签名——密钥丢失 = 所有用户只能手动重装；当前 CI 无 `TAURI_SIGNING_PRIVATE_KEY`，为一个提示功能背长期密钥托管责任不划算。设置页原有手动检查按钮**保持不变**（自动 = 告知，手动 = 问询，两套命令并存）
-            #### ✨ 新增：悬浮窗液态玻璃
-            - **悬浮窗液态玻璃外观**：设置页「悬浮指标条」下新增独立开关。开启后浮窗从 **36px / 圆角 18** 放大为 **44px / 圆角 22（完全胶囊形）**，改为高透光材质、能透过它看到桌面。macOS 26+ 走公开的 `NSGlassEffectView`（半透明 + 背景模糊 + **真实折射**），macOS < 26 回落 `NSVisualEffectView`；普通弹窗 / 桌宠 / 主窗口一律不动
-            - **Windows 为何不含背景模糊**：真机像素实测发现系统 Acrylic 对无边框透明窗会渲染成**不透明色块**（背景亮度 255 与 70 时浮窗恒为 212，透光率 0.001），开了反而把原本能透 85% 的 CSS 透明盖死，属负优化 → 明确停用系统材质，改用高透光 CSS（实测透光率 0.80，是普通模式的 3.86 倍）
+            ### 屏幕时间管家 ScreenTime Pro — v1.2.5
+            #### 🚀 体积与性能优化（本版重点）
+            - **安装包与前端资源大幅瘦身**：桌宠皮肤帧图由 PNG 换为 WebP（q80 + alpha 无损）。实测 **16 张图 5.30 MB → 0.64 MB（省 88.0%）**，前端构建产物 `dist` **5.08 MB → 1.17 MB（省 77%）**，其中图片体积占比从 87.0% 降到 43.6%。透明通道经逐像素比对**零损失**（alpha MAE 0.000），半透明边缘 RGB 平均差 2.73/255（约 1%），肉眼不可辨；蜘蛛侠皮肤为二值 alpha，alpha 与边缘 RGB 均无误差
+            - **Rust release 构建启用官方推荐优化**：新增 `[profile.release]` —— `codegen-units=1` + `lto=true` + `opt-level="s"` + `panic="abort"` + `strip=true`（依据 Tauri v2 官方 App Size 指南）。此前项目完全没有该配置，全部走 Rust 默认值（`opt-level=3` / `lto=false` / `codegen-units=16` / `panic=unwind`）
+            - **移除每次落库的冗余聚合写入**：`daily_summaries` 是一张 `(date, app_id)` 预聚合表，每次记录都要多跑一条 UPSERT 维护它 —— 但经全仓核查，**没有任何 SELECT 从它读**（同名的 `get_daily_summaries()` 实际是从 `sessions` 现场 `GROUP BY`）。现已停写该表，每笔使用记录少一次写放大与 B-tree 维护；表结构与清理逻辑保留，老库数据不受影响、**统计口径完全不变**
+            - **清理死代码与死资源**：移除全仓无人引用的 `PetCanvas.vue` / `PetPreviewStage.vue` / `PetLayer.vue` / `spriteLayout.ts`，及其独占的 23 张 sprite 素材（3.4 MB）与 7 张废弃的熊猫切图（2.2 MB）。这些文件**从未进入过构建产物**（Vite tree-shake 已排除），故不影响任何运行时行为，只减负源码与仓库
             #### 🐞 修复
-            - **macOS 全屏截图缺顶部菜单栏一行 / 「全屏变画中画」（P0）**：Tauri 把 `always_on_top` 只映射到 `NSFloatingWindowLevel`(3)，低于菜单栏的 24 级，AppKit 于是把遮罩窗 frame 约束进 `visibleFrame`（扣掉菜单栏那条）—— 菜单栏那块永远选不进去，同时窗口高度被砍约 25pt、整屏冻结帧被拉伸进矮窗口，看着就像画中画。现新增 `screenshot/capture_window.rs` 把遮罩窗提到 `NSScreenSaverWindowLevel`(1000)，两个症状同时消除
-            - **Windows 液态玻璃出现矩形边框阴影**：浮窗窗口尺寸为 `max-content` 且高度恰好等于胶囊高度（窗口边界紧贴胶囊），外扩的 `box-shadow` 被窗口矩形裁掉只剩四角暗块。已改为只用 inset 内高光
-            - **macOS 状态灯仍恒橙**：v1.2.1 把内存门槛设成 0.8 且用 `>=` 判断，而 macOS 内存日常基线就是 70~80% → 门槛与常态线重合成了死阈值。现改为 CPU 独立决定基础档位，内存只做高水位抬升，绝不降档
-            - **macOS 设置面板里本应用图标显示为彩色噪点（P0）**：系统设置「录屏与系统录音」列表中 ScreenTime Pro 的图标渲染成一团绿/洋红色噪点、无法辨认（Dock / Finder 正常）。根因在 `.icns` 容器格式而非图像本身——16px / 32px 两个小尺寸被写成 `icp4` / `icp5` 老式段 + **PNG 载荷**，而 Apple 规范中这两个键的载荷是 24-bit RGB，macOS 10.15.7+ 在 App Bundle 场景下会按 24-bit RGB 解析那段 PNG 压缩流、把压缩字节当像素渲染（同一份 .icns 单独打开却正常，正是该已知缺陷特征）。修复：小尺寸改用现代键 `ic04` / `ic05` + ARGB 载荷（`ARGB` 魔数 + A/R/G/B 四通道各自 PackBits RLE），大尺寸沿用 `ic07`~`ic14` + PNG；生成脚本的 ARGB 编解码器已与 Apple `iconutil` 产出做过字节级等价验证（569B↔569B、1514B↔1514B 逐字节一致）。**v1.2.2 的 Dock 图标留白修复（824/1024）完整保留，不回退**
-            - **macOS Dock 图标比其他应用大一圈**：`icon.icns` 图形 100% 铺满画布，而 Big Sur 之后规范要求约 80.5%。已按规范比例重绘并留透明边距
-            #### 🧹 精简（按用户要求移除）
-            - **移除「重复上次截图」**：设置页入口 + 后端 IPC + 上次区域状态一并删除（截图 IPC 22→21）
-            - **移除设置页「立即截图」按钮**：触发入口保留浮窗按钮与全局快捷键
-            - **移除截图投影功能**：投影开关、配置项、遮罩窗投影绘制与四周留白全删，导出图恒无投影（画布尺寸 == 选区尺寸）
-            - IPC 总数 **82**（新增 `float_glass_support` +1、移除 `screenshot_repeat_region` −1）
+            - **补齐 `*.webp` 的 TypeScript 模块声明**：`vue-tsc --noEmit`（`npm run build` 的第一步）不认 `.webp`，换图后会报 `TS2307 找不到模块`，而 `vite build` 单独跑却能通过 —— 两套解析器行为不一致，属易漏的构建陷阱，已在 `src/env.d.ts` 补上声明
+            - **更正 `App.vue` 的过时架构注释**：旧注释称「路由用动态组件 + keep-alive 按侧边栏切换 Dashboard / Trends / Rules / Settings」，与实现不符 —— 实际无路由库、无 keep-alive，四个 tab 在 `Dashboard.vue` 内部用 `v-if` 切换
             #### 📊 包体积
-            | 平台 | 产物 | 体积 |
+            | 项目 | 优化前 | 优化后 |
             |---|---|---|
-            | Windows | `-setup.exe`（NSIS 安装器） | ~27 MB |
-            | macOS（Apple Silicon） | `.dmg` | ~27 MB |
-            | Linux | `.deb` / `.rpm` | ~27 MB |
-            | Linux | `.AppImage` | ~107 MB |
+            | 前端 `dist` | 5.08 MB | 1.17 MB（−77%） |
+            | 桌宠图片（16 张） | 5.30 MB | 0.64 MB（−88%） |
             > 完整版本历史见仓库 README。
           releaseDraft: false
           prerelease: false
