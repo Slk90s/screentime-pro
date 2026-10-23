@@ -154,7 +154,7 @@
               type="checkbox"
               class="check-input"
               :checked="statusBarConfig.show_cpu"
-              :disabled="!statusBarConfig.enabled"
+              :disabled="statusBarChildrenDisabled"
               @change="onStatusBarItem($event, 'show_cpu')"
             />
           </div>
@@ -164,7 +164,7 @@
               type="checkbox"
               class="check-input"
               :checked="statusBarConfig.show_mem"
-              :disabled="!statusBarConfig.enabled"
+              :disabled="statusBarChildrenDisabled"
               @change="onStatusBarItem($event, 'show_mem')"
             />
           </div>
@@ -175,7 +175,7 @@
               type="checkbox"
               class="check-input"
               :checked="statusBarConfig.show_disk"
-              :disabled="!statusBarConfig.enabled"
+              :disabled="statusBarChildrenDisabled"
               @change="onStatusBarItem($event, 'show_disk')"
             />
           </div>
@@ -185,7 +185,7 @@
               type="checkbox"
               class="check-input"
               :checked="statusBarConfig.show_net"
-              :disabled="!statusBarConfig.enabled"
+              :disabled="statusBarChildrenDisabled"
               @change="onStatusBarItem($event, 'show_net')"
             />
           </div>
@@ -199,7 +199,7 @@
               type="checkbox"
               class="check-input"
               :checked="statusBarConfig.float_enabled"
-              :disabled="!statusBarConfig.enabled"
+              :disabled="statusBarChildrenDisabled"
               @change="onStatusBarItem($event, 'float_enabled')"
             />
           </div>
@@ -877,6 +877,27 @@
 //   3. 备份与诊断合并到一张卡（"数据库"图标）
 //   4. 桌宠卡含 开关 / 操作按钮 / 皮肤 / 编辑器入口
 //   5. 危险区改为独立卡片，警示色
+//
+// ── 修改历史 ────────────────────────────────────────────────
+// 2026-10-23 @v1.2.7：修「进设置页立刻点开关，改动会被晚到的加载覆盖」
+//   · 症状：进设置页后马上点「显示网速」，光标闪一下就弹回原值，用户以为点不动。
+//   · 真机复现（CDP + debug 构建，进入页面 25–46ms 内点击）：
+//       +3ms checked=false（用户点成功）→ +858ms checked=true（被冲回）
+//       且点击瞬间 disabled=true，点击被浏览器直接吞掉，连 change 都不发。
+//   · 根因两条，都在「加载晚于交互」这一个窗口里：
+//     ① 加载方向：`ref.value = await load()` 整体替换，冲掉窗口期内用户写值。
+//     ② 提交方向：提交时发整个本地对象，而本地初值是**默认值**（enabled:false），
+//        于是把后端原本 true 的字段一并写坏 —— 这是**数据损坏**，不只是显示问题。
+//   · 修法：改用「权威基线 + 用户差量」模型（statusBarBaseline/statusBarDirty、
+//     shotConfigBaseline/shotConfigDirty）：
+//       加载返回 → { ...loaded, ...delta }，只让改过的键覆盖权威值
+//       提交     → { ...baseline, ...delta }，不把未加载的默认值当真值发出去
+//   · ⚠️ 踩过的坑：第一版写成 `{ ...loaded, ...statusBarConfig.value }`（整对象
+//     冒充差量），实测把 show_disk / float_enabled / float_glass / enabled 全打成
+//     false 并写回 DB。修 lost update 必须有**真正的差量来源**，否则就是反向丢更新。
+//   · ⚠️ 注意：这是「加载晚于交互」的通用坑。以后新增 `ref.value = await load()`
+//     式初始化，若该 ref 也能被用户即时编辑，必须沿用同一保护。
+// 2026-10-22 @v1.2.5：液态玻璃（v1.2.2）之后无改动，仅体积优化涉及构建产物。
 
 import { ref, onMounted, onBeforeUnmount, computed, nextTick } from "vue";
 import { useI18n } from "vue-i18n";
@@ -965,11 +986,17 @@ onMounted(async () => {
     log.error("[Settings] 监听 pet-enabled-changed 失败", e);
   }
   // 托盘菜单勾选后后端 emit 此事件，设置页卡片即时反映（避免两处状态不一致）
+  // v1.2.7：仍要保留「用户刚改、尚在提交中」的差量 —— 托盘事件可能在用户点击
+  // 之后、IPC 返回之前到达，此时整体覆盖会把乐观更新的值冲掉（同上 lost update）。
   try {
     unlistenStatusBarCfg = await listen<StatusBarConfig>(
       "status-bar-config-changed",
       (e) => {
-        statusBarConfig.value = e.payload;
+        statusBarBaseline = e.payload;
+        statusBarConfig.value =
+          statusBarDirty.size > 0
+            ? { ...e.payload, ...statusBarDelta() }
+            : e.payload;
       },
     );
   } catch (e) {
@@ -1251,25 +1278,140 @@ const glassHint = computed(() => {
   return t("settings.statusBarGlassHint");
 });
 
+// ── v1.2.7：修「进设置页立刻点状态栏开关，会被晚到的加载覆盖」──
+//
+// 缺陷复现（真机 CDP，debug 构建，进入设置页 25–46ms 内就点「显示网速」）：
+//   +3ms    checked=False   ← 用户这一下点成功了（乐观更新已生效）
+//   +858ms  checked=True    ← 被 loadStatusBarConfig 的**整体覆盖**冲回去了
+//   +2209ms checked=True    ← 稳定在旧值，用户视角就是「点了没反应」
+//
+// 根因：`initSettings()` 里 `await getSettings() → await loadBackupConfig()
+//   → await loadStatusBarConfig()` 是串行 await，debug 构建下整条链要 2–4s
+//   （其中 loadStatusBarConfig 还要等 loadGlassSupport 并发完成）。
+//   而 `statusBarConfig.value = await tracker.getStatusBarConfig()` 是一次
+//   **整对象替换**，会把用户在这段窗口里写进去的字段一并冲掉 —— 典型
+//   lost update。release 下窗口只有几十毫秒，所以很难撞上，但并非不可能。
+//
+// ── 修法（v1.2.7 最终版）：权威基线 + 用户差量 ────────────────────
+//
+// ⚠️ 第一版修法错了，记录在此避免重犯：
+//   初版写成 `statusBarConfig.value = { ...loaded, ...statusBarConfig.value }`，
+//   想法是「用户值优先」。但右边是**完整对象**（含全部本地默认值），不是差量，
+//   于是 spread 把 loaded 里用户**没碰过**的字段也一起盖回本地默认值 ——
+//   为了修丢更新，引入了反向丢更新。真机实测（probe_merge_regression.py）：
+//     只点「显示网速」→ show_disk / float_enabled / float_glass / enabled
+//     全被静默打成 false，且经 set_status_bar_config **写回 DB 持久化**。
+//   教训：合并「用户值优先」必须有**差量来源**，不能用整对象冒充差量。
+//
+// 正确模型：
+//   · `statusBarBaseline` —— 后端权威值的快照（加载成功时更新；未加载时为 null）
+//   · `statusBarDirty`    —— 用户**实际改过**的键集合（不是布尔「碰过没有」）
+//   两个用途：
+//   ① 加载返回时合并：`{ ...loaded, ...pick(dirty) }` —— 只让改过的键覆盖权威值
+//   ② 提交时合成：      dirty 非空时，以 baseline 打底再叠 dirty，避免把
+//                        「未加载的本地默认值」当作真实值提交给后端
+//
+// 为什么 ② 必需：`statusBarConfig` 初值是 `enabled:false`，若用户在加载完成前
+//   （debug 下实测 25–46ms 就能点到）点了「显示网速」，旧代码提交的是整个本地
+//   对象，会把后端本来是 true 的总开关/磁盘/浮窗一并写成 false —— 探测脚本实测
+//   复现了这个数据损坏。只加「用户值优先合并」是修不了这条的，因为损坏发生在
+//   提交方向，不在加载方向。
+let statusBarBaseline: StatusBarConfig | null = null;
+const statusBarDirty = new Set<keyof StatusBarConfig>();
+let statusBarTouched = false;
+const statusBarLoaded = ref(false);
+
+/** 取 dirty 键构成的差量对象（只有用户真正改过的字段） */
+function statusBarDelta(): Partial<StatusBarConfig> {
+  const delta: Record<string, unknown> = {};
+  for (const k of statusBarDirty) delta[k as string] = statusBarConfig.value[k];
+  return delta as Partial<StatusBarConfig>;
+}
+
+/** 合成要提交给后端的完整配置：权威值打底 + 用户差量 */
+function statusBarPayload(): StatusBarConfig {
+  const base = statusBarBaseline ?? statusBarConfig.value;
+  return { ...base, ...statusBarDelta() };
+}
+
+/**
+ * v1.2.7：**提交前确保有权威基线**。
+ *
+ * ⚠️ 这里踩过一次坑，务必保留：`statusBarBaseline ?? statusBarConfig.value` 在
+ *   基线还没到手时退化成「本地默认值」，等于给污染开了后门。实测（probe）：
+ *   用户在加载完成前点「显示网速」，提交出去的 payload 里 enabled/float_glass/
+ *   show_disk/float_enabled 全是本地默认的 false，把后端全写坏了 —— 加不加
+ *   dirty 集合都拦不住，因为保护的是「合并」而不是「打底来源」。
+ *
+ * 因此：只要基线为空（首次加载还没回来 / 上次加载失败），提交前先同步拉一次
+ * 后端真值当基线。这一次 IPC 很便宜（读内存里的 config，非 IO），且只在
+ * 「加载还没完成」这个极短窗口里才会发生。
+ */
+async function ensureStatusBarBaseline() {
+  if (statusBarBaseline) return;
+  try {
+    statusBarBaseline = await tracker.getStatusBarConfig();
+    statusBarLoaded.value = true;
+  } catch (err) {
+    log.warn("[Settings] 提交前获取状态栏权威配置失败", err);
+  }
+}
+
+// v1.2.7：子项是否置灰 —— 语义是「总开关关着 → 子项不可点」。
+// ⚠️ 必须区分「还没加载到」与「后端确实是 false」：未加载时 statusBarConfig
+// 里是本地默认 `enabled:false`，若直接据此置灰，用户在加载窗口内点击会被浏览器
+// 吞掉（实测 27–36ms 时 disabled=True，连 change 都不触发）。所以未加载时不置灰，
+// 让乐观更新先顶上。
+// statusBarTouched 为真时可点：用户已把总开关打开（乐观更新领先于加载），
+// 若仍按后端旧值置灰，会看到自己刚打开的开关又把子项锁死。
+const statusBarChildrenDisabled = computed(
+  () => !statusBarTouched && statusBarLoaded.value && !statusBarConfig.value.enabled,
+);
+
 async function loadStatusBarConfig() {
   // 两件事互不依赖，并发发起；任一失败只影响自己的 UI 分支
   await Promise.all([loadGlassSupport(), (async () => {
     try {
-      statusBarConfig.value = await tracker.getStatusBarConfig();
+      const loaded = await tracker.getStatusBarConfig();
+      statusBarBaseline = loaded;
+      if (statusBarDirty.size > 0) {
+        // 只让「用户改过的键」覆盖权威值，其余一律以后端为准
+        statusBarConfig.value = { ...loaded, ...statusBarDelta() };
+        log.info(
+          `[Settings] 状态栏配置加载晚于用户操作，已保留改动键：${[...statusBarDirty].join(",")}`,
+        );
+      } else {
+        statusBarConfig.value = loaded;
+      }
     } catch (err) {
       log.warn("[Settings] 加载状态栏配置失败", err);
+    } finally {
+      statusBarLoaded.value = true;
     }
   })()]);
 }
+
+/** 统一提交入口：合成「权威值 + 差量」后提交，避免把未加载的默认值写坏后端 */
+async function commitStatusBarConfig() {
+  await ensureStatusBarBaseline();
+  await tracker.setStatusBarConfig(statusBarPayload());
+}
+
 // 乐观更新：先翻 ref 再 await IPC，失败回滚（与 onAutostart 模式一致）
 async function onStatusBarEnabled(e: Event) {
   const next = (e.target as HTMLInputElement).checked;
   const prev = statusBarConfig.value.enabled;
+  statusBarTouched = true;
+  statusBarDirty.add("enabled");
   statusBarConfig.value = { ...statusBarConfig.value, enabled: next };
   try {
-    await tracker.setStatusBarConfig(statusBarConfig.value);
+    await commitStatusBarConfig();
+    // 提交成功：后端已接受该值，把它并入基线并清 dirty（避免下次重复叠加）
+    statusBarBaseline = statusBarPayload();
+    statusBarDirty.delete("enabled");
   } catch (err) {
     statusBarConfig.value = { ...statusBarConfig.value, enabled: prev };
+    statusBarDirty.delete("enabled");
     showAlert(
       "warn",
       t("settings.statusBarOff"),
@@ -1285,11 +1427,16 @@ async function onStatusBarItem(
 ) {
   const next = (e.target as HTMLInputElement).checked;
   const prev = statusBarConfig.value[key];
+  statusBarTouched = true;
+  statusBarDirty.add(key);
   statusBarConfig.value = { ...statusBarConfig.value, [key]: next };
   try {
-    await tracker.setStatusBarConfig(statusBarConfig.value);
+    await commitStatusBarConfig();
+    statusBarBaseline = statusBarPayload();
+    statusBarDirty.delete(key);
   } catch (err) {
     statusBarConfig.value = { ...statusBarConfig.value, [key]: prev };
+    statusBarDirty.delete(key);
     showAlert(
       "warn",
       t("settings.statusBarOff"),
@@ -1314,9 +1461,58 @@ const shotHasMore = ref(true);
 /** 加载更多按钮是否忙碌（防连点） */
 const shotLoadingMore = ref(false);
 
+// v1.2.7：与状态栏配置同源的 lost update —— 用户刚改的截图配置可能被晚到的
+// `getConfig()` 整体覆盖。模型与状态栏完全一致：权威基线 + 差量键集合
+// （为什么不能用「整对象 + 布尔标记」，见 loadStatusBarConfig 顶部的踩坑记录）。
+let shotConfigBaseline: ScreenshotConfig | null = null;
+const shotConfigDirty = new Set<keyof ScreenshotConfig>();
+
+/** 取 dirty 键构成的差量对象（只有用户真正改过的字段） */
+function shotConfigDelta(): Partial<ScreenshotConfig> {
+  const delta: Record<string, unknown> = {};
+  for (const k of shotConfigDirty) delta[k as string] = shotConfig.value[k];
+  return delta as Partial<ScreenshotConfig>;
+}
+
+/** 合成要提交给后端的完整配置：权威值打底 + 用户差量 */
+function shotPayload(): ScreenshotConfig {
+  const base = shotConfigBaseline ?? shotConfig.value;
+  return { ...base, ...shotConfigDelta() };
+}
+
+/**
+ * v1.2.7：提交前确保有权威基线 —— 与 ensureStatusBarBaseline 同因同解。
+ * 基线为空时 `?? shotConfig.value` 会退化成「本地默认值」，把后端未触碰字段写坏。
+ * 截图配置的默认值与后端 Default 恰好一致（enabled:true 等），所以现实中不易撞上，
+ * 但不能靠「默认值碰巧相同」来保证正确性（`max_count`/`ocr_engine` 平台差异就是反例）。
+ */
+async function ensureShotBaseline() {
+  if (shotConfigBaseline) return;
+  try {
+    shotConfigBaseline = await screenshot.getConfig();
+  } catch (err) {
+    log.warn("[Settings] 提交前获取截图权威配置失败", err);
+  }
+}
+
+/** 统一提交入口：合成「权威值 + 差量」后提交 */
+async function commitShotConfig() {
+  await ensureShotBaseline();
+  return screenshot.setConfig(shotPayload());
+}
+
 async function loadShotConfig() {
   try {
-    shotConfig.value = await screenshot.getConfig();
+    const loaded = await screenshot.getConfig();
+    shotConfigBaseline = loaded;
+    if (shotConfigDirty.size > 0) {
+      shotConfig.value = { ...loaded, ...shotConfigDelta() };
+      log.info(
+        `[Settings] 截图配置加载晚于用户操作，已保留改动键：${[...shotConfigDirty].join(",")}`,
+      );
+    } else {
+      shotConfig.value = loaded;
+    }
     shotDir.value = await screenshot.dir();
   } catch (err) {
     log.warn("[Settings] 加载截图配置失败", err);
@@ -1380,22 +1576,38 @@ const ocrEngineHint = computed(() => {
 async function onOcrEngine(kind: OcrEngineKind) {
   const prev = shotConfig.value.ocr_engine;
   if (prev === kind) return;
+  shotConfigDirty.add("ocr_engine");
   shotConfig.value = { ...shotConfig.value, ocr_engine: kind };
   try {
-    await screenshot.setConfig(shotConfig.value);
+    await commitShotConfig();
+    shotConfigBaseline = shotPayload();
+    shotConfigDirty.delete("ocr_engine");
     // 切换后重新探测一次：后端会顺带回报资源状态与当前生效引擎
     await loadOcrEngineInfo();
   } catch (err) {
     shotConfig.value = { ...shotConfig.value, ocr_engine: prev };
+    shotConfigDirty.delete("ocr_engine");
     showAlert("warn", t("settings.shotTitle"), err instanceof Error ? err.message : String(err));
   }
 }
 
-/** 数值类改动：先乐观写 ref，再 await IPC，失败则回读真实配置纠偏 */
+/** 数值类改动：先乐观写 ref，再 await IPC，失败则回读真实配置纠偏
+ *
+ * v1.2.7：`corner_radius` / `max_count` 走的是 `v-model.number` **直接写 ref**，
+ * 没有独立的 change handler，所以 dirty 键要在这里按「与基线是否不同」反推。
+ * 否则用户在加载窗口内拖滑块，会被晚到的 `getConfig()` 整体覆盖（+= 丢更新）。
+ */
 async function persistShotConfig() {
-  const snapshot = { ...shotConfig.value };
+  for (const k of ["corner_radius", "max_count"] as const) {
+    if (shotConfigBaseline && shotConfig.value[k] !== shotConfigBaseline[k]) {
+      shotConfigDirty.add(k);
+    }
+  }
+  const snapshot = shotPayload();
   try {
     const res = await screenshot.setConfig(snapshot);
+    shotConfigBaseline = snapshot;
+    shotConfigDirty.clear();
     if (!res.applied && snapshot.enabled) {
       // 快捷键没注册上（被系统/其他软件占用）——其余配置已保存，只是热键没生效
       hotkeyError.value = t("settings.shotShortcutConflict") + " " + (res.error ?? "");
@@ -1513,19 +1725,24 @@ async function applyHotkey(combo: string) {
     hotkeyError.value = "";
     return;
   }
+  shotConfigDirty.add("shortcut");
   shotConfig.value = { ...shotConfig.value, shortcut: combo };
   try {
-    const res = await screenshot.setConfig(shotConfig.value);
+    const res = await commitShotConfig();
     if (res.applied) {
+      shotConfigBaseline = shotPayload();
+      shotConfigDirty.delete("shortcut");
       hotkeyError.value = "";
       return;
     }
     hotkeyError.value = `${t("settings.shotShortcutConflict")} ${res.error ?? ""}`;
     shotConfig.value = { ...shotConfig.value, shortcut: prev };
-    await screenshot.setConfig(shotConfig.value);
+    shotConfigDirty.delete("shortcut");
+    await commitShotConfig();
   } catch (err) {
     hotkeyError.value = err instanceof Error ? err.message : String(err);
     shotConfig.value = { ...shotConfig.value, shortcut: prev };
+    shotConfigDirty.delete("shortcut");
   }
 }
 
@@ -1537,11 +1754,15 @@ async function resetHotkey() {
 async function onShotEnabled(e: Event) {
   const next = (e.target as HTMLInputElement).checked;
   const prev = shotConfig.value.enabled;
+  shotConfigDirty.add("enabled");
   shotConfig.value = { ...shotConfig.value, enabled: next };
   try {
-    await screenshot.setConfig(shotConfig.value);
+    await commitShotConfig();
+    shotConfigBaseline = shotPayload();
+    shotConfigDirty.delete("enabled");
   } catch (err) {
     shotConfig.value = { ...shotConfig.value, enabled: prev };
+    shotConfigDirty.delete("enabled");
     showAlert("warn", t("settings.shotTitle"), err instanceof Error ? err.message : String(err));
   }
 }
@@ -1549,11 +1770,15 @@ async function onShotEnabled(e: Event) {
 async function onShotToggle(e: Event, key: "auto_save") {
   const next = (e.target as HTMLInputElement).checked;
   const prev = shotConfig.value[key];
+  shotConfigDirty.add(key);
   shotConfig.value = { ...shotConfig.value, [key]: next };
   try {
-    await screenshot.setConfig(shotConfig.value);
+    await commitShotConfig();
+    shotConfigBaseline = shotPayload();
+    shotConfigDirty.delete(key);
   } catch (err) {
     shotConfig.value = { ...shotConfig.value, [key]: prev };
+    shotConfigDirty.delete(key);
     showAlert("warn", t("settings.shotTitle"), err instanceof Error ? err.message : String(err));
   }
 }
