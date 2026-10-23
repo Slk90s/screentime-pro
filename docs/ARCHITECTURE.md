@@ -63,26 +63,31 @@
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-10-22（同步至 **v1.2.4**——自动检查更新 + 首页提示横条）——
-> ① **自动检查更新（新功能，只检测提示不做应用内升级）**：启动 15s 后静默调
-> `auto_check_update`，发现新版本时 Dashboard 顶部显示可关闭横条。**该命令永不返回 Err**
-> ——所有失败折叠成 `has_update: false`（与设置页手动 `check_for_update` 的「必须报错」
-> 语义相反，两者共用 `fetch_latest_release()`）。两条状态复用 `settings` 表：
-> `update_last_check_at`（**只在成功抓取后写**，失败不写，否则一次断网锁死 24h）+
-> `update_dismissed_version`（`semver_gt` 严格大于才再提示）。IPC 总数 **84**（+2）。
-> ② **悬浮窗液态玻璃**：浮窗玻璃开关打开时放大为 44px 胶囊形并改高透光材质。
-> macOS 26+ 走 `NSGlassEffectView`（真折射），< 26 回落 `NSVisualEffectView`；
-> **Windows 停用全部系统材质**——真机像素实测 Acrylic/DWM backdrop 对无边框窗口渲染成
-> 不透明色块（透光率 0.001），反而不如纯 CSS（0.850），故 Windows 视觉 100% 交给 CSS。
-> 详见 `float_glass.rs` 模块头与 `CONVENTIONS-screentime-pro.md` 的「Windows 不要加回」红线。
-> ③ **macOS 截图遮罩缺菜单栏行 / 「全屏变画中画」（P0）**：tao 的 `always_on_top` 只映射到
-> `NSFloatingWindowLevel`(3)，低于菜单栏 24 级 → AppKit 把 frame 约束进 `visibleFrame`，
-> 一条规则导致两个症状。修复：`screenshot/capture_window.rs` 把 level 提到
-> `NSScreenSaverWindowLevel`(1000)，`show()` 前调用、`hide` 时恢复。
-> ④ **Windows 液态玻璃矩形边框阴影**：浮窗窗口紧贴胶囊（`max-content` + 高度恰好 44px），
-> 外扩 `box-shadow` 被窗口矩形裁成四角暗块 → 玻璃模式只用 inset 高光。
-> ⑤ **功能精简（用户要求）**：移除「重复上次截图」整链、设置页「立即截图」、
-> 截图投影功能（配置键 8→7，`default_shadow` 与 canvas 投影绘制全删）。
+> 最后更新：2026-10-23（同步至 **v1.2.7**——v1.2.3 ~ v1.2.6 四版合并发布）——
+> **本版为跳过四个中间版本号的合并发布**（远端上一版 v1.2.2），核心是三类「静默失效」。
+> ① **设置页初始化竞态（丢更新 + 反向数据损坏）**：`Settings.vue` 原用
+> `ref.value = await load()` **整体替换**，加载晚于用户操作时冲掉改动；提交时又发**整个本地对象**
+> （初值全是默认值），把后端本是 `true` 的开关一并写成 `false` 并持久化 —— 实测只点「显示网速」，
+> 另 4 个字段被静默关闭写库。现统一改 **「权威基线 + 用户差量」**：`baseline` 存后端权威快照、
+> `dirty` 存用户真正改过的键集合；加载返回 `{ ...loaded, ...delta }`、提交 `{ ...baseline, ...delta }`；
+> 基线为 null 时提交前先同步 `ensure*Baseline()` 拉一次真值（**不可用 `?? ref.value` 兜底**，
+> 那等于拿本地默认值当权威）。覆盖 statusBar（2 写入点 + 托盘推送事件）、shotConfig（4 写入点 +
+> 2 个 v-model 数值项）、通用设置表单、备份开关。
+> ⚠️ 两个踩坑已写进代码注释：**首次加载基线为 null 时不能 `return`**（要用 `FORM_INIT` 当隐式基线）；
+> **比较必须在覆盖基线之前**（否则空 `device_name` 与后端值必然不等，会误判成「用户改过」）。
+> ② **截图遮罩窗抢前台导致采集静默停止（P0）**：`capture` 窗 `visible:false` + `focus:true`，
+> 隐藏窗创建即成为前台且不让出 → `GetForegroundWindow()` 恒返回它，采样每 tick 命中
+> `SELF_HELPER_TITLES` 白名单跳过（实测前台为它 18s 新增 0 条 / 真实应用 1 条）。
+> 修复：`focus` 改 `false` + 采集侧新增「前台不可见即跳过」通用兜底 + 截图收尾主动让出焦点。
+> ③ **OCR 行排序违反全序 panic**：成对阈值（`(a.h+b.h)/2×0.6`）导致 A≈B、B≈C 却 A<C，
+> 改为三段式（y 中心排 → 全局常量阈值归并行号 → 按 (行号,x) 排）。
+> ④ **体积优化 −62.6%（23.31MB → 8.72MB）**：补齐 `src-tauri/Cargo.toml` 的 `[profile.release]`
+> （`codegen-units=1` / `lto` / `opt-level="s"` / `panic="abort"` / `strip`），前置校验全仓
+> `catch_unwind` 0 处、bundle 不含 `.pdb`；桌宠图 PNG→WebP（5.30MB→0.64MB，alpha MAE=0.000）。
+> ⑤ **其余**：液态玻璃浮窗对比度不达标（压暗 0.48，四项全过 AA）；macOS 图标 `ic04/ic05`+ARGB；
+> 桌宠皮肤注册期误校验致丢失；WAL 收敛（`wal_autocheckpoint=256`，4.13→1.05MB）；
+> 启动自动检查更新（`auto_check_update` 永不返回 Err，24h 后端节流，失败全静默）。
+> IPC 总数 **84**（本批未增减）。
 
 ---
 
@@ -90,7 +95,7 @@
 
 跨平台应用使用时长追踪（macOS / Windows / Linux），对标 iOS「屏幕使用时间」。**数据 100% 本地（SQLite bundled），零上传，隐私优先**。
 
-栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v1.2.4**（详见 [`RELEASE.md`](RELEASE.md)）。
+栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v1.2.7**（详见 [`RELEASE.md`](RELEASE.md)）。
 
 > ⚠️ 本节版本号在 v0.7.0 → v0.7.5 期间**长期未更新**（曾停留在 v0.7.0），与 `tauri.conf.json` 脱节。
 > 版本号唯一真实来源是 **`src-tauri/tauri.conf.json` 的 `version`**，改版本时务必回来同步本节。
