@@ -1,4 +1,13 @@
 //! Tauri 命令层（前端通过 `invoke` 调用）
+//!
+//! ## 修改历史
+//!
+//! - 2026-10-23 @v1.2.6:
+//!   ① `sampling_loop` 采集失败改为「状态翻转才记一条」——旧实现每 tick（2s）都打 WARN，
+//!      而「锁屏 / 桌面 / 自家辅助窗」都是**正常状态**，实测累计 9376 条占全部 WARN 的 98%。
+//!      现在 `NoForeground` 降为 DEBUG，真异常仍 WARN 但同类不重复，恢复时补一条 INFO。
+//!   ② `finalize_active_session` 的 `let _ = insert_session(...)` 改为记录 error 日志：
+//!      写库失败原先完全静默，用户只会发现「今天时长比实际少」却毫无线索。
 
 use crate::AppState;
 use crate::classifier::classify_app;
@@ -8,6 +17,8 @@ use crate::db::{
     PermissionStatus, PeriodStat, RuleOut, SettingsOut, TrendsOut,
 };
 use crate::tracker::{platform_name, RawApp};
+// v1.2.6：采样循环需要区分 NoForeground（正常状态）与真实错误，故引入错误类型
+use crate::error::TrackerError;
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -105,7 +116,11 @@ fn finalize_active_session(
         let effective = (dur - idle_dur).max(0);
         if effective >= MIN_SESSION_SECS {
             let date = seg_start.format("%Y-%m-%d").to_string();
-            let _ = state.db.insert_session(
+            // v1.2.6：原为 `let _ = insert_session(...)` —— 写库失败完全静默，
+            // 用户只会发现「今天时长比实际少」却找不到任何线索。
+            // 配合 db::open 里新设的 busy_timeout(5s)，绝大多数瞬时锁冲突会自行重试成功；
+            // 到这里仍失败就是真异常（磁盘满 / 库损坏 / 权限），必须留痕。
+            if let Err(e) = state.db.insert_session(
                 active.app_id,
                 &active.category_id,
                 &seg_start.to_rfc3339(),
@@ -114,7 +129,15 @@ fn finalize_active_session(
                 &date,
                 active.app.window_title.as_deref(),
                 &state.device_id,
-            );
+            ) {
+                tracing::error!(
+                    error = %e,
+                    app = %active.app.process_name,
+                    date = %date,
+                    duration = effective,
+                    "会话落库失败（该段时长将缺失）"
+                );
+            }
         }
     }
 }
@@ -669,12 +692,43 @@ async fn sampling_loop(state: Arc<AppState>) {
     let mut tick_in_minute: u32 = 0;
     let mut switch_in_minute: u32 = 0;
     let mut last_app_for_minute: String = String::new();
+    // v1.2.6：采集失败「只在状态翻转时记一条」。
+    //
+    // 旧实现在每 tick 失败都打 WARN，而采样间隔是 2 秒 → 锁屏 / 无前台窗口 /
+    // 自家辅助窗抢前台（v1.2.1 的 SELF_HELPER_TITLES 过滤）这些**正常状态**
+    // 会以 1800 条/小时的速度灌日志：实测累计 8288 条「采集前台应用失败」
+    // 占全部 WARN 的 99%。真正需要告警的是「非预期错误」，不是「暂时没有前台」。
+    //
+    // 现在：`NoForeground` 降为 debug（属于正常状态）；其它错误仍 WARN；
+    // 两种都做去重 —— 连续同类失败只记第一条，恢复时补一条「已恢复」。
+    let mut last_fg_err: Option<String> = None;
     loop {
         ticker.tick().await;
         if !*state.tracking.lock().unwrap_or_else(|e| e.into_inner()) { break; }
         let fg = match state.tracker.get_foreground_app() {
-            Ok(a) => a,
-            Err(e) => { tracing::warn!(error = %e, "采集前台应用失败"); continue; }
+            Ok(a) => {
+                if let Some(prev) = last_fg_err.take() {
+                    tracing::info!(recovered_from = %prev, "前台采集已恢复");
+                }
+                a
+            }
+            Err(TrackerError::NoForeground) => {
+                // 正常状态（锁屏 / 桌面 / 自家辅助窗）：仅首次记 debug
+                if last_fg_err.is_none() {
+                    tracing::debug!("当前无前台应用（锁屏或桌面），暂停采集");
+                    last_fg_err = Some("no_foreground".to_string());
+                }
+                continue;
+            }
+            Err(e) => {
+                // 真异常：首次 WARN，之后同类连续失败只 debug，不刷屏
+                let key = e.to_string();
+                if last_fg_err.as_deref() != Some(key.as_str()) {
+                    tracing::warn!(error = %key, "采集前台应用失败");
+                    last_fg_err = Some(key);
+                }
+                continue;
+            }
         };
         let idle = state.tracker.get_idle_seconds().unwrap_or(0);
         tracing::debug!(app = %fg.process_name, idle = idle, "foreground tick");

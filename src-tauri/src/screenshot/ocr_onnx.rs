@@ -54,6 +54,14 @@
 //!   - 2026-09-17 @v0.9.0: 初始创建 - det/rec 两段管线 + DB 水平框后处理 + CTC 解码
 //!   - 2026-09-17 @v0.9.0: 性能 - 全局会话缓存 + Level3 图优化 + 放大/面积上限 + 线程数定点 4（附实测）
 //!   - 2026-09-17 @v0.9.0: 运行库 - 改为 `ort::init_from` 显式加载随包 dll，弃用环境变量
+//!   - 2026-10-23 @v1.2.6: 修复 - 文本行排序比较器违反全序导致 panic。
+//!     旧比较器用**成对计算**的容差（`tol = (a.h + b.h) / 2 * 3 / 5`）判定「是否同一行」，
+//!     于是 A≈B、B≈C 却 A<C，违反 `sort_by` 要求的 strict weak ordering；Rust 标准库
+//!     检测到排序漂移会直接 panic（`user-provided comparison function does not correctly
+//!     implement a total order`，`slice/sort/shared/smallsort.rs:854`）。
+//!     现改为 `sort_lines_reading_order`：先按 y 中心排（单元素字段，天然成序）→
+//!     用**全局常量**阈值（行高中位数 × 0.6，只算一次）归并出行号 → 按 (行号, x) 排。
+//!     每一步都是合法全序，且不再存在「两两阈值不一致」的窗口。
 //!
 
 use image::{DynamicImage, RgbaImage};
@@ -264,6 +272,74 @@ pub struct OcrLine {
     pub score: f32,
 }
 
+/// 把 OCR 行按「人类阅读顺序」排序：先上后下、同行从左到右。
+///
+/// 为什么要有这个函数（v1.2.6 修复）
+/// ─────────────────────────────────
+/// 旧实现在 `sort_by` 里用**成对**的行高算「同行阈值」：
+/// ```ignore
+/// let tol = ((a.h + b.h) / 2).max(1) * 3 / 5;   // ← 依赖 a、b 两者
+/// if (ac - bc).abs() <= tol { a.x.cmp(&b.x) } else { ac.cmp(&bc) }
+/// ```
+/// 于是 A 与 B 比时可能算「同一行」，A 与 C 比时又算「不同行」，
+/// 比较关系不再传递 → 违反 `sort_by` 要求的全序（strict weak ordering）。
+/// Rust 标准库在排序时会检测这类漂移并 panic：
+/// `user-provided comparison function does not correctly implement a total order`。
+/// **实测可稳定复现**（见 `.tmp-verify/sort_order_bug.rs`；生产日志
+/// 2026-10-18 的两条 panic 正是此因，发生在 OCR 完成之后）。
+///
+/// 现在的做法分三步，每一步都是合法全序：
+///   1. 只按 `y` 中心升序（单元素字段）
+///   2. 用**常量阈值**（各行高度中位数 × 0.6，全局只算一次）把相邻的 y 中心
+///      归并为同一个「行号」——阈值不随比较对象变化，故成序
+///   3. 按 `(行号, x)` 升序 —— 仍是纯字段比较，天然成序
+///
+/// 返回值不依赖输入顺序（除同 x 同行的等价元素外），故对调用方无副作用。
+fn sort_lines_reading_order(lines: &mut [OcrLine]) {
+    if lines.len() < 2 {
+        return;
+    }
+
+    // 1) 先按 y 中心升序。用稳定排序，保证后续归并结果可预测。
+    let y_center = |l: &OcrLine| l.y as f32 + l.h as f32 / 2.0;
+    lines.sort_by(|a, b| {
+        y_center(a)
+            .partial_cmp(&y_center(b))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // 2) 全局常量阈值：行高中位数 × 0.6（与原「0.6×行高」语义一致，但不再成对计算）
+    let mut heights: Vec<i32> = lines.iter().map(|l| l.h.max(1)).collect();
+    heights.sort_unstable(); // i32 排序，比较器是标准库自带的，必然成序
+    let median_h = heights[heights.len() / 2].max(1);
+    let tol = ((median_h as f32 * 0.6).round() as i32).max(1);
+
+    // 3) 归并出行号（相邻 y 中心差 <= tol 视为同一行）
+    let mut row_ids: Vec<usize> = Vec::with_capacity(lines.len());
+    let mut row = 0usize;
+    let mut prev_y: Option<f32> = None;
+    for l in lines.iter() {
+        let cy = y_center(l);
+        if let Some(p) = prev_y {
+            if (cy - p).abs() > tol as f32 {
+                row += 1;
+            }
+        }
+        row_ids.push(row);
+        prev_y = Some(cy);
+    }
+
+    // 4) 按 (行号, x) 排序。两者都是整数、比较器是纯字段比较 → 全序成立。
+    let mut indexed: Vec<(usize, OcrLine)> = row_ids
+        .into_iter()
+        .zip(lines.iter().cloned())
+        .collect();
+    indexed.sort_by(|(ra, a), (rb, b)| ra.cmp(rb).then_with(|| a.x.cmp(&b.x)));
+    for (slot, (_, line)) in lines.iter_mut().zip(indexed) {
+        *slot = line;
+    }
+}
+
 /// ONNX 增强引擎（det + rec 两段）。线程安全：`Session` 内部有互斥，可跨线程共享。
 pub struct OnnxOcr {
     det: ort::session::Session,
@@ -361,17 +437,22 @@ impl OnnxOcr {
             }
         }
         let rec_ms = t_rec.elapsed().as_millis() as u64;
-        // 排序：y 中心为主序（同行阈值 0.6×行高内按 x 排）
-        lines.sort_by(|a, b| {
-            let ac = (a.y as f32 + a.h as f32 / 2.0) as i32;
-            let bc = (b.y as f32 + b.h as f32 / 2.0) as i32;
-            let tol = ((a.h + b.h) / 2).max(1) * 3 / 5;
-            if (ac - bc).abs() <= tol {
-                a.x.cmp(&b.x)
-            } else {
-                ac.cmp(&bc)
-            }
-        });
+        // 排序：y 中心为主序（同一行内按 x 排）
+        //
+        // ⚠️ v1.2.6 修复「分页/多列文本偶发崩溃」：
+        // 旧实现把「同行阈值」tol 写成 **a、b 两个元素成对计算** 的
+        // `((a.h + b.h) / 2).max(1) * 3 / 5`，于是「是否算同一行」取决于**跟谁比**：
+        // 高行与矮行配对时 tol 大，与另一矮行配对时 tol 小 → 比较结果不再满足
+        // 传递性（A≈B、B≈C 却 A<C）。Rust 的 slice::sort 检测到这种漂移会直接
+        // panic：`user-provided comparison function does not correctly implement
+        // a total order`（日志里 2026-10-18 两条 panic 即此，可稳定复现）。
+        //
+        // 现在改为**三段式**，保证是全序（strict weak ordering）：
+        //   1) 先按 y 中心稳定排序（此刻只用单元素字段，天然成序）
+        //   2) 用**全局固定阈值**（取各行高度的中位数 × 0.6，只算一次）把相邻的
+        //      y 中心归并成「行号」——阈值是常量，不再随配对变化
+        //   3) 按 (行号, x) 排序
+        sort_lines_reading_order(&mut lines);
         // 阶段耗时（SD_OCR_TIME=1 时打印）：一眼看清「慢在 det、rec 还是我们自己的前处理」。
         // 用 println 而非 tracing：探针（cargo test --nocapture）默认没有订阅器，
         // tracing 的 debug 日志根本不会输出，调优时会以为「没走这段代码」。

@@ -32,21 +32,19 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v1.2.5
-            #### 🚀 体积与性能优化（本版重点）
-            - **安装包与前端资源大幅瘦身**：桌宠皮肤帧图由 PNG 换为 WebP（q80 + alpha 无损）。实测 **16 张图 5.30 MB → 0.64 MB（省 88.0%）**，前端构建产物 `dist` **5.08 MB → 1.17 MB（省 77%）**，其中图片体积占比从 87.0% 降到 43.6%。透明通道经逐像素比对**零损失**（alpha MAE 0.000），半透明边缘 RGB 平均差 2.73/255（约 1%），肉眼不可辨；蜘蛛侠皮肤为二值 alpha，alpha 与边缘 RGB 均无误差
-            - **Rust release 构建启用官方推荐优化**：新增 `[profile.release]` —— `codegen-units=1` + `lto=true` + `opt-level="s"` + `panic="abort"` + `strip=true`（依据 Tauri v2 官方 App Size 指南）。此前项目完全没有该配置，全部走 Rust 默认值（`opt-level=3` / `lto=false` / `codegen-units=16` / `panic=unwind`）
-            - **移除每次落库的冗余聚合写入**：`daily_summaries` 是一张 `(date, app_id)` 预聚合表，每次记录都要多跑一条 UPSERT 维护它 —— 但经全仓核查，**没有任何 SELECT 从它读**（同名的 `get_daily_summaries()` 实际是从 `sessions` 现场 `GROUP BY`）。现已停写该表，每笔使用记录少一次写放大与 B-tree 维护；表结构与清理逻辑保留，老库数据不受影响、**统计口径完全不变**
-            - **清理死代码与死资源**：移除全仓无人引用的 `PetCanvas.vue` / `PetPreviewStage.vue` / `PetLayer.vue` / `spriteLayout.ts`，及其独占的 23 张 sprite 素材（3.4 MB）与 7 张废弃的熊猫切图（2.2 MB）。这些文件**从未进入过构建产物**（Vite tree-shake 已排除），故不影响任何运行时行为，只减负源码与仓库
-            #### 🐞 修复
-            - **修复桌宠皮肤选择被静默改回默认**：选择蜘蛛侠皮肤后，刷新或重启应用会悄悄变回熊猫。根因是皮肤注册表在**逐个注册的过程中**就校验「当前皮肤是否存在」，而注册第一张皮肤时后面那些还没进表，于是用户的选择被误判为失效并回落成默认值。现已改为「先全部注册、再统一校验」，并修正了失效皮肤的回落目标（必须是确实已注册的皮肤，而非硬编码 id）。真机验证：切到蜘蛛侠 → 刷新 → 保持蜘蛛侠（DOM 与 localStorage 双确认），反向切回熊猫同样生效
-            - **补齐 `*.webp` 的 TypeScript 模块声明**：`vue-tsc --noEmit`（`npm run build` 的第一步）不认 `.webp`，换图后会报 `TS2307 找不到模块`，而 `vite build` 单独跑却能通过 —— 两套解析器行为不一致，属易漏的构建陷阱，已在 `src/env.d.ts` 补上声明
-            - **更正 `App.vue` 的过时架构注释**：旧注释称「路由用动态组件 + keep-alive 按侧边栏切换 Dashboard / Trends / Rules / Settings」，与实现不符 —— 实际无路由库、无 keep-alive，四个 tab 在 `Dashboard.vue` 内部用 `v-if` 切换
-            #### 📊 包体积
-            | 项目 | 优化前 | 优化后 |
-            |---|---|---|
-            | 前端 `dist` | 5.08 MB | 1.17 MB（−77%） |
-            | 桌宠图片（16 张） | 5.30 MB | 0.64 MB（−88%） |
+            ### 屏幕时间管家 ScreenTime Pro — v1.2.6
+            #### 🐞 修复（本版重点：两个「静默失效」问题）
+            - **修复「截过一次图之后就不再记录时长」**：截图遮罩窗（`ScreenTime Capture`）在 `tauri.conf.json` 里被配置成 `visible:false` 却 `focus:true`，隐藏窗在创建时**仍会成为前台窗口**，并且此后不会自行让出。Windows 上 `GetForegroundWindow()` 从那一刻起一直返回这个看不见的窗口，采样循环每次都判定「这是本程序辅助窗口」并跳过 —— 于是整段时间一条记录都不落库。实测对照（同机同库、均持续发真实鼠标事件保持非空闲）：前台为该隐藏窗时 **18 秒新增 0 条**，前台为真实应用时 **18 秒新增 1 条**。修复三处：① 该窗口 `focus` 改为 `false`（与 `pet`/`pet-menu`/`float` 三个隐藏窗保持一致）；② 采集侧新增「前台窗口不可见即跳过」的通用兜底，不再依赖标题白名单；③ 截图收尾隐藏遮罩窗后，若前台仍卡在它身上则主动让出焦点。验证：修复前 6 分钟内 `ScreenTime Capture` 跳过 **833 次**、成功采集 0 次；修复后同样运行 40 秒，跳过 **0 次**、成功采集 **32 次**，且「切到 WorkBuddy 35 秒 → 切回」能正确落库一条 34 秒记录
+            - **修复 OCR 文本行排序偶发崩溃**：文字识别结果按「行」聚合时，比较器用的是**成对计算**的阈值（`(a.h + b.h) / 2 × 0.6`），导致 A≈B、B≈C 却 A<C，违反了 `sort_by` 要求的全序（strict weak ordering）。Rust 标准库检测到排序漂移会直接 panic：`user-provided comparison function does not correctly implement a total order`。日志中已捕获 2 次（`app.2026-10-18.log`），且用单文件复现出的 panic 消息与线上**逐字一致**（含 `smallsort.rs:854`）。现改为三段式排序：先按 y 中心排 → 用**全局常量**阈值（行高中位数 × 0.6，只算一次）归并出行号 → 按 (行号, x) 排，每一步都是合法全序
+            #### 🔧 加固（不改统计口径）
+            - **写库失败不再静默丢弃**：会话落库原为 `let _ = insert_session(...)`，失败完全无声，用户只会察觉「今天时长比实际少」却找不到任何线索。现改为记录 error 日志（含应用 / 日期 / 时长上下文），并在 DB 连接上设 `busy_timeout=5s`，让瞬时锁冲突自动重试而非直接返回 `SQLITE_BUSY`
+            - **WAL 文件体积收敛**：数据库本体仅 385 KB，旁边却常驻 4.13 MB 的 `-wal`。根因不是「涨上去没降」，而是 `wal_autocheckpoint` 默认 1000 页形成的**均衡态**（1000 × 4096 = 4.1 MB）；此时只设 `journal_size_limit` 完全无效（实测 8 MB 上限对 4.1 MB 的均衡点一次都不会触发）。现设为 `wal_autocheckpoint=256` + `journal_size_limit=1MB`，两档对齐。真机库副本实测：稳态 WAL **4,132,392 B → 1,048,576 B（降 75%）**，每笔写入开销仅 +0.1 ms
+            - **日志噪音治理**：采样间隔 2 秒，旧实现每次采集失败都打 WARN，「锁屏 / 无前台窗口 / 自家辅助窗抢前台」这些**正常状态**会以每小时 1800 条的速度刷日志 —— 历史累计 **9376 条**「采集前台应用失败」，占全部 WARN 的 98%。现改为「只在状态翻转时记一条」：「暂时没有前台」降为 DEBUG，恢复时补一条 INFO，真异常仍 WARN 且同类不重复
+            - **DB 加固可事后核验**：`busy_timeout` / `journal_size_limit` / `wal_autocheckpoint` 都是**连接级**设置，外部工具新开连接读到的只是它自己的默认值。现于启动时回读并打印实际生效值，避免「改了但没生效」无从察觉
+            - **缺图标不再导致启动崩溃**：`default_window_icon().unwrap()` 在图标资源异常时会 panic（表现为「双击没反应」），现降级为警告 + 空图标兜底
+            #### 📌 升级提示
+            - 若你此前遇到「用过一段时间后统计突然不再增长」，本版已修复，升级后无需额外操作
+            - 已有的历史记录不会回填（缺失的那段时间当时就没有写入数据库），本版只保证**此后不再丢**
             > 完整版本历史见仓库 README。
           releaseDraft: false
           prerelease: false
@@ -87,21 +85,19 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v1.2.5
-            #### 🚀 体积与性能优化（本版重点）
-            - **安装包与前端资源大幅瘦身**：桌宠皮肤帧图由 PNG 换为 WebP（q80 + alpha 无损）。实测 **16 张图 5.30 MB → 0.64 MB（省 88.0%）**，前端构建产物 `dist` **5.08 MB → 1.17 MB（省 77%）**，其中图片体积占比从 87.0% 降到 43.6%。透明通道经逐像素比对**零损失**（alpha MAE 0.000），半透明边缘 RGB 平均差 2.73/255（约 1%），肉眼不可辨；蜘蛛侠皮肤为二值 alpha，alpha 与边缘 RGB 均无误差
-            - **Rust release 构建启用官方推荐优化**：新增 `[profile.release]` —— `codegen-units=1` + `lto=true` + `opt-level="s"` + `panic="abort"` + `strip=true`（依据 Tauri v2 官方 App Size 指南）。此前项目完全没有该配置，全部走 Rust 默认值（`opt-level=3` / `lto=false` / `codegen-units=16` / `panic=unwind`）
-            - **移除每次落库的冗余聚合写入**：`daily_summaries` 是一张 `(date, app_id)` 预聚合表，每次记录都要多跑一条 UPSERT 维护它 —— 但经全仓核查，**没有任何 SELECT 从它读**（同名的 `get_daily_summaries()` 实际是从 `sessions` 现场 `GROUP BY`）。现已停写该表，每笔使用记录少一次写放大与 B-tree 维护；表结构与清理逻辑保留，老库数据不受影响、**统计口径完全不变**
-            - **清理死代码与死资源**：移除全仓无人引用的 `PetCanvas.vue` / `PetPreviewStage.vue` / `PetLayer.vue` / `spriteLayout.ts`，及其独占的 23 张 sprite 素材（3.4 MB）与 7 张废弃的熊猫切图（2.2 MB）。这些文件**从未进入过构建产物**（Vite tree-shake 已排除），故不影响任何运行时行为，只减负源码与仓库
-            #### 🐞 修复
-            - **修复桌宠皮肤选择被静默改回默认**：选择蜘蛛侠皮肤后，刷新或重启应用会悄悄变回熊猫。根因是皮肤注册表在**逐个注册的过程中**就校验「当前皮肤是否存在」，而注册第一张皮肤时后面那些还没进表，于是用户的选择被误判为失效并回落成默认值。现已改为「先全部注册、再统一校验」，并修正了失效皮肤的回落目标（必须是确实已注册的皮肤，而非硬编码 id）。真机验证：切到蜘蛛侠 → 刷新 → 保持蜘蛛侠（DOM 与 localStorage 双确认），反向切回熊猫同样生效
-            - **补齐 `*.webp` 的 TypeScript 模块声明**：`vue-tsc --noEmit`（`npm run build` 的第一步）不认 `.webp`，换图后会报 `TS2307 找不到模块`，而 `vite build` 单独跑却能通过 —— 两套解析器行为不一致，属易漏的构建陷阱，已在 `src/env.d.ts` 补上声明
-            - **更正 `App.vue` 的过时架构注释**：旧注释称「路由用动态组件 + keep-alive 按侧边栏切换 Dashboard / Trends / Rules / Settings」，与实现不符 —— 实际无路由库、无 keep-alive，四个 tab 在 `Dashboard.vue` 内部用 `v-if` 切换
-            #### 📊 包体积
-            | 项目 | 优化前 | 优化后 |
-            |---|---|---|
-            | 前端 `dist` | 5.08 MB | 1.17 MB（−77%） |
-            | 桌宠图片（16 张） | 5.30 MB | 0.64 MB（−88%） |
+            ### 屏幕时间管家 ScreenTime Pro — v1.2.6
+            #### 🐞 修复（本版重点：两个「静默失效」问题）
+            - **修复「截过一次图之后就不再记录时长」**：截图遮罩窗（`ScreenTime Capture`）在 `tauri.conf.json` 里被配置成 `visible:false` 却 `focus:true`，隐藏窗在创建时**仍会成为前台窗口**，并且此后不会自行让出。Windows 上 `GetForegroundWindow()` 从那一刻起一直返回这个看不见的窗口，采样循环每次都判定「这是本程序辅助窗口」并跳过 —— 于是整段时间一条记录都不落库。实测对照（同机同库、均持续发真实鼠标事件保持非空闲）：前台为该隐藏窗时 **18 秒新增 0 条**，前台为真实应用时 **18 秒新增 1 条**。修复三处：① 该窗口 `focus` 改为 `false`（与 `pet`/`pet-menu`/`float` 三个隐藏窗保持一致）；② 采集侧新增「前台窗口不可见即跳过」的通用兜底，不再依赖标题白名单；③ 截图收尾隐藏遮罩窗后，若前台仍卡在它身上则主动让出焦点。验证：修复前 6 分钟内 `ScreenTime Capture` 跳过 **833 次**、成功采集 0 次；修复后同样运行 40 秒，跳过 **0 次**、成功采集 **32 次**，且「切到 WorkBuddy 35 秒 → 切回」能正确落库一条 34 秒记录
+            - **修复 OCR 文本行排序偶发崩溃**：文字识别结果按「行」聚合时，比较器用的是**成对计算**的阈值（`(a.h + b.h) / 2 × 0.6`），导致 A≈B、B≈C 却 A<C，违反了 `sort_by` 要求的全序（strict weak ordering）。Rust 标准库检测到排序漂移会直接 panic：`user-provided comparison function does not correctly implement a total order`。日志中已捕获 2 次（`app.2026-10-18.log`），且用单文件复现出的 panic 消息与线上**逐字一致**（含 `smallsort.rs:854`）。现改为三段式排序：先按 y 中心排 → 用**全局常量**阈值（行高中位数 × 0.6，只算一次）归并出行号 → 按 (行号, x) 排，每一步都是合法全序
+            #### 🔧 加固（不改统计口径）
+            - **写库失败不再静默丢弃**：会话落库原为 `let _ = insert_session(...)`，失败完全无声，用户只会察觉「今天时长比实际少」却找不到任何线索。现改为记录 error 日志（含应用 / 日期 / 时长上下文），并在 DB 连接上设 `busy_timeout=5s`，让瞬时锁冲突自动重试而非直接返回 `SQLITE_BUSY`
+            - **WAL 文件体积收敛**：数据库本体仅 385 KB，旁边却常驻 4.13 MB 的 `-wal`。根因不是「涨上去没降」，而是 `wal_autocheckpoint` 默认 1000 页形成的**均衡态**（1000 × 4096 = 4.1 MB）；此时只设 `journal_size_limit` 完全无效（实测 8 MB 上限对 4.1 MB 的均衡点一次都不会触发）。现设为 `wal_autocheckpoint=256` + `journal_size_limit=1MB`，两档对齐。真机库副本实测：稳态 WAL **4,132,392 B → 1,048,576 B（降 75%）**，每笔写入开销仅 +0.1 ms
+            - **日志噪音治理**：采样间隔 2 秒，旧实现每次采集失败都打 WARN，「锁屏 / 无前台窗口 / 自家辅助窗抢前台」这些**正常状态**会以每小时 1800 条的速度刷日志 —— 历史累计 **9376 条**「采集前台应用失败」，占全部 WARN 的 98%。现改为「只在状态翻转时记一条」：「暂时没有前台」降为 DEBUG，恢复时补一条 INFO，真异常仍 WARN 且同类不重复
+            - **DB 加固可事后核验**：`busy_timeout` / `journal_size_limit` / `wal_autocheckpoint` 都是**连接级**设置，外部工具新开连接读到的只是它自己的默认值。现于启动时回读并打印实际生效值，避免「改了但没生效」无从察觉
+            - **缺图标不再导致启动崩溃**：`default_window_icon().unwrap()` 在图标资源异常时会 panic（表现为「双击没反应」），现降级为警告 + 空图标兜底
+            #### 📌 升级提示
+            - 若你此前遇到「用过一段时间后统计突然不再增长」，本版已修复，升级后无需额外操作
+            - 已有的历史记录不会回填（缺失的那段时间当时就没有写入数据库），本版只保证**此后不再丢**
             > 完整版本历史见仓库 README。
           releaseDraft: false
           prerelease: false
@@ -136,21 +132,19 @@ jobs:
           tagName: "v__VERSION__"
           releaseName: "v__VERSION__"
           releaseBody: |
-            ### 屏幕时间管家 ScreenTime Pro — v1.2.5
-            #### 🚀 体积与性能优化（本版重点）
-            - **安装包与前端资源大幅瘦身**：桌宠皮肤帧图由 PNG 换为 WebP（q80 + alpha 无损）。实测 **16 张图 5.30 MB → 0.64 MB（省 88.0%）**，前端构建产物 `dist` **5.08 MB → 1.17 MB（省 77%）**，其中图片体积占比从 87.0% 降到 43.6%。透明通道经逐像素比对**零损失**（alpha MAE 0.000），半透明边缘 RGB 平均差 2.73/255（约 1%），肉眼不可辨；蜘蛛侠皮肤为二值 alpha，alpha 与边缘 RGB 均无误差
-            - **Rust release 构建启用官方推荐优化**：新增 `[profile.release]` —— `codegen-units=1` + `lto=true` + `opt-level="s"` + `panic="abort"` + `strip=true`（依据 Tauri v2 官方 App Size 指南）。此前项目完全没有该配置，全部走 Rust 默认值（`opt-level=3` / `lto=false` / `codegen-units=16` / `panic=unwind`）
-            - **移除每次落库的冗余聚合写入**：`daily_summaries` 是一张 `(date, app_id)` 预聚合表，每次记录都要多跑一条 UPSERT 维护它 —— 但经全仓核查，**没有任何 SELECT 从它读**（同名的 `get_daily_summaries()` 实际是从 `sessions` 现场 `GROUP BY`）。现已停写该表，每笔使用记录少一次写放大与 B-tree 维护；表结构与清理逻辑保留，老库数据不受影响、**统计口径完全不变**
-            - **清理死代码与死资源**：移除全仓无人引用的 `PetCanvas.vue` / `PetPreviewStage.vue` / `PetLayer.vue` / `spriteLayout.ts`，及其独占的 23 张 sprite 素材（3.4 MB）与 7 张废弃的熊猫切图（2.2 MB）。这些文件**从未进入过构建产物**（Vite tree-shake 已排除），故不影响任何运行时行为，只减负源码与仓库
-            #### 🐞 修复
-            - **修复桌宠皮肤选择被静默改回默认**：选择蜘蛛侠皮肤后，刷新或重启应用会悄悄变回熊猫。根因是皮肤注册表在**逐个注册的过程中**就校验「当前皮肤是否存在」，而注册第一张皮肤时后面那些还没进表，于是用户的选择被误判为失效并回落成默认值。现已改为「先全部注册、再统一校验」，并修正了失效皮肤的回落目标（必须是确实已注册的皮肤，而非硬编码 id）。真机验证：切到蜘蛛侠 → 刷新 → 保持蜘蛛侠（DOM 与 localStorage 双确认），反向切回熊猫同样生效
-            - **补齐 `*.webp` 的 TypeScript 模块声明**：`vue-tsc --noEmit`（`npm run build` 的第一步）不认 `.webp`，换图后会报 `TS2307 找不到模块`，而 `vite build` 单独跑却能通过 —— 两套解析器行为不一致，属易漏的构建陷阱，已在 `src/env.d.ts` 补上声明
-            - **更正 `App.vue` 的过时架构注释**：旧注释称「路由用动态组件 + keep-alive 按侧边栏切换 Dashboard / Trends / Rules / Settings」，与实现不符 —— 实际无路由库、无 keep-alive，四个 tab 在 `Dashboard.vue` 内部用 `v-if` 切换
-            #### 📊 包体积
-            | 项目 | 优化前 | 优化后 |
-            |---|---|---|
-            | 前端 `dist` | 5.08 MB | 1.17 MB（−77%） |
-            | 桌宠图片（16 张） | 5.30 MB | 0.64 MB（−88%） |
+            ### 屏幕时间管家 ScreenTime Pro — v1.2.6
+            #### 🐞 修复（本版重点：两个「静默失效」问题）
+            - **修复「截过一次图之后就不再记录时长」**：截图遮罩窗（`ScreenTime Capture`）在 `tauri.conf.json` 里被配置成 `visible:false` 却 `focus:true`，隐藏窗在创建时**仍会成为前台窗口**，并且此后不会自行让出。Windows 上 `GetForegroundWindow()` 从那一刻起一直返回这个看不见的窗口，采样循环每次都判定「这是本程序辅助窗口」并跳过 —— 于是整段时间一条记录都不落库。实测对照（同机同库、均持续发真实鼠标事件保持非空闲）：前台为该隐藏窗时 **18 秒新增 0 条**，前台为真实应用时 **18 秒新增 1 条**。修复三处：① 该窗口 `focus` 改为 `false`（与 `pet`/`pet-menu`/`float` 三个隐藏窗保持一致）；② 采集侧新增「前台窗口不可见即跳过」的通用兜底，不再依赖标题白名单；③ 截图收尾隐藏遮罩窗后，若前台仍卡在它身上则主动让出焦点。验证：修复前 6 分钟内 `ScreenTime Capture` 跳过 **833 次**、成功采集 0 次；修复后同样运行 40 秒，跳过 **0 次**、成功采集 **32 次**，且「切到 WorkBuddy 35 秒 → 切回」能正确落库一条 34 秒记录
+            - **修复 OCR 文本行排序偶发崩溃**：文字识别结果按「行」聚合时，比较器用的是**成对计算**的阈值（`(a.h + b.h) / 2 × 0.6`），导致 A≈B、B≈C 却 A<C，违反了 `sort_by` 要求的全序（strict weak ordering）。Rust 标准库检测到排序漂移会直接 panic：`user-provided comparison function does not correctly implement a total order`。日志中已捕获 2 次（`app.2026-10-18.log`），且用单文件复现出的 panic 消息与线上**逐字一致**（含 `smallsort.rs:854`）。现改为三段式排序：先按 y 中心排 → 用**全局常量**阈值（行高中位数 × 0.6，只算一次）归并出行号 → 按 (行号, x) 排，每一步都是合法全序
+            #### 🔧 加固（不改统计口径）
+            - **写库失败不再静默丢弃**：会话落库原为 `let _ = insert_session(...)`，失败完全无声，用户只会察觉「今天时长比实际少」却找不到任何线索。现改为记录 error 日志（含应用 / 日期 / 时长上下文），并在 DB 连接上设 `busy_timeout=5s`，让瞬时锁冲突自动重试而非直接返回 `SQLITE_BUSY`
+            - **WAL 文件体积收敛**：数据库本体仅 385 KB，旁边却常驻 4.13 MB 的 `-wal`。根因不是「涨上去没降」，而是 `wal_autocheckpoint` 默认 1000 页形成的**均衡态**（1000 × 4096 = 4.1 MB）；此时只设 `journal_size_limit` 完全无效（实测 8 MB 上限对 4.1 MB 的均衡点一次都不会触发）。现设为 `wal_autocheckpoint=256` + `journal_size_limit=1MB`，两档对齐。真机库副本实测：稳态 WAL **4,132,392 B → 1,048,576 B（降 75%）**，每笔写入开销仅 +0.1 ms
+            - **日志噪音治理**：采样间隔 2 秒，旧实现每次采集失败都打 WARN，「锁屏 / 无前台窗口 / 自家辅助窗抢前台」这些**正常状态**会以每小时 1800 条的速度刷日志 —— 历史累计 **9376 条**「采集前台应用失败」，占全部 WARN 的 98%。现改为「只在状态翻转时记一条」：「暂时没有前台」降为 DEBUG，恢复时补一条 INFO，真异常仍 WARN 且同类不重复
+            - **DB 加固可事后核验**：`busy_timeout` / `journal_size_limit` / `wal_autocheckpoint` 都是**连接级**设置，外部工具新开连接读到的只是它自己的默认值。现于启动时回读并打印实际生效值，避免「改了但没生效」无从察觉
+            - **缺图标不再导致启动崩溃**：`default_window_icon().unwrap()` 在图标资源异常时会 panic（表现为「双击没反应」），现降级为警告 + 空图标兜底
+            #### 📌 升级提示
+            - 若你此前遇到「用过一段时间后统计突然不再增长」，本版已修复，升级后无需额外操作
+            - 已有的历史记录不会回填（缺失的那段时间当时就没有写入数据库），本版只保证**此后不再丢**
             > 完整版本历史见仓库 README。
           releaseDraft: false
           prerelease: false

@@ -15,6 +15,14 @@
 //!   会使其短暂成为前台窗口，旧实现无差别采集 → 自家悬浮窗被录成被追踪应用（macOS 浮窗不夺
 //!   frontmost 故无此问题）。新增 SELF_HELPER_TITLES 标题过滤，命中即返回 NoForeground 跳过；
 //!   主窗口 ScreenTime Pro 不过滤（操作设置面板时记录自身属预期）。
+//! - 2026-10-23 @v1.2.6: 新增「前台窗口不可见即跳过」的通用兜底（`IsWindowVisible`）。
+//!   病根：`GetForegroundWindow()` 返回的是**前台**窗口，而前台 ≠ 可见 —— `tauri.conf.json`
+//!   里 `capture` 窗口配了 `visible:false` 却 `focus:true`，隐藏窗创建时仍会成为前台且此后
+//!   **不会自行让出**，导致采样每次都命中上面的标题白名单并跳过，整段不落库。
+//!   A/B 实测（同机同库、均持续发真实鼠标事件保持非空闲）：前台=该隐藏窗 18s 新增 0 条，
+//!   前台=真实应用 18s 新增 1 条。根治见 `tauri.conf.json` 把该窗口 `focus` 改回 false；
+//!   这里是通用防御层（第三方/系统也可能造出隐藏前台窗），判据是「用户在看的东西
+//!   才可能有使用时长」。
 
 use crate::error::TrackerError;
 use crate::tracker::platform::{PlatformTracker, RawApp};
@@ -25,7 +33,7 @@ use windows::Win32::System::Threading::{
     PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
+    GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 
@@ -58,6 +66,34 @@ impl PlatformTracker for WindowsTracker {
             }
             let mut pid: u32 = 0;
             let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+
+            // ── v1.2.6：不可见窗口不能算「用户正在使用的应用」 ──
+            //
+            // 病根：`GetForegroundWindow()` 返回的是「**前台**窗口」，而前台 ≠ 可见。
+            // 一个 hidden 窗口仍可持有前台状态（Tauri 创建时带 focus=true 即如此），
+            // 之后**不会自行退出**前台，只有用户点别的窗口才会换掉。
+            //
+            // 实测（本机 Windows 11，标题为 `ScreenTime Capture` 的遮罩窗）：
+            //   hwnd=8717262  visible=False  class=Tauri Window
+            //   → GetForegroundWindow() 的返回值就是它，且长期不变。
+            // 而 `ScreenTime Capture` 在 `SELF_HELPER_TITLES` 里 → 每次采样都返回
+            // NoForeground → 采样循环 continue → **整段时间一条记录都不落库**。
+            //
+            // A/B 验证（同一台机器、同一份 DB、都持续发真实鼠标事件保持非空闲）：
+            //   前台=ScreenTime Capture(隐藏) → 18s 新增 0 条
+            //   前台=WorkBuddy(真实应用)     → 18s 新增 1 条
+            //
+            // 这条 visible 检查是**通用兜底**：根治靠 `tauri.conf.json` 里把该窗口的
+            // `focus` 改回 false（与 pet / pet-menu / float 三个隐藏窗保持一致）。
+            // 但配置只影响「以后新建的窗口」，且第三方/系统也可能造出隐藏前台窗，
+            // 所以这里再判一次可见性——判据本身是「用户在看的东西才可能有使用时长」。
+            if !IsWindowVisible(hwnd).as_bool() {
+                tracing::debug!(
+                    hwnd = hwnd.0 as usize,
+                    "前台窗口不可见（隐藏窗持有前台），跳过采集"
+                );
+                return Err(TrackerError::NoForeground);
+            }
 
             // 前台窗口标题（用于「按窗口标题分类」）
             let mut title_buf = [0u16; 1024];

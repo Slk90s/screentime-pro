@@ -96,6 +96,11 @@
 //!     根因见 `capture_window.rs` 模块头（tao 的 `always_on_top` → `NSFloatingWindowLevel`(3)
 //!     低于菜单栏 24，AppKit 把 frame 收进 `visibleFrame`）。本文件只在 `show()` 前
 //!     调一次 `capture_window::raise_capture_window`、`hide` 时调 `restore_capture_window`。
+//!   - 2026-10-23 @v1.2.6: 修复 - `hide_capture_window` 新增「隐藏后若前台仍卡在遮罩窗上
+//!     则主动让出焦点」。配合 `tauri.conf.json` 把 capture 窗口的 `focus` 由 true 改 false
+//!     （隐藏窗夺前台会导致 `GetForegroundWindow()` 长期返回一个不可见窗口 → 采集整段失效，
+//!     详见 `tracker/windows.rs` 修改历史）。这里**只在确认仍卡住时**才动焦点，
+//!     避免正常截完图后把用户弹到主窗口。
 //!
 
 /// macOS 截图专属逻辑（屏幕录制授权闸门 / 授权失效根因诊断 / 一键重置授权）。
@@ -418,6 +423,47 @@ fn hide_capture_window(app: &AppHandle) {
     capture_window::restore_capture_window(app, CAPTURE_WINDOW_LABEL);
     if let Some(w) = app.get_webview_window(CAPTURE_WINDOW_LABEL) {
         let _ = w.hide();
+        // v1.2.6：万一隐藏后前台仍停在这张遮罩窗上，主动让出去。
+        //
+        // 说明：Windows 在「前台窗口被 hide」时通常会自己激活下一个窗口，
+        // 所以**多数情况这里什么都不做**。但被观察到的坏状态确实存在
+        // （启动后 `GetForegroundWindow()` 长期返回 visible=False 的
+        //   `ScreenTime Capture`），一旦卡住，采集会整段失效：
+        //   A/B 实测 —— 前台=该隐藏窗 18s 新增 0 条；前台=真实应用 18s 新增 1 条。
+        //
+        // 因此只在「确认仍卡住」时才动焦点，避免正常截完图后被弹到主窗口打扰。
+        // 判断与纠正都只在 Windows 上做（其它平台 hide 行为不同，且已有
+        // tracker 侧的可见性兜底）。
+        #[cfg(target_os = "windows")]
+        if let Some(capture_hwnd) = windows_hwnd_of(&w) {
+            if windows_foreground() == Some(capture_hwnd) {
+                // 交给主窗口接手（用户下一步大概率在这里）；主窗口若被最小化，
+                // set_focus 无效，此时退化为无操作，由 tracker 的 visible 检查兜住。
+                if let Some(main) = app.get_webview_window("main") {
+                    let _ = main.unminimize();
+                    let _ = main.set_focus();
+                }
+            }
+        }
+    }
+}
+
+/// 取 Tauri 窗口在 Windows 上的 `HWND` 数值（非 Windows 恒为 `None`）。
+#[cfg(target_os = "windows")]
+fn windows_hwnd_of(w: &tauri::WebviewWindow) -> Option<isize> {
+    w.hwnd().ok().map(|h| h.0 as isize)
+}
+
+/// 当前前台窗口的 `HWND` 数值（非 Windows 恒为 `None`）。
+#[cfg(target_os = "windows")]
+fn windows_foreground() -> Option<isize> {
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    // Safety: 无参数、无副作用，返回当前前台窗口句柄（可能为空）。
+    let h = unsafe { GetForegroundWindow() };
+    if h.is_invalid() {
+        None
+    } else {
+        Some(h.0 as isize)
     }
 }
 

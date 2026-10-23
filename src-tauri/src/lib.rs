@@ -19,6 +19,9 @@
 //!        （CONVENTIONS 里长期写着 84，那是 v1.1.1 的旧数；v1.2.0 删掉
 //!        `create_float_window`/`hide_float_window` 两个死命令后实际已是 82，
 //!        本次一并按实测校准。）
+//!   - 2026-10-23 @v1.2.6: 加固 - `default_window_icon().unwrap()` 降级为 `match`。
+//!     图标资源异常时（打包缺失 / 解码失败）旧代码直接 panic，表现为「双击 exe 没反应」；
+//!     现在记一条 warn 并用空图标兜底启动，界面其余部分照常可用。
 //!
 
 mod categorizer;
@@ -470,7 +473,17 @@ pub fn run() {
             // 设置页 → 托盘菜单方向的同步句柄：manage 后 commands 里 try_state 取用
             // （原始 item move 进 struct，菜单事件闭包用的是上面的 clone，互不影响）
             app.manage(TrayStatusBarToggle { status_bar: status_item });
-            let icon = app.default_window_icon().unwrap().clone();
+            // v1.2.6：原写法 `.unwrap()` —— 一旦 bundle 图标缺失/损坏（打包配置被改、
+            // 平台覆盖配置没带上 icon），整个应用会在启动时 panic，用户看到的是「双击没反应」，
+            // 而日志里只有一行 panic，极难定位。这里降级为「无图标托盘」继续运行：
+            // 托盘仍可用（Windows 会显示系统默认图标），主功能不受影响。
+            let icon = match app.default_window_icon() {
+                Some(ic) => ic.clone(),
+                None => {
+                    tracing::warn!("未找到默认窗口图标，托盘将使用系统默认图标（功能不受影响）");
+                    tauri::image::Image::new_owned(Vec::new(), 0, 0)
+                }
+            };
             let tray_icon = TrayIconBuilder::with_id("statusbar")
                 .icon(icon)
                 .menu(&tray_menu)

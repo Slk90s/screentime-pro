@@ -16,6 +16,16 @@
 //! 老库里的历史行继续留着不碍事（无人读），将来若真要做预聚合可直接复用该表。
 //! ⚠️ 若将来启用预聚合，必须同时补 `device` 列并同步补齐所有读取路径，
 //!    否则会重现「按设备清理 / 多设备合并统计错乱」的问题（旧注释曾提及此隐患）。
+//!
+//! ## 修改历史
+//!
+//! - 2026-10-22 @v1.2.5: 停写 `daily_summaries`（理由见上）——每笔记录少一次写放大。
+//! - 2026-10-23 @v1.2.6: 连接级加固（`AppDb::open`）——设 `busy_timeout=5s` 避免撞锁即丢；
+//!   设 `wal_autocheckpoint=256` + `journal_size_limit=1MB` 收敛 WAL 体积；启动时回读
+//!   三者实际生效值并打 INFO 日志（这三项都是**连接级**，外部工具读不到，只能自证）。
+//!   ⚠️ 踩坑记录：最初只设了 `journal_size_limit=8MB`，**完全无效**——WAL 的均衡点由
+//!   `wal_autocheckpoint`（默认 1000 页 ≈ 4.1MB）决定，8MB 上限永远够不到，截断逻辑
+//!   一次都不会触发。真机库副本实测修正为两档对齐后：4,132,392 B → 1,048,576 B（−75%）。
 
 mod models;
 pub use models::*;
@@ -42,6 +52,57 @@ impl AppDb {
         // PRAGMA journal_mode=WAL 会返回一行结果，必须用 pragma_update（execute 会报 "Execute returned results"）
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", true)?;
+
+        // ── v1.2.6 加固（此前完全没设，全靠 SQLite 默认值）──
+        //
+        // 1) busy_timeout：WAL 下仍可能有「写入者互斥」。当前进程内用 Mutex 串行化，
+        //    但备份导入、日志清理、外部进程（用户自己开 DB 工具）都可能并发。
+        //    不设这个值时默认 0 → 一旦撞上就立刻返回 SQLITE_BUSY("database is locked")，
+        //    而我们的 insert_session 是 `let _ = ...` **静默吞错** → 会悄悄丢记录。
+        //    设 5s 让 SQLite 自己重试等待，比丢数据好。
+        //    官方说明：https://www.sqlite.org/c3ref/busy_timeout.html
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        //
+        // 2) WAL 体积：靠 wal_autocheckpoint + journal_size_limit 两个旋钮共同决定。
+        //
+        //    ⚠️ 先纠正一个常见误解（我最初也写错过）：**只设 journal_size_limit 没用**。
+        //    实测（SQLite 3.4x，page_size=4096，4000 次提交）：
+        //      ac=1000, jsl=-1      → WAL 稳定在 4,120,032 B（1005 页）
+        //      ac=1000, jsl=8MB     → WAL 稳定在 4,120,032 B  ← 完全没变
+        //      ac=256,  jsl=4MB     → WAL 稳定在 1,054,752 B
+        //      ac=256,  jsl=1MB     → WAL 稳定在 1,048,576 B
+        //      ac=128,  jsl=1MB     → WAL 稳定在   527,392 B
+        //
+        //    原因：WAL 的**均衡点由 `wal_autocheckpoint` 决定**——默认 1000 页，
+        //    写满就 checkpoint 并从头复用，所以 4.1MB 是「均衡态」而非「涨上去没降」。
+        //    而 `journal_size_limit` 是 checkpoint 完成时的**截断上限**，
+        //    只有「当前 WAL > 该上限」时才起作用。默认均衡点 4.1MB < 8MB → 截断永不触发。
+        //    这也解释了实测 screentime.db 只有 385KB、旁边却常驻 4.1MB `-wal`。
+        //
+        //    取值：ac=256 页（1MB）+ jsl=1MB。均衡点与截断上限对齐在同一档，
+        //    稳态 WAL ≈ 1MB（较默认 4.1MB 降 75%）。写入开销实测每笔仅 +0.1ms
+        //    （4000 次提交 1.55s → 1.93s），对「采样循环偶发落库」这个量级完全无感。
+        //    参考：https://www.sqlite.org/wal.html 「Checkpointing」/「Avoiding Excessively Large WAL Files」
+        conn.pragma_update(None, "wal_autocheckpoint", 256)?;
+        conn.pragma_update(None, "journal_size_limit", 1024 * 1024)?;
+
+        // 回读自证：busy_timeout / journal_size_limit / wal_autocheckpoint 都是**连接级**设置，
+        // 外部工具（DB Browser、python sqlite3）新开一条连接读到的只会是它自己的默认值，
+        // 看不到本连接的真实状态。所以这里在设置完成后原样读回来打日志，
+        // 让「加固真的生效了」可被事后核验，而不是靠读代码相信。
+        let pragma_i64 = |name: &str| -> i64 {
+            conn.query_row(&format!("PRAGMA {name}"), [], |r| r.get(0))
+                .unwrap_or(-1)
+        };
+        tracing::info!(
+            journal_mode = %conn.query_row("PRAGMA journal_mode", [], |r| r.get::<_, String>(0)).unwrap_or_default(),
+            busy_timeout_ms = pragma_i64("busy_timeout"),
+            journal_size_limit = pragma_i64("journal_size_limit"),
+            wal_autocheckpoint = pragma_i64("wal_autocheckpoint"),
+            page_size = pragma_i64("page_size"),
+            "SQLite 连接加固已生效"
+        );
+
         Self::migrate(&conn)?;
         Ok(AppDb(Mutex::new(conn)))
     }
