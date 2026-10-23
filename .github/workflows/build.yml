@@ -39,6 +39,7 @@ jobs:
             - **移除每次落库的冗余聚合写入**：`daily_summaries` 是一张 `(date, app_id)` 预聚合表，每次记录都要多跑一条 UPSERT 维护它 —— 但经全仓核查，**没有任何 SELECT 从它读**（同名的 `get_daily_summaries()` 实际是从 `sessions` 现场 `GROUP BY`）。现已停写该表，每笔使用记录少一次写放大与 B-tree 维护；表结构与清理逻辑保留，老库数据不受影响、**统计口径完全不变**
             - **清理死代码与死资源**：移除全仓无人引用的 `PetCanvas.vue` / `PetPreviewStage.vue` / `PetLayer.vue` / `spriteLayout.ts`，及其独占的 23 张 sprite 素材（3.4 MB）与 7 张废弃的熊猫切图（2.2 MB）。这些文件**从未进入过构建产物**（Vite tree-shake 已排除），故不影响任何运行时行为，只减负源码与仓库
             #### 🐞 修复
+            - **修复桌宠皮肤选择被静默改回默认**：选择蜘蛛侠皮肤后，刷新或重启应用会悄悄变回熊猫。根因是皮肤注册表在**逐个注册的过程中**就校验「当前皮肤是否存在」，而注册第一张皮肤时后面那些还没进表，于是用户的选择被误判为失效并回落成默认值。现已改为「先全部注册、再统一校验」，并修正了失效皮肤的回落目标（必须是确实已注册的皮肤，而非硬编码 id）。真机验证：切到蜘蛛侠 → 刷新 → 保持蜘蛛侠（DOM 与 localStorage 双确认），反向切回熊猫同样生效
             - **补齐 `*.webp` 的 TypeScript 模块声明**：`vue-tsc --noEmit`（`npm run build` 的第一步）不认 `.webp`，换图后会报 `TS2307 找不到模块`，而 `vite build` 单独跑却能通过 —— 两套解析器行为不一致，属易漏的构建陷阱，已在 `src/env.d.ts` 补上声明
             - **更正 `App.vue` 的过时架构注释**：旧注释称「路由用动态组件 + keep-alive 按侧边栏切换 Dashboard / Trends / Rules / Settings」，与实现不符 —— 实际无路由库、无 keep-alive，四个 tab 在 `Dashboard.vue` 内部用 `v-if` 切换
             #### 📊 包体积
@@ -93,6 +94,7 @@ jobs:
             - **移除每次落库的冗余聚合写入**：`daily_summaries` 是一张 `(date, app_id)` 预聚合表，每次记录都要多跑一条 UPSERT 维护它 —— 但经全仓核查，**没有任何 SELECT 从它读**（同名的 `get_daily_summaries()` 实际是从 `sessions` 现场 `GROUP BY`）。现已停写该表，每笔使用记录少一次写放大与 B-tree 维护；表结构与清理逻辑保留，老库数据不受影响、**统计口径完全不变**
             - **清理死代码与死资源**：移除全仓无人引用的 `PetCanvas.vue` / `PetPreviewStage.vue` / `PetLayer.vue` / `spriteLayout.ts`，及其独占的 23 张 sprite 素材（3.4 MB）与 7 张废弃的熊猫切图（2.2 MB）。这些文件**从未进入过构建产物**（Vite tree-shake 已排除），故不影响任何运行时行为，只减负源码与仓库
             #### 🐞 修复
+            - **修复桌宠皮肤选择被静默改回默认**：选择蜘蛛侠皮肤后，刷新或重启应用会悄悄变回熊猫。根因是皮肤注册表在**逐个注册的过程中**就校验「当前皮肤是否存在」，而注册第一张皮肤时后面那些还没进表，于是用户的选择被误判为失效并回落成默认值。现已改为「先全部注册、再统一校验」，并修正了失效皮肤的回落目标（必须是确实已注册的皮肤，而非硬编码 id）。真机验证：切到蜘蛛侠 → 刷新 → 保持蜘蛛侠（DOM 与 localStorage 双确认），反向切回熊猫同样生效
             - **补齐 `*.webp` 的 TypeScript 模块声明**：`vue-tsc --noEmit`（`npm run build` 的第一步）不认 `.webp`，换图后会报 `TS2307 找不到模块`，而 `vite build` 单独跑却能通过 —— 两套解析器行为不一致，属易漏的构建陷阱，已在 `src/env.d.ts` 补上声明
             - **更正 `App.vue` 的过时架构注释**：旧注释称「路由用动态组件 + keep-alive 按侧边栏切换 Dashboard / Trends / Rules / Settings」，与实现不符 —— 实际无路由库、无 keep-alive，四个 tab 在 `Dashboard.vue` 内部用 `v-if` 切换
             #### 📊 包体积
@@ -141,6 +143,7 @@ jobs:
             - **移除每次落库的冗余聚合写入**：`daily_summaries` 是一张 `(date, app_id)` 预聚合表，每次记录都要多跑一条 UPSERT 维护它 —— 但经全仓核查，**没有任何 SELECT 从它读**（同名的 `get_daily_summaries()` 实际是从 `sessions` 现场 `GROUP BY`）。现已停写该表，每笔使用记录少一次写放大与 B-tree 维护；表结构与清理逻辑保留，老库数据不受影响、**统计口径完全不变**
             - **清理死代码与死资源**：移除全仓无人引用的 `PetCanvas.vue` / `PetPreviewStage.vue` / `PetLayer.vue` / `spriteLayout.ts`，及其独占的 23 张 sprite 素材（3.4 MB）与 7 张废弃的熊猫切图（2.2 MB）。这些文件**从未进入过构建产物**（Vite tree-shake 已排除），故不影响任何运行时行为，只减负源码与仓库
             #### 🐞 修复
+            - **修复桌宠皮肤选择被静默改回默认**：选择蜘蛛侠皮肤后，刷新或重启应用会悄悄变回熊猫。根因是皮肤注册表在**逐个注册的过程中**就校验「当前皮肤是否存在」，而注册第一张皮肤时后面那些还没进表，于是用户的选择被误判为失效并回落成默认值。现已改为「先全部注册、再统一校验」，并修正了失效皮肤的回落目标（必须是确实已注册的皮肤，而非硬编码 id）。真机验证：切到蜘蛛侠 → 刷新 → 保持蜘蛛侠（DOM 与 localStorage 双确认），反向切回熊猫同样生效
             - **补齐 `*.webp` 的 TypeScript 模块声明**：`vue-tsc --noEmit`（`npm run build` 的第一步）不认 `.webp`，换图后会报 `TS2307 找不到模块`，而 `vite build` 单独跑却能通过 —— 两套解析器行为不一致，属易漏的构建陷阱，已在 `src/env.d.ts` 补上声明
             - **更正 `App.vue` 的过时架构注释**：旧注释称「路由用动态组件 + keep-alive 按侧边栏切换 Dashboard / Trends / Rules / Settings」，与实现不符 —— 实际无路由库、无 keep-alive，四个 tab 在 `Dashboard.vue` 内部用 `v-if` 切换
             #### 📊 包体积

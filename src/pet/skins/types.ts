@@ -14,6 +14,8 @@
  *
  * 修改历史：
  *   - 2026-07-24 @v0.6.2: 初始创建 - 解耦皮肤接口（响应"后续类似功能要解耦"诉求）
+ *   - 2026-10-23 @v1.2.6: 新增 sealRegistration()。修 skin 选择被静默改回默认：
+ *     register() 不能再在「注册未完成」时校验 activeId，需要调用方显式声明注册收尾。
  */
 import type { Component } from 'vue';
 import type { PetState } from '../types';
@@ -52,7 +54,23 @@ export interface PetSkinManifest {
  * 注册表内部形态（仅 export 给 registry.ts 用）。
  */
 export interface PetSkinRegistry {
+  /**
+   * 登记一张皮肤。**只登记、不校验 activeId**。
+   *
+   * ⚠️ v1.2.6 起语义变化：过去 register() 会在 activeId 未命中时立刻回落到
+   * FALLBACK_ID，但注册是逐个进行的，注册第一个皮肤时后面那些「还没注册」的
+   * 皮肤都会被误判为失效，导致用户选择的皮肤被静默改回默认。
+   * 现在校验统一延后到 `sealRegistration()`。
+   */
   register(manifest: PetSkinManifest): void;
+  /**
+   * 声明「内置皮肤已全部注册完毕」，触发一次 activeId 有效性校验
+   * （有效则保持；失效则回落到 FALLBACK_ID 或首个已注册皮肤）。
+   *
+   * `skins/index.ts` 在最后一次 register 之后调用。幂等，可重复调用。
+   * 未调用也不会出错：`active()` / `setActive()` / `reloadActive()` 会懒触发。
+   */
+  sealRegistration(): void;
   get(id: string): PetSkinManifest | undefined;
   list(): PetSkinManifest[];
   active(): PetSkinManifest;
