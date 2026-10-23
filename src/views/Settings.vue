@@ -1096,9 +1096,27 @@ const backupConfig = ref<BackupConfig>({
 });
 const backupBusy = ref(false);
 
+// v1.2.7：与状态栏/截图配置同源 —— `loadBackupConfig` 是整体替换，而备份开关
+// 是**即时保存**（onToggleAutoBackup 立刻写后端）。若加载晚于点击，UI 会被
+// 回滚成旧值，而后端已是新值 → 两边不一致，重进页面又「自己变回去」。
+// 故同样记「权威基线 + 用户差量」，只让改过的键覆盖加载值。
+let backupBaseline: BackupConfig | null = null;
+const backupDirty = new Set<keyof BackupConfig>();
+
 async function loadBackupConfig() {
   try {
-    backupConfig.value = await tracker.getBackupConfig();
+    const loaded = await tracker.getBackupConfig();
+    backupBaseline = loaded;
+    if (backupDirty.size > 0) {
+      const delta: Record<string, unknown> = {};
+      for (const k of backupDirty) delta[k as string] = backupConfig.value[k];
+      backupConfig.value = { ...loaded, ...delta } as BackupConfig;
+      log.info(
+        `[Settings] 备份配置加载晚于用户操作，已保留改动键：${[...backupDirty].join(",")}`,
+      );
+    } else {
+      backupConfig.value = loaded;
+    }
   } catch {
     /* 浏览器预览模式忽略 */
   }
@@ -1107,7 +1125,14 @@ async function loadBackupConfig() {
 async function onToggleAutoBackup(e: Event) {
   const next = (e.target as HTMLInputElement).checked;
   backupConfig.value.enabled = next; // 乐观更新
-  await persistBackupConfig();
+  backupDirty.add("enabled");
+  try {
+    await persistBackupConfig();
+    if (backupBaseline) backupBaseline = { ...backupConfig.value };
+    backupDirty.delete("enabled");
+  } catch {
+    // persistBackupConfig 内部已提示；dirty 保留，等下一次加载以用户意图为准
+  }
 }
 
 async function chooseBackupFolder() {
@@ -1115,7 +1140,10 @@ async function chooseBackupFolder() {
     const selected = await open({ directory: true, multiple: false });
     if (typeof selected === "string" && selected) {
       backupConfig.value.path = selected;
+      backupDirty.add("path"); // v1.2.7：同 onToggleAutoBackup，防被晚到的加载覆盖
       await persistBackupConfig();
+      if (backupBaseline) backupBaseline = { ...backupConfig.value };
+      backupDirty.delete("path");
     }
   } catch (err) {
     showAlert("warn", t("settings.openFailed"), t("settings.openFailedMsg", { err: err instanceof Error ? err.message : String(err) }));
@@ -1983,6 +2011,61 @@ function confirmCleanAll() {
 // （v0.6.2-beta.19 移除"重置设备 ID"按钮：后端未实现 reset_device_id 命令，截图里的"重置"按钮只用作视觉示意，保留会让用户点了报错。设备 ID 不可重置：它绑定了 sessions 数据。）
 
 // 通用设置初始化：版本 + 通用设置 + 备份配置 + 状态栏配置
+//
+// ── v1.2.7：这一组字段也栽在同一个坑里（收尾审计发现的第三处）──
+// 症状（release 构建实测，进设置页 +17ms 就开始打字）：
+//     用户输入 '__race_probe_name__' → getSettings() 返回后被回填成 'DESKTOP-SV0FM39'
+//   · 用户在设备名框里打的字被静默清空并填回旧值。更糟的是：若他接着点「保存」，
+//     保存回去的就是**旧名字**（因为 v-model 已被覆盖），用户会以为「改名不生效」。
+//   · `autostart` 更隐蔽：它有即时提交（onAutostart 直接写后端），若加载晚于点击，
+//     UI 被回滚成旧值而后端已是新值 → 两边长期不一致，下次进页面又「自己变回去」。
+//
+// 修法同前两处：权威基线 + 差量。区别是这组字段**没有独立的 change handler**
+// （`deviceName`/`idleMin`/`retention` 是 v-model 直改），所以差量靠「当前值 vs
+// 基线」比较反推，而不是靠标记 —— 比较法对 v-model 直改也适用。
+//
+// ⚠️ 关键细节：比较必须在**用新基线覆盖之前**做。若先 `settingsBaseline = s`
+//   再比较，空的 deviceName('') 与 s.device_name 必然不等 → 被误判成「用户改过」
+//   → 用户永远看不到真实的设备名。这是很容易写错的顺序问题。
+let settingsBaseline: Awaited<ReturnType<typeof tracker.getSettings>> | null = null;
+/** 用户是否已经动过某个表单字段（动过就不许被加载覆盖） */
+type SettingsDirtyKey =
+  | "device_name"
+  | "idle_threshold"
+  | "data_retention_days"
+  | "autostart";
+const settingsDirty = new Set<SettingsDirtyKey>();
+
+/**
+ * 表单「未加载」时的初值 —— 用作 first-load 的隐式基线。
+ * ⚠️ 必须与下面 `const deviceName = ref("")` 等几个 ref 的初值保持一致。
+ * 改那几个 ref 的初值时，这里要同步改，否则「加载窗口内的用户输入」会被
+ * 误判成「没改过」而被覆盖（或反过来把初值误判成用户改动）。
+ */
+const FORM_INIT = {
+  device_name: "",
+  idle_threshold: 5 * 60,
+  data_retention_days: 365,
+  autostart: false,
+} as const;
+
+/** 依据「当前 UI 值 vs 旧基线」反推哪些键被用户改过（v-model 直改也能捕捉到） */
+function collectSettingsDirty(prev: typeof settingsBaseline) {
+  // ⚠️ 首次加载时 `prev` 是 null，但不能就此 return —— 那会让「首次进入页面、
+  //    加载还没回来就打字」这一最常见场景完全失去保护（实测就是这么漏的）：
+  //    deviceName 初值 ''、用户输入 '__race_probe_name__'，这一改必须被记住。
+  //    解法：没有旧基线时用**表单初值**当基线（FORM_INIT 常量，见上）。
+  const base = prev ?? FORM_INIT;
+  if (deviceName.value !== base.device_name) settingsDirty.add("device_name");
+  if (Math.round(idleMin.value * 60) !== base.idle_threshold) {
+    settingsDirty.add("idle_threshold");
+  }
+  if (retention.value !== base.data_retention_days) {
+    settingsDirty.add("data_retention_days");
+  }
+  if (autostart.value !== base.autostart) settingsDirty.add("autostart");
+}
+
 async function initSettings() {
   try {
     version.value = await getVersion();
@@ -1990,12 +2073,28 @@ async function initSettings() {
     /* 浏览器预览模式忽略 */
   }
   try {
+    const prev = settingsBaseline; // 必须在覆盖前取旧基线
     const s = await tracker.getSettings();
+    collectSettingsDirty(prev); // 用旧基线判断用户是否在等待期间改过
+    settingsBaseline = s;
     settings.value = s;
-    deviceName.value = s.device_name;
-    idleMin.value = Math.max(1, Math.round(s.idle_threshold / 60));
-    retention.value = s.data_retention_days;
-    autostart.value = s.autostart;
+    if (settingsDirty.size > 0) {
+      // 加载值打底，用户改过的字段保留用户值（方向不能反）
+      if (!settingsDirty.has("device_name")) deviceName.value = s.device_name;
+      if (!settingsDirty.has("idle_threshold")) {
+        idleMin.value = Math.max(1, Math.round(s.idle_threshold / 60));
+      }
+      if (!settingsDirty.has("data_retention_days")) retention.value = s.data_retention_days;
+      if (!settingsDirty.has("autostart")) autostart.value = s.autostart;
+      log.info(
+        `[Settings] 通用设置加载晚于用户操作，已保留改动字段：${[...settingsDirty].join(",")}`,
+      );
+    } else {
+      deviceName.value = s.device_name;
+      idleMin.value = Math.max(1, Math.round(s.idle_threshold / 60));
+      retention.value = s.data_retention_days;
+      autostart.value = s.autostart;
+    }
   } catch {
     /* 浏览器预览模式忽略 */
   }
@@ -2017,10 +2116,17 @@ async function initSettings() {
 async function onAutostart(e: Event) {
   const next = (e.target as HTMLInputElement).checked;
   autostart.value = next; // 乐观更新：立即反映到 :checked 与 :class="{ on }"
+  // v1.2.7：autostart 是即时提交的，用户一点就代表「我希望它是这个值」，
+  // 记进 dirty 以免晚到的 getSettings() 把它回滚成旧值（那会造成 UI 与后端不一致）
+  settingsDirty.add("autostart");
   try {
     await tracker.setAutostart(next);
+    // 提交成功：把该字段并入基线，解除 dirty
+    if (settingsBaseline) settingsBaseline = { ...settingsBaseline, autostart: next };
+    settingsDirty.delete("autostart");
   } catch (err) {
     autostart.value = !next; // 失败回滚
+    settingsDirty.delete("autostart");
     showAlert("warn", t("settings.autostartFailed"), t("settings.autostartFailedMsg", { err: err instanceof Error ? err.message : String(err) }));
   }
 }
@@ -2042,6 +2148,10 @@ async function onSave() {
     settings.value.idle_threshold = effectiveIdle;
     settings.value.data_retention_days = effectiveRetention;
     deviceName.value = effectiveName;
+    // v1.2.7：保存成功即视为「用户改动已被后端接受」，清掉差量并刷新基线，
+    // 否则下次进页面还带着旧 dirty，会挡住后续的权威值刷新。
+    settingsBaseline = { ...settings.value };
+    settingsDirty.clear();
     showAlert("info", t("settings.saved"), t("settings.savedMsg"));
   } catch (e) {
     log.error("保存设置失败", e);
