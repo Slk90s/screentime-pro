@@ -27,56 +27,36 @@
     修正 §4.1 中「CI 面对已存在 Release 行为不确定 → 必须删掉重建」的旧判断（实测 CI 走
     「找到既存 Release → 上传」且三次成功）；§3.1 补重切实测资产体积（MiB 口径）；
     §7 v0.9.0 行补 tag/commit 与两端 Release id、资产数与体积。
+  - 2026-10-26 @v1.2.8: 修正 - v1.2.8 双端发布后对账。① 头部「最后更新」推进至 v1.2.8，
+    并把**累积了 8 个版本（v0.9.5 ~ v1.2.7）的「上一版」堆叠段落压回 v1.2.7 一行**——
+    原头部占 46 行、越滚越长已不可读，本文件价值在「怎么发」而非「发过什么」（后者归 §7 与
+    README 版本历史表）。② §3.1「当前 releaseBody 现值」由 **v1.0.0 更正为 v1.2.8**
+    （此前连续 7 个版本未同步此句，属文档描述滞后而非代码问题），并补「缩进块扫描」校验法
+    与正则抽取的历史失败症状。③ §7 版本表补 v1.2.8 行（材质换档 / 双层职责分离 / native_blur 分档）。
 -->
 
 > 目的：定义 **版本号从哪来、发版前改哪些地方、CI 怎么跑、出问题怎么回滚**。
 > 与 README 区别：README 是用户面（去哪下载、每个版本有什么），本文件是维护者面（怎么发出去）。
-> 最后更新：2026-10-26（**v1.2.8 发版中** —— macOS 15 悬浮窗玻璃右端外溢 3px + 双弧修复；版本号同步见 §1.1）——
-> **本版为合并发布**：远端上一版为 v1.2.2，v1.2.3 / v1.2.4 / v1.2.5 / v1.2.6 四个中间版本号**均未单独发版**，全部改动随 v1.2.7 一次交付。
-> 本版内容：**三类「静默失效」修复** ——
-> ① **设置页初始化竞态（丢更新 + 反向数据损坏，三处同源）**：`ref.value = await load()` 整体替换
-> 冲掉用户改动；提交时又发整个本地对象（初值全是默认值），把后端本是 `true` 的开关一并写成
-> `false` 并持久化（实测只点「显示网速」→ 另 4 个字段被静默关闭写库）。统一改
-> **「权威基线 + 用户差量」**（baseline + dirty Set），覆盖状态栏 / 截图配置 / 通用设置表单 / 备份开关。
-> ② **截图遮罩窗抢前台导致采集静默停止（P0）**：`visible:false` + `focus:true` 的隐藏窗创建即成为
-> 前台且不让出 → `GetForegroundWindow()` 恒返回它、采样每 tick 跳过（修复前 6 分钟跳过 833 次、
-> 采集 0 次；修复后 40 秒跳过 0 次、采集 32 次）。
-> ③ **OCR 行排序违反全序 panic**：成对阈值导致 A≈B、B≈C 却 A<C，改三段式排序。
-> 另有：液态玻璃浮窗对比度（压暗 0.48，四项全过 AA）、macOS 图标 `ic04/ic05`+ARGB、
-> 桌宠皮肤丢失、**体积 -62.6%（23.31→8.72MB）**、桌宠图 WebP 化（5.30→0.64MB）、
-> WAL 收敛（-75%）、启动自动检查更新。IPC 总数 **84**（本批未增减）。
-> 上一版 v1.2.2：tag / commit `0a0cb4d`（轻量 tag `v1.2.2`），CI run `39574377148`（#71）三平台全 success，GitHub Release `419351846` **6 资产 / 241.6 MiB**（AppImage 107.59 / rpm 27.30 / deb 27.29 / exe 27.22 / dmg 26.56 / app.tar.gz 25.62 MiB）；Gitee Release `1225950` **5 附件 / 134.0 MiB + 2 源码包**（exe 27.22 / dmg 26.56 / app.tar.gz 25.62 / deb 27.29 / rpm 27.30 MiB；AppImage 107.59 MiB 超 Gitee 单文件 100 MB 上限，仅 GitHub 提供）；main 与 gitee 镜像分支均已同步）。
-> 本版内容：① **悬浮窗液态玻璃（新功能）**——浮窗玻璃开关打开后放大为 44px 胶囊形 + 高透光材质；
-> macOS 26+ 走 `NSGlassEffectView`（真折射），< 26 回落 `NSVisualEffectView`；
-> **Windows 明确不调任何系统材质**（真机像素实测 Acrylic/DWM backdrop 对无边框窗口渲染成不透明
-> 色块，透光率 0.001 < 纯 CSS 的 0.850），视觉 100% 由 CSS 承担。② **macOS 截图遮罩缺菜单栏行 /
-> 「全屏变画中画」（P0）**：``always_on_top`` 在 macOS 只映射到 `NSFloatingWindowLevel`(3)，
-> 低于菜单栏 24 级 → AppKit 把 frame 约束进 `visibleFrame`，一条规则产生两个症状；新增
-> `screenshot/capture_window.rs` 把 level 提到 `NSScreenSaverWindowLevel`(1000)。
-> ③ **Windows 液态玻璃矩形边框阴影**：浮窗窗口紧贴胶囊，外扩 `box-shadow` 被裁成四角暗块，
-> 改为只用 inset。④ **功能精简（用户要求）**：移除「重复上次截图」（截图 IPC 22→21）、
-> 设置页「立即截图」、截图投影（配置键 8→7）。IPC 总数 **82**（+`float_glass_support` −`screenshot_repeat_region`）。
-> 上一版 v1.2.1：tag/commit `15114da`（annotated tag `v1.2.1`）；CI run `39366037767` 三平台全 success；GitHub Release `417979506` **6 资产 / 242.5 MiB**（rpm 27.31 / dmg 27.16 / app.tar.gz 25.87 / deb 27.30 / exe 27.22 / AppImage 107.60 MiB）；Gitee Release `1221109` **5 附件 / 134.9 MiB + 2 源码包**（AppImage 超 100MB 上限仅 GitHub）。内容——三处跨平台实机修复（前两处 Windows，第三处 macOS）——① **P0「状态栏开了却看不到」**：浮窗 localStorage `float_pos` 存的是**副屏还在时**的负坐标（历史 `x=-643/-900/-2157`），副屏移除/布局变化/分辨率缩小后旧坐标指向已不存在的屏幕，恢复链路**无边界校验**，窗口被忠实还原（实测单屏 1536×864 机器上浮窗物理坐标 `(-695,159)`，整个在屏幕左边界之外）。修复：`float_window.rs` 新增 `clamp_to_visible_area`，在 show/move/resize 三条路径后用**物理像素**枚举所有显示器，窗口与任一屏水平重叠不足自身宽 1/3 即判定离屏、回落到主屏右上角（右/上各留 24px）；物理像素判定规避多屏混合 DPI 歧义，屏内时不动用户位置，已本机移回验证状态栏显示正常。② **自家浮窗被录制成应用**：顶部「记录中 screentime-pro · ScreenTime Float」。float/pet/pet-menu/capture 与主窗口同进程同 exe，在辅助窗口按下（浮窗 startDragging）会让其短暂成为 `GetForegroundWindow` 前台窗口，旧实现无差别采集入库（macOS 浮窗不夺 frontmost 故无此问题）。修复：`tracker/windows.rs` 新增 `SELF_HELPER_TITLES` 标题过滤，前台为自家辅助窗口时返回 NoForeground 跳过该 tick、不建会话；主窗口 ScreenTime Pro 不过滤（操作设置页记录自身属预期）。③ **macOS 状态灯恒定橙色不变色**：v1.2.0 负载值取 `peak=max(cpu,mem)`，macOS 内存长期维持 70~80%（wired 联动 + compressor 压缩内存 + 文件缓存，属系统常态而非真紧张），峰值被内存长期钉在 ≥0.65 橙档、CPU 回落也不变绿（Windows 内存口径更低更跳故正常）。修复：`float/FloatBar.vue` 的 loadLevel 改为 **CPU 瞬时值为主信号**，内存 `<80%`（`MEM_WARN`）不参与档位、`≥80%` 才抬升（80~85% 深橙、≥85% 红），五档阈值不变。IPC 总数不变（**82**）。）
-> 上一版 v1.2.0：tag/commit `4ad2ca3`；CI run `39096674417` 三平台全 success；GitHub Release `416228297` **6 资产 / 242.4 MiB**（rpm 27.30 / dmg 27.17 / app.tar.gz 25.88 / deb 27.30 / exe 27.22 / AppImage 107.59 MiB）；Gitee Release `1214841` **4 附件 / 108.7 MiB**（AppImage 超 100MB 上限仅 GitHub）。内容——功能增强版—— ① **多屏截图「鼠标在哪截哪屏」（微信式 Alt+A）**：截图从「固定主屏」改为「抓光标停靠的那块屏」，新增 `screenshot/cursor.rs`（平台原生坐标全局光标位置），xcap 用 `Monitor::from_point`、macOS SCK 用 `SCDisplay::frame().contains` 选屏，均回落主屏；顺带修复多屏异 DPI 抓副屏拿错 scale 的遮罩窗错位隐患 ② **浮窗负载状态灯**：最左侧状态点由固定 accent 橙改为按系统负载动态变色（5 档 + unknown 灰，tooltip 显示档位 + 实时 CPU/内存） ③ **代码体检清理**：删 3 处死代码 + 消除 33 处 unwrap 违规 + 清理 error.rs 半死代码 + 浮窗移除「重复上次区域」按钮；IPC 84→82。发版后按约定删 Gitee 旧版 v1.0.0（id 1173888）。）
-> 上一版 v1.1.1：tag/commit `ac8a172`；CI run `39021234836` 三平台绿；GitHub Release `415702872` 6 资产 / 254.4 MiB；Gitee Release `1212859` 4 附件 / 113.9 MiB。内容——修复版—— ① macOS 截图「小窗口快照」（P0：`SCStreamConfiguration` 缺宽高，Apple 默认 1920×1080 → 显式设宽高 + ±2px 自检回落）② 多显示器原点不再写死 0,0 ③ 几何口径统一物理像素 ④ 移除滑动截长图（置顶遮罩窗遮挡滚动目标，架构内不可达）⑤ 工程收口（console→log 统一日志、规则 enabled 补传、今天按钮单日刷新、5 死命令清理、IPC 95→84）。发版后按约定删 Gitee 旧版 v0.9.6（id 1159180）。）
-> 上一版 v1.0.0：tag/commit `c703284`；CI run `36530432030` 三平台绿；GitHub Release `398870240` 6 资产；Gitee Release `1173888` 5 附件。内容——首个正式版—— ① 滑动截长图（`screenshot/long.rs`
-> 长图会话 + 重叠检测拼接，四件套 IPC 88→92，首屏用冻结帧，完成复用 `screenshot_commit`）
-> ② macOS 截图画中画 Retina 几何换算修复 ③ 文字标注敲定后可再拖动 ④ 工程收口
-> （proc::hidden / system_load+platform / screenshot+platform）。
-> 上一版 v0.9.7：四缺陷修复版（用户实测反馈）—— ① Windows
-> 录制应用名重复（name 曾填窗口标题，改用进程名去 `.exe`）② macOS「Item-0」入镜
-> （`kCGWindowLayer==0` 过滤）③ 截图重入工具条入镜（`CAPTURE_IN_FLIGHT` RAII 闸门 +
-> 隐藏自身 capture 窗口）④ 截图历史单选失效（`.shot-item` 补 `position:relative`）。
-> 上一版 v0.9.6：弹窗交互修复版（弹窗「确定」关不掉 + 检查更新标题漏参）。
-> 上一版 v0.9.5：Windows 升级卸载修复（NSIS 卸载钩子重写）。再上一版 v0.9.4（二次重切）：
-> tag / commit `03c676c`；CI run `35560701713` 三平台全 success；GitHub Release `392693550`
-> 6 资产；Gitee Release `1157170` 4 附件；**Gitee 配额 311.9 / 1024 MiB**。
-> CI run `35503786492` 三平台全 success；
-> GitHub Release `392387464` **6 资产 / 240.6 MiB**（exe 27.17 / dmg 26.84 / app.tar.gz 25.59 /
-> deb 27.13 / rpm 27.13 / AppImage 106.71 MiB）；Gitee Release `1155845` **5 附件 / 133.9 MiB**
-> （AppImage 106.7 MB 超 Gitee 单文件上限，仅 GitHub 提供）；发版前删除 Gitee 旧版 v0.7.6/7/8
-> 释放 165.2 MiB，配额现为 868.1 / 1024 MiB（余 155.9））
-
+> 最后更新：2026-10-26（**v1.2.8 已发布并对账** —— macOS 15 悬浮窗玻璃右端外溢 3px + 双弧；
+> 版本号同步见 §1.1，IPC 总数 **85**）。
+> 本版内容：**macOS 15 悬浮窗「玻璃右端 3px 灰边 + 右角双弧」P0 修复** ——
+> 根因是**两层同尺寸且都带 `border-radius`**：外层 `.float-bar` 全面铺满窗口并画圆角 + 边框，
+> 内层 `.f-content` 又画一次圆角，两个圆角的曲率中心不重合 → 右侧出现「双弧」；同时外层
+> `width:100%` 在 `box-sizing:border-box` 下把内容区撑得比窗口窄 2px，玻璃材质（NSVisualEffectView）
+> 按窗口矩形绘制、CSS 只覆盖到内容区，右端留出约 3px 未被 CSS 覆盖的**材质原色带**（浅色壁纸上即灰边）。
+> 修法：① DOM 改**双层职责分离**——外层仅负责窗口铺满 + 居中（`width:100%`、
+> `justify-content:center`、不参与测量），内层 `.f-content` 负责真实尺寸（`width:max-content`、
+> `flex:none`、唯一被 `ResizeObserver` 测量的元素），圆角与边框只保留在**外层一次**；
+> ② `WIDTH_SLACK = 2` 语义随之明确为「2 × 外层边框宽度」，窗口宽度按内层实测宽 + 2 计算，消除右端缝隙；
+> ③ 材质换档 `HudWindow`(13) → **`UnderWindowBackground`(21)** —— 前者本身偏灰、暗色遮罩重，
+> 在浅色壁纸上呈「灰板」而非玻璃；④ 新增 `native_blur: bool` 做**配色分档**：
+> 原生模糊可用（Liquid / Vibrancy）时压低 CSS 背景不透明度、把对比度交给系统材质；
+> 原生材质不可用（Acrylic / None）时由 CSS 全权承担（沿用 v1.2.2 结论：Windows 不调系统材质）。
+> `translucency` 字段随 `FloatGlassSupport` 一并下发（Liquid 0.85 / Vibrancy 0.55 / 其余 0.0），
+> **本版前端尚未消费**，留待 macOS 26 真机对比度数据到位后再接。
+> ⚠️ **本版 macOS 15 真机观感未复验**：Windows 侧只能验证「能编译、能跑、逻辑不回归」，
+> 玻璃观感属 macOS 独有渲染路径，须在 Mac 上目视确认三件事——右端 3px 灰边没了没、玻璃透不透、字清不清楚。
+> 上一版 v1.2.7：tag / commit `e704b2d`（轻量 tag）；CI run `39906361489` 三平台全 success；GitHub Release `421483547` **6 资产 / 195.89 MiB**（AppImage 99.15 / exe 21.69 / app.tar.gz 18.30 / deb 18.91 / dmg 18.91 / rpm 18.91 MiB）；Gitee Release `1232618` **5 附件 / 96.74 MiB + 2 源码包**（AppImage 超 Gitee 单文件 100 MB 上限，仅 GitHub 提供）。内容——**累积修复版（v1.2.3 ~ v1.2.6 四版合并发布）**——① **设置页初始化竞态**（`ref.value = await load()` 整体替换 + 提交整个本地对象 → 反向数据损坏，统一改「权威基线 + 用户差量」）② **截图遮罩窗抢前台致采集静默停止（P0）**（`focus:true` 隐藏窗恒为前台，采样每 tick 跳过；修复前 6 分钟跳过 833 次、采集 0 次）③ **OCR 行排序违反全序 panic**（成对阈值 → 三段式排序）；另含液态玻璃浮窗对比度压暗 0.48、macOS 图标 `ic04/ic05`、桌宠皮肤丢失、体积 −62.6%、桌宠图 WebP 化、WAL −75%、启动自动检查更新。IPC 总数 **84**（本批未增减）。
 ---
 
 ## 1. 版本号的唯一真实来源
@@ -161,19 +141,24 @@ grep -n 'badge/version' README.md
 `.github/workflows/build.yml` 中三个 job（windows / linux / macos）**各写了一份**
 `releaseBody`，内容是**硬编码的字符串**，不会自动跟着版本变。
 
-**当前仓库的三份 `releaseBody` 已是 v1.0.0 的文案**（v0.7.6 起每版发版时同步改写）。
-v1.0.0 的 body 为两段：「#### ✨ 新功能（本版重点）」写滑动截长图 + mac 画中画修复 + 文字标注可拖动，
-「#### 🧹 工程收口」写 proc::hidden / cfg 收口 / IPC 88→92，
-末尾为「#### 📊 包体积」表（三份 body 仍逐字相同）。
-上一版 v0.9.7 的 body 为一段：「#### 🐞 四缺陷修复（本版重点）」写**用户实测反馈的四缺陷根因与修法**
-（Windows 应用名重复 / macOS「Item-0」/ 截图重入工具条入镜 / 截图历史单选失效）。
-上一版 v0.9.6 的 body 为「#### 🐞 弹窗交互修复（本版重点）」（弹窗「确定」关不掉根因 +
-标题漏传插值参数 + 确认链路顺序修正）。
-上一版 v0.9.5 的 body 为「#### 🔧 Windows 升级卸载修复（本版重点）」（「无法卸载!」根因 + 轮询杀进程 + 卸载尾部校验）。
-上一版 v0.9.4 的 body 为「#### 🟣 macOS 截图体验重做（本版重点）」（紧凑授权弹窗 / 2s 轮询 / 启动预请求 / SCK 引擎 / 权限四件套 IPC 84→88 / Info.plist）。
-上一版 v0.9.2 的 body 为四段（「🔧 修复」+「🔍 可追溯性（新增）」+「📊 包体积」）。
+**当前仓库的三份 `releaseBody` 已是 v1.2.8 的文案**（v0.7.6 起每版发版时同步改写），
+三份**逐字相同**（实测各 2423 chars，YAML 解析后 2424），可用「缩进块扫描」而非正则校验一致性：
+取 `releaseBody: |` 的基准缩进，正文缩进为基准 +2，遇到首个非空且缩进 ≤ 基准的行即视为块结束。
+（历史上用正则 `releaseBody: \|\n(.*?)(?=\n      - name:)` 抽取，会吞掉后续兄弟键，
+症状是三份「长度分别为 3757/3757/3758」且差异恰好落在 `release: true` vs `release: false`。）
+v1.2.8 的 body 结构为：标题行 `### 屏幕时间管家 ScreenTime Pro — v1.2.8` →
+`🐞 P0 修复`（玻璃右端 3px 灰边 + 右角双弧的根因与四步修法）→ `🔍 为什么会这样`（材质按窗口矩形绘制、
+CSS 只覆盖内容区的机制说明）→ `✅ 验证` → `📌 已知局限`（**明确写出 macOS 15 真机观感未复验**）。
+上一版 v1.2.7 的 body 为「累积修复版（v1.2.3 ~ v1.2.6 四版合并）」——三类静默失效（设置页初始化竞态 /
+截图遮罩窗抢前台 / OCR 行排序 panic）+ 体积 −62.6%。
+更早的 v1.0.0 为两段：「#### ✨ 新功能（本版重点）」滑动截长图 + mac 画中画 + 文字标注可拖动，
+「#### 🧹 工程收口」proc::hidden / cfg 收口 / IPC 88→92，末尾「#### 📊 包体积」表。
 历史教训：v0.7.5 及以前长期停留在 v0.7.0 的旧文案（"整合 0.6.2 全部 Beta 修复"、
 日历月视图、喂食系统修复等），与当版内容完全无关。
+**v1.2.8 发版时另发现一处长期偏差**：`releaseBody` 现值说明上一版还写着「v1.0.0 的文案」，
+实际早已随 v1.2.0 / v1.2.1 / v1.2.2 / v1.2.7 改写——**说明性文字比代码更容易滞后**，
+本节点的核对应与 `grep -c 'releaseBody' build.yml` 一起做，不能只看文档描述。
+
 
 > 后果：若打新版 tag 却忘了改这里，线上 Release Notes 会显示**上一版**的内容，
 > 用户看到的更新说明完全错误。
@@ -377,6 +362,7 @@ echo "   git push origin main && git push origin v$NEW"
 
 | 版本 | 发布时间 | 状态 | 关键说明 |
 |------|----------|------|----------|
+| **v1.2.8** | 2026-10-26 | 🐞 **修复版（macOS 15 悬浮窗玻璃右端 3px + 双弧）** | **macOS 15 悬浮窗玻璃「右端溢 3px 灰边 + 右角双弧」P0 修复**。根因：**两层同尺寸且都带 `border-radius`** —— 外层 `.float-bar`（铺满窗口、画圆角 + 边框）与内层 `.f-content`（又画一次圆角）**曲率中心不重合** → 右端呈双弧；同时外层 `width:100%` 在全局 `box-sizing:border-box` 下把内容区撑得比窗口窄 2px，而 `NSVisualEffectView` 按**窗口矩形**绘制、CSS 只覆盖到内容区 → 右端露出一条约 3px **未被 CSS 覆盖的材质原色带**（浅色壁纸上是灰边，深色上不易察觉）。修法：① **双层职责分离** —— 外层只管铺满 + 居中（`width:100%` / `justify-content:center` / 不参与测量），内层只管真实尺寸（`width:max-content` / `flex:none` / 唯一被 `ResizeObserver` 测量的元素），**圆角与边框只保留外层一次**；② `WIDTH_SLACK = 2` 语义明确为「2 × 外层边框宽度」，窗口宽 = 内层实测宽 + 2，右端缝隙消失；③ 材质换档 `HudWindow`(13) → **`UnderWindowBackground`(21)** —— 前者本身偏灰、暗色遮罩重，浅色壁纸上呈「灰板」而非玻璃；④ 新增 `native_blur: bool` 做**配色分档**：原生模糊可用（Liquid / Vibrancy）时压低 CSS 背景不透明度、对比度交给系统材质，不可用（Acrylic / None）时由 CSS 全权承担（沿用 v1.2.2 结论：Windows 不调系统材质）；⑤ `translucency` 随 `FloatGlassSupport` 下发（Liquid 0.85 / Vibrancy 0.55 / 其余 0.0），**本版前端未消费**，留待 macOS 26 真机对比度数据到位后再接。IPC 总数 **85**（本版未增减；⚠️ 此前 `CONVENTIONS` 写的 84 是**错的**，已按 `generate_handler!` 实测校正）。**验证**：`cargo check` 零警告 / `vue-tsc --noEmit` 零错误；macOS 分支在本机（Windows）无法直接编译，另建 **`float-glass-probe` 交叉编译探针**（`cargo check --target aarch64-apple-darwin` + `#[path]` 引真实源文件）编译通过，并用两次**注入错误反向验证**确认探针确实在编译 macOS 分支而非跳过（`UnderWindowBackground`→`...XXX` 报 E0599；`Some(FLOAT_RADIUS_GLASS)`→`Some("22")` 报 E0308）。⚠️ **macOS 15 真机观感未复验**：右端灰边是否消失 / 玻璃通透度 / 13px 文字在浅色壁纸上的对比度（≥4.5:1），须在 Mac 上目视确认。**发布落点**：tag / commit `bd58503`（轻量 tag `v1.2.8`）；CI run `40266414622` 三平台全 success；GitHub Release `423843748` **6 资产 / 195.90 MiB**（AppImage 99.15 / exe 21.70 / rpm 18.92 / dmg 18.91 / deb 18.91 / app.tar.gz 18.30 MiB）；Gitee Release `1241841` **5 附件 / 96.75 MiB**（+2 自动源码包；AppImage 99.15 MiB 超 Gitee 单文件 100 MB 上限，仅 GitHub 提供）；Gitee 按「只留最新一版 + ocr-runtime」约定已删旧版 v1.2.7（id 1232618，释放 96.74 MiB），现存 `ocr-runtime` + `v1.2.8`，配额 **166.24 / 1024 MiB（16.2%）**。5 个下载链接 HEAD 复核 HTTP 200 且 `Content-Length` 与本地字节逐项相符。 |
 | **v1.2.7** | 2026-10-23 | 🐞 **累积修复版（v1.2.3 ~ v1.2.6 四版合并发布）** | **本版跳过 v1.2.3 ~ v1.2.6 四个中间版本号**（远端上一版为 v1.2.2），全部改动一次交付。**三类「静默失效」**：① **设置页初始化竞态（丢更新 + 反向数据损坏，三处同源）** —— `ref.value = await load()` 整体替换冲掉用户改动；提交时又发整个本地对象（初值全是默认值），把后端本是 `true` 的开关一并写成 `false` 并持久化（实测只点「显示网速」→ 另 4 个字段被静默关闭写库）。统一改 **「权威基线 + 用户差量」**（`baseline` + `dirty: Set<keyof T>`），覆盖状态栏（2 写入点 + 托盘推送）、截图配置（4 写入点 + 2 个 v-model 数值项）、通用设置表单、自动备份开关。② **截图遮罩窗抢前台致采集静默停止（P0）** —— `visible:false` + `focus:true` 的隐藏窗创建即成为前台且不让出，`GetForegroundWindow()` 恒返回它、采样每 tick 命中白名单跳过（修复前 6 分钟跳过 **833 次**、采集 **0 次**；修复后 40 秒跳过 **0 次**、采集 **32 次**）。修复：`focus` 改 `false` + 采集侧「前台不可见即跳过」兜底 + 收尾主动让出焦点。③ **OCR 行排序违反全序 panic** —— 成对阈值 `(a.h+b.h)/2×0.6` 致 A≈B、B≈C 却 A<C，改三段式（y 中心排 → 全局常量阈值归并行号 → 按 (行号,x) 排）。**其他修复**：液态玻璃浮窗中浅色壁纸对比度（2.69:1 → 逐像素定标压暗 0.48，四项全过 WCAG AA）；macOS 设置面板图标彩色噪点（`icp4/icp5`+PNG → `ic04/ic05`+ARGB，与 `iconutil` 字节级等价）；桌宠皮肤选择被静默改回默认（注册期误校验 `activeId`，非首张皮肤必丢）。**优化**：安装包 **23.31MB → 8.72MB（−62.6%）**（补 `[profile.release]`：lto/strip/opt-level=s/panic=abort）+ 桌宠图 PNG→WebP **5.30MB → 0.64MB（−88%，alpha MAE=0.000）**；WAL 稳态 **4.13MB → 1.05MB（−75%）**；写库失败不再静默丢弃；日志噪音治理（9376 条占 98% 的常态 WARN 降噪）；停写 `daily_summaries` 死表。**新增**：启动 15s 后自动检查更新 + 首页可关闭提示横条（24h 后端节流、失败全静默、同版本只提示一次；刻意**不做应用内自动升级** —— updater 需长期密钥托管，丢失即全体用户只能重装）。IPC 总数 **84**（本批未增减）。**验证**：`verify_v127_init_race.py` 18/18、`verify_v127_residual_race.py` 6/6、`verify_capture_no_focus.py` 4/4、`human_regression.py` 24/25（唯一失败 = QuickAssist 占前台锁的环境干扰，非产品缺陷）。**发布落点**：tag / commit `e704b2d`（轻量 tag `v1.2.7`）；CI run `39906361489` 三平台全 success；GitHub Release `421483547` **6 资产 / 195.89 MiB**（AppImage 99.15 / exe 21.69 / app.tar.gz 18.30 / deb 18.91 / dmg 18.91 / rpm 18.91 MiB）；Gitee Release `1232618` **7 附件**（exe 21.69 / dmg 18.91 / app.tar.gz 18.30 / deb 18.91 / rpm 18.91 MiB，合计 96.74 MiB + 2 自动源码包；AppImage 99.15 MiB 超 Gitee 单文件 100 MB 上限，仅 GitHub 提供）；Gitee 按「只留最新两版 + ocr-runtime」约定已删旧版 v1.2.1（id 1221109）与 v1.2.2（id 1225950），现存 ocr-runtime + v1.2.7，配额 166.23 / 1024 MiB（16.2%） |
 | **v1.2.2** | 2026-10-21 | ✨+🐞 **液态玻璃 + 五项修复 + 三项功能精简** | **悬浮窗液态玻璃（新功能）**：浮窗玻璃开关打开后从 36px/圆角18 放大为 **44px/圆角22 胶囊形** + 高透光材质。macOS 26+ 走 `NSGlassEffectView`（半透明+背景模糊+**真折射**），< 26 回落 `NSVisualEffectView`；**Windows 明确不调任何系统材质**——真机像素实测 Acrylic/DWM backdrop 对无边框窗口渲染成**不透明色块**（背景亮度 255 与 70 时浮窗恒 212，透光率 **0.001**），反而不如纯 CSS（**0.850**），故停用系统材质、视觉 100% 交给 CSS（实测玻璃 0.800 vs 普通 0.207 = 3.86 倍）。**修复四项**：① **macOS 截图遮罩缺菜单栏行 / 「全屏变画中画」（P0）**——tao 的 `always_on_top` 只映射到 `NSFloatingWindowLevel`(3)，低于菜单栏 24 级，AppKit 遂把 frame 约束进 `visibleFrame`（扣掉菜单栏那条），一条规则产生两个症状；新增 `screenshot/capture_window.rs` 把 level 提到 `NSScreenSaverWindowLevel`(1000)，`show()` 前调用、`hide` 时恢复（非 macOS 空实现）。② **Windows 液态玻璃矩形边框阴影**——浮窗窗口 `width:max-content` + 高度恰好 44px，窗口边界**紧贴胶囊**，外扩 `box-shadow` 被窗口矩形裁掉只剩四角暗块，改为只用 inset 内高光。③ **macOS 状态灯仍恒橙**——v1.2.1 的内存门槛 0.8 用 `>=` 判断，而 macOS 内存日常基线即 70~80%，门槛与常态线重合成了死阈值；改为 CPU 独立决定基础档位、内存只做高水位抬升。④ **macOS Dock 图标偏大**——`icon.icns` 图形 100% 铺满画布，Big Sur 起规范要求约 80.5%，已按规范重绘。**功能精简（用户要求）三项**：移除「重复上次截图」整链（设置页入口 + IPC `screenshot_repeat_region` + `last_region` 状态 + `screenshot_commit` 的 `region` 入参 + `save_cropped`，**截图 IPC 22→21**）、移除设置页「立即截图」按钮（触发入口保留浮窗与快捷键）、**截图投影功能整体下线**（`ScreenshotConfig.shadow` 配置键 8→7、`default_shadow`、工具栏开关、canvas 投影绘制与四周留白全删，导出图恒无投影）。**IPC 总数 82**（+`float_glass_support` −`screenshot_repeat_region`）。**验证**：`cargo check` 零警告、`vue-tsc --noEmit` 零错误、IPC 实测复核 82、i18n zh/en 各 425 键对齐。**发布落点**：tag / commit `0a0cb4d`（轻量 tag `v1.2.2`）；CI run `39574377148`（#71）三平台全 success；GitHub Release `419351846` **6 资产 / 241.6 MiB**（AppImage 107.59 / rpm 27.30 / deb 27.29 / exe 27.22 / dmg 26.56 / app.tar.gz 25.62 MiB）；Gitee Release `1225950` **5 附件 / 134.0 MiB**（+2 自动源码包，AppImage 仅 GitHub）；Gitee 已同步（按「只留最新两版」约定已删旧版 v1.2.0 / id 1214841，现存 ocr-runtime + v1.2.1 + v1.2.2） |
 | **v1.2.1** | 2026-10-20 | 🐞 **修复版（状态栏离屏 + 自家浮窗被录制 + macOS 灯不变色）** | **三处跨平台实机修复**（前两处 Windows，第三处 macOS）。① **状态栏开了却看不到（P0）**：浮窗 localStorage `float_pos` 保存的是副屏还在时的负坐标（历史 `x=-643/-900/-2157`），副屏移除/布局变化/分辨率缩小后被**无校验恢复**，窗口整个落到屏幕外（实测单屏 1536×864 机器上物理坐标 `(-695,159)`），用户无抓手拖回。修复：`float_window.rs` 新增 `clamp_to_visible_area`，在 show/move/resize 三路径后用**物理像素**枚举显示器，窗口与任一屏水平重叠不足自身宽 1/3 即回落主屏右上角（右/上各留 24px）；物理像素判定规避多屏混合 DPI 歧义，屏内不动用户位置，已本机移回验证显示正常。② **自家浮窗被录制成应用**：顶部「记录中 screentime-pro · ScreenTime Float」。辅助窗口与主窗口同进程同 exe，在其上按下（浮窗 startDragging）会短暂成为前台，旧实现无差别采集入库（macOS 浮窗不夺 frontmost 故无此问题）。修复：`tracker/windows.rs` 新增 `SELF_HELPER_TITLES` 标题过滤，命中即 NoForeground 跳过、不建会话；主窗口不过滤。③ **macOS 状态灯恒定橙色不变色**：v1.2.0 负载取 `peak=max(cpu,mem)`，macOS 内存长期 70~80%（wired/compressor/文件缓存，系统常态）把峰值钉在橙档、CPU 回落不变绿。修复：`float/FloatBar.vue` loadLevel 改为 CPU 瞬时主信号，内存 `<80%`（`MEM_WARN`）不参与、`≥80%` 才抬升档位（80~85% 深橙、≥85% 红），五档阈值不变。IPC 总数不变（**82**）。**发布落点**：tag / commit `15114da`（annotated）；CI run `39366037767` 三平台全 success；GitHub Release `417979506` **6 资产 / 242.5 MiB**（rpm 27.31 / dmg 27.16 / app.tar.gz 25.87 / deb 27.30 / exe 27.22 / AppImage 107.60 MiB）；Gitee Release `1221109` **5 附件 / 134.9 MiB**（+2 自动源码包，AppImage 仅 GitHub）；发版后按约定删 Gitee 旧版 v1.1.1（id 1212859），现存 ocr-runtime + v1.2.0 + v1.2.1 |
