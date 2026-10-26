@@ -69,6 +69,8 @@
         "title": "ScreenTime Float",
         "width": 340,
         "height": 36,
+        "x": 24,
+        "y": 24,
         "minWidth": 140,
         "minHeight": 36,
         "resizable": false,

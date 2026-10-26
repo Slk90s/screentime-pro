@@ -906,6 +906,14 @@ const API_ERROR_BODY_CHARS: usize = 200;
 /// 更新」的事故里，两条通道同时不可达是并列主因。Gitee 是本项目既有的发布落点
 /// （OCR 运行库的下载源也在这里），可达性有保障。
 /// 镜像只是**回落**：GitHub 任一条成功就不碰它，避免多一次跨境请求的延迟。
+///
+/// ⚠️ 「国内连不上」这个结论只对**直连**成立。第三个成因是代理：
+/// `Cargo.toml` 里 reqwest 关掉了 `default-features`，连带丢了 `system-proxy`，
+/// 于是它只认 `HTTPS_PROXY` 环境变量、**不读系统代理设置**。Clash/Surge 这类
+/// GUI 客户端默认改的是系统代理而不是环境变量 → 用户以为"开着代理"，进程实际
+/// 直连出境。已在 v1.2.10 的 Cargo.toml 补上 `system-proxy`。
+/// 因此若再收到「检测不到更新」，先看日志里的通道来源：走 Gitee 说明是网络，
+/// 三条都 `请求失败` 且用户开了代理 → 大概率是代理没被读到（旧版本）。
 async fn fetch_latest_release() -> Result<(String, String, String), String> {
     // 为什么单独设 connect_timeout：只有整体 timeout 时，GitHub 被墙要**干等满 10 秒**
     // 才开始试下一条通道，三条串起来就是 30 秒的黑屏等待。连接阶段 5 秒就放弃，

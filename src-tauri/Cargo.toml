@@ -33,7 +33,25 @@ tauri-plugin-single-instance = "2"
 # 跨平台后台定时任务（采样循环）
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 # 检查更新：拉取 GitHub Releases API（用 rustls 避开 native openssl 依赖）
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
+#
+# v1.2.10（2026-10-26）：补 `system-proxy`。这是「检测不到更新」的**第三个成因**，
+# 且是唯一一个纯代码改动就能修的：
+#   `default-features = false` 会连带关掉 reqwest 默认集里的 `system-proxy`
+#   （reqwest-0.12.28/Cargo.toml:101-106 的 default 含它），于是 reqwest 只读
+#   `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 环境变量（hyper-util 的
+#   `Builder::from_env`），**不读操作系统代理设置**。
+#   macOS 的系统代理在「系统设置 → 网络 → 代理」里，Clash / Surge 等 GUI 客户端
+#   默认就是改那里而不是设环境变量 —— 于是国内用户开着代理时，三条通道全部
+#   直连出境 → 全灭 → 前端提示「已是最新」。这解释了为什么部分用户
+#   「浏览器能开 GitHub，应用却检测不到更新」。
+#   代价：macOS 多依赖 system-configuration、Windows 多依赖 windows-registry
+#   （各一个纯系统绑定 crate，无额外 TLS/运行时）。
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+    "blocking",
+    "system-proxy",
+] }
 # 自动归类引擎的 LRU 缓存（容量 256，进程名 → 分类 ID）
 lru = "0.12"
 

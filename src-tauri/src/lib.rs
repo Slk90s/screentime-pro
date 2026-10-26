@@ -780,25 +780,42 @@ pub fn run() {
             // 里那份 `.inner_size(340, 44)` / `.min_inner_size(140, h)` 属于**死代码路径**
             // （只有"窗口被销毁后重建"才会走到，当前没有任何路径 destroy float 窗口）。
             //
-            // 这条事实直接决定 conf 该怎么改（报告 §2.4 方案 3 + §3.3 第一条的冲突）：
-            //   - `height: 36 → 44`：**可以且应当改**。它只影响窗口的初始高度，
-            //     即「玻璃用户冷启动时窗口已 44」，配合 FloatBar 的 `height:100%`
-            //     彻底消掉「窗口 44 / 胶囊 36 → 底部露 8px 材质」。
-            //     非玻璃用户多出来的这一帧 44 会在 FloatBar onMounted 的 fitWidth
-            //     （**在 show 之前**）里被 `resize_float_window` 压回 36，用户看不到。
-            //   - `minHeight: 36 → 44`：**绝不能改**。`resize_float_window` 在玻璃关闭时
-            //     会 `set_size(w, 36)`（float_window.rs:256 `current_height`），
+            // 这条事实直接决定 conf 该怎么改（报告 §2.4 方案 3 三项的最终裁决）：
+            //
+            //   - `x/y: 24`：**已加**。conf 无 x/y 时 tao 会兜底 `ns_window.center()`
+            //     （tao-0.35.3/platform_impl/macos/window.rs:331
+            //     `if attrs.position.is_none() { ns_window.center(); }`），
+            //     而 float 窗口 340px 宽、主窗口 1040px 宽且自身 center —— 于是残影
+            //     正好压在主窗口正中央（报告 §2.2 T0），最显眼的位置。
+            //     给 x/y 后残影落到屏幕左上角 24px 处，用户几乎不会注意。
+            //     ⚠️ 前端 applyPosition 随后会用 localStorage 或「主屏右上角」覆盖它，
+            //     所以 x/y 只影响「show 到 applyPosition 之间那几帧」—— 正是残影窗口期。
+            //     ⚠️ tauri 要求 x/y **同时给**才生效
+            //     （tauri-runtime-wry-2.11.4/src/lib.rs:974 `if let (Some(x), Some(y))`），
+            //     只给一个等于没给。
+            //
+            //   - `height: 36 → 44`：**不改，维持 36**。这条我先前判"可以且应当改"，
+            //     是**错的**，现按实际时序推翻：
+            //     ① 它对玻璃用户**没有收益** —— 玻璃档的 44 已由本文件下方
+            //        `float_glass::apply` 后的 `set_size(cur_w, 44)` 在 show **之前**
+            //        落定，且 FloatBar 的 `height:100%` 会自动跟随；conf 写 44 只是重复。
+            //     ② 它对非玻璃用户**有实际损害** —— 时序是
+            //        `set_float_visible(true)` 里的 `window.show()`（lib.rs:835）**早于**
+            //        webview 加载完成后的 `onMounted → fitWidth()`（FloatBar.vue:545）。
+            //        中间这段时间窗口已上屏、CSS 已按 `height:100%` 画出 44px 胶囊，
+            //        等 fitWidth 调 `resize_float_window` 压回 36 时才跳一下。
+            //        即「为了消掉一个本来就已消除的 8px 差，制造一个新的可见跳动」。
+            //     ③ 真正消掉「窗口 44 / 胶囊 36」的是 v1.2.10 把 CSS 改成
+            //        `height:100%`（单一来源），不是改 conf —— 两者不要混为一谈。
+            //
+            //   - `minHeight: 36 → 44`：**绝不改，维持 36**。`resize_float_window` 在
+            //     玻璃关闭时会 `set_size(w, 36)`（float_window.rs:256 `current_height`），
             //     而 minHeight 44 会让 OS 直接拒绝这次缩高 → 高度差 8px 永久消不掉，
             //     且前端 1Hz 每秒重试一次 set_size/set_position → **每秒抖动**。
-            //     这正是报告 §3.3 第一条点名的那个坑，故维持 36 不动。
-            //     （即「conf 的 minHeight 必须等于**两档里较小的那个**」：
-            //      minHeight = FLOAT_HEIGHT_PLAIN = 36，height = FLOAT_HEIGHT_GLASS = 44。）
-            //   - `x/y: 24`：新增。conf 无 x/y 时 tao 会 `ns_window.center()`
-            //     → 首次残影正好压在主窗口正中央（报告 §2.2 T0）。给左上角 24px 后，
-            //     即便时序问题未修，那块灰也落在用户几乎不会注意的位置。
-            //     ⚠️ 前端 applyPosition 随后会用 localStorage 或「主屏右上角」覆盖它，
-            //     所以 x/y 只影响「show 之前那一两帧」，正是残影发生的窗口期。
-            // ⚠️ 上述三项的说明无法写进 tauri.conf.json（JSON 不支持注释），故落在本文件。
+            //     即「conf 的 minHeight 必须等于**两档里较小的那个**」：
+            //     minHeight = FLOAT_HEIGHT_PLAIN = 36。
+            //
+            // ⚠️ 上述说明无法写进 tauri.conf.json（JSON 不支持注释），故落在本文件。
             let (float_resume, float_glass_on) = {
                 let sb = app_state
                     .status_bar_config
