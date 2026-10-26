@@ -13,7 +13,7 @@
 //!   禁用开关 + 给出原因，避免"开了没效果"的死开关：
 //!     macOS 26+          → liquid   （系统液态玻璃，含真实折射）
 //!     macOS < 26         → vibrancy （NSVisualEffectView，有模糊无折射）
-//!     Windows 10 1809+   → acrylic  （DWM Acrylic / 旧 SWCA 路径，有模糊无折射）
+//!     Windows 10 1809+   → acrylic  （能力语义；**实际不调系统材质**，见下节）
 //!     其他 / Linux       → none     （不支持，前端置灰）
 //! - **幂等**：apply(true/false) 可反复调用；关闭时把两种材质都清一遍，
 //!   因为历史状态可能残留其一。
@@ -27,6 +27,12 @@
 //!     Windows 走 apply_acrylic。Linux 返回不支持。
 //!   - 2026-10-21 @v1.2.2 修订（真机实测后推翻初版）：**Windows 不再调用任何系统材质**，
 //!     降级为纯 CSS 高透光。实测证据见下方「Windows 为什么不走系统材质」。
+//!   - 2026-10-24 @v1.2.8: 修订 - macOS < 26 的材质由 `HudWindow`(13) 换为
+//!     `UnderWindowBackground`(21)；新增 `GlassTier::native_blur()` 与
+//!     `FloatGlassSupport.native_blur` 字段（**IPC 命令数不变**，仍是 85：本次只给
+//!     `float_glass_support` 的返回体加字段，不新增命令）。原因：用户 macOS 15 截图
+//!     实测发现 HudWindow 遮蔽过强，胶囊内亮度与正上方壁纸亮度相关系数仅 r≈0.02，
+//!     桌面内容形状完全不可见，视觉上就是一块灰板。详见 `platform_apply` 内注释。
 //!
 //! ⚠️ 落地注意（血泪点，均由本次方案扫描发现，勿改回去）：
 //!   1. 本模块的 apply() **不能**塞进 `float_window::ensure_float_window()`。
@@ -148,6 +154,58 @@ impl GlassTier {
             GlassTier::None => "requires Windows 10 1809+ or macOS 10.14+",
         }
     }
+
+    /// 该档位下 `apply()` **真的**会给窗口铺上一层系统背景模糊吗？
+    ///
+    /// 这跟 `supported()` 是两回事，必须分开问：
+    /// - `supported()` 回答"能不能开这个开关"（能力层面的可用性）；
+    /// - `native_blur()` 回答"开了之后背后到底糊没糊"（视觉层面的事实）。
+    ///
+    /// 为什么要区分：前端要根据"背景是否已被系统模糊"来决定压暗系数，两种背景的
+    /// 最优解是**相反**的 —— 有模糊时可以轻压暗让模糊透出来，没模糊时必须重压暗
+    /// 才能保住文字对比度。若用 `supported()` 当判据，Windows（报 Acrylic 但实际
+    /// 不调任何系统材质）会被误判成"有模糊"，前端就会用轻压暗 → 白字直接溶进桌面。
+    ///
+    /// 当前事实：
+    /// - macOS 全部档位（Liquid / Vibrancy）→ true。两者都是真系统材质。
+    /// - Windows（Acrylic）→ **false**。见模块头：DWM backdrop 对无边框窗口
+    ///   透光率仅 0.001，纯负优化，已刻意不调用。
+    /// - None → false。
+    pub fn native_blur(self) -> bool {
+        match self {
+            GlassTier::Liquid | GlassTier::Vibrancy => true,
+            GlassTier::Acrylic | GlassTier::None => false,
+        }
+    }
+
+    /// 该档位的材质**透光程度**（0.0~1.0），供前端决定压暗强度。
+    ///
+    /// 为什么光有 `native_blur` 还不够（2026-10-25 复查发现的遗留缺陷）：
+    /// `Liquid`（macOS 26，NSGlassEffectView，`Clear` 样式）与 `Vibrancy`
+    /// （macOS 15，NSVisualEffectView，`UnderWindowBackground`）**都是真模糊**，
+    /// `native_blur` 都是 true，于是前端会把它们塞进**同一个** `.has-blur` 配色档
+    /// （压暗 0.26）。但这两个材质的透光量差别很大：
+    ///   - `Clear` 是 Apple 官方最清透的样式（它存在的意义就是"尽量别挡"），
+    ///     系统给的底色遮蔽最少 → 同样 0.26 压暗下，文字对比度会比 15 上更低；
+    ///   - `UnderWindowBackground` 自带较厚的窗口底色 → 0.26 已经够。
+    /// 换句话说：**越清透的材质越需要压暗**。用同一个系数覆盖两者，
+    /// macOS 26 上很可能出现"字看不清"，而这是我在 Windows 上无法实测发现的。
+    ///
+    /// 取值口径（相对值，不是物理透光率）：
+    /// - `Liquid`  → 0.85（Clear 样式，几乎不挡）
+    /// - `Vibrancy`→ 0.55（UnderWindowBackground，自带窗口底色）
+    /// - `Acrylic` → 0.0（实际未应用任何系统材质）
+    /// - `None`    → 0.0
+    ///
+    /// ⚠️ 前端当前**尚未消费**这个字段（v1.2.8 保持行为不变，只先如实上报）。
+    /// 待 macOS 26 真机验证后再据此分档，避免在没有实测数据的情况下瞎调。
+    pub fn translucency(self) -> f32 {
+        match self {
+            GlassTier::Liquid => 0.85,
+            GlassTier::Vibrancy => 0.55,
+            GlassTier::Acrylic | GlassTier::None => 0.0,
+        }
+    }
 }
 
 /// 运行时探测当前系统能给的最高档位。纯探测、无副作用，可在任意线程调用。
@@ -198,11 +256,25 @@ fn platform_apply(window: &WebviewWindow, glass: bool) -> Result<(), String> {
             apply_liquid_glass(window, opts).map_err(|e| format!("apply_liquid_glass 失败: {e}"))
         }
         GlassTier::Vibrancy => {
-            // macOS < 26 兜底：有模糊、无折射。HudWindow 是浮层质感最强的材质；
-            // state=Active 让窗口失焦时材质不塌成灰（浮窗长期无焦点，这点很关键）。
+            // macOS < 26 兜底：有模糊、无折射。
+            //
+            // v1.2.8 修订：材质由 HUDWindow(13) 换成 UnderWindowBackground(21)。
+            // 为什么换（macOS 15 真机截图逐像素实测）：
+            //   HUDWindow 是为 HUD 面板设计的**高遮蔽**材质，叠加 FloatBar 的深色底后，
+            //   胶囊内部与正上方壁纸亮度的相关系数 r≈0.02 —— 桌面内容形状完全不可见，
+            //   视觉上是一块半透明灰板，既不是毛玻璃也谈不上液态玻璃。用户原话
+            //   「这个玻璃不能模拟液态玻璃吗」，本质是"连模糊都看不见"。
+            //   UnderWindowBackground 是窗口背景之下那一层，透光率显著高于 HUDWindow，
+            //   是"能看清背后被模糊的内容"这一目标最贴的语义材质（Apple 文档：
+            //   "The material used under window backgrounds"）。
+            // ⚠️ 备选 Popover(6) / Sidebar(7) 也可用；若真机觉得 21 还是太薄，
+            //   优先试 Popover（更接近 macOS 弹窗的磨砂感），**不要**改回 HudWindow。
+            //
+            // state=Active 保留：浮窗长期无焦点，FollowsWindowActiveState 会让材质
+            // 在失焦时塌成灰，这点与材质选择无关，不能一起换掉。
             apply_vibrancy(
                 window,
-                NSVisualEffectMaterial::HudWindow,
+                NSVisualEffectMaterial::UnderWindowBackground,
                 Some(NSVisualEffectState::Active),
                 Some(FLOAT_RADIUS_GLASS),
             )
@@ -326,6 +398,15 @@ pub struct FloatGlassSupport {
     pub tier: String,
     /// 能力说明 / 不支持原因
     pub reason: String,
+    /// v1.2.8：本次是否**真的**应用了系统背景模糊（不是"能力上支持"）。
+    /// 前端据此在"轻压暗（让模糊透出）"与"重压暗（保对比度）"两档配色间切换。
+    /// 见 `GlassTier::native_blur()` 的完整说明。
+    pub native_blur: bool,
+    /// v1.2.8：材质透光程度（0.0~1.0），供前端细分压暗强度。
+    /// ⚠️ 前端**当前尚未消费**，仅如实上报以便 macOS 26 真机验证后分档。
+    /// 见 `GlassTier::translucency()` 的完整说明（为什么 Liquid 与 Vibrancy
+    /// 不能共用同一个压暗系数）。
+    pub translucency: f32,
 }
 
 /// Tauri 命令：查询当前系统的玻璃材质能力（设置页开关的可用性依据）。
@@ -336,5 +417,7 @@ pub fn float_glass_support() -> FloatGlassSupport {
         supported: tier.supported(),
         tier: tier.as_str().to_string(),
         reason: tier.reason().to_string(),
+        native_blur: tier.native_blur(),
+        translucency: tier.translucency(),
     }
 }

@@ -203,6 +203,32 @@ export interface FloatGlassSupport {
   tier: FloatGlassTier;
   /** 能力说明 / 不支持原因（直接用作开关的 tooltip） */
   reason: string;
+  /**
+   * v1.2.8：本次是否**真的**应用了系统背景模糊（≠ 能力上支持）。
+   *
+   * 与 `supported` 的区别（别混用）：
+   * - `supported` 决定"开关能不能点"；
+   * - `native_blur` 决定"配色用哪一档"。
+   *
+   * 当前事实：macOS 全档位 true；Windows 报 tier=acrylic 但 **false**
+   * （DWM backdrop 对无边框窗口不透光，已在 Rust 侧刻意停用）。
+   * 详见 `src-tauri/src/float_glass.rs` 的 `GlassTier::native_blur()`。
+   */
+  native_blur: boolean;
+  /**
+   * v1.2.8：材质透光程度（0.0~1.0），供细分压暗强度。
+   *
+   * 为什么 `native_blur` 不够：`liquid`（macOS 26 的 NSGlassEffectView `Clear`
+   * 样式）与 `vibrancy`（macOS 15 的 NSVisualEffectView `UnderWindowBackground`）
+   * 都是真模糊，`native_blur` 都是 true，但**透光量差别很大** ——
+   * `Clear` 是 Apple 官方最清透的样式（系统底色遮蔽最少），同样压暗系数下
+   * 文字对比度会比 15 上更低。**越清透的材质越需要压暗**。
+   *
+   * ⚠️ 前端当前**尚未消费**此字段（v1.2.8 行为不变，只先如实上报）。
+   * 待 macOS 26 真机验证对比度后再据此分档，避免无实测数据时瞎调。
+   * 详见 `src-tauri/src/float_glass.rs` 的 `GlassTier::translucency()`。
+   */
+  translucency: number;
 }
 
 /**

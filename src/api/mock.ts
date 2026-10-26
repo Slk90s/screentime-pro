@@ -315,10 +315,13 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
       return null;
     case "float_glass_support":
       // v1.2.2：浏览器预览没有系统合成器，按"不支持"返回，设置页会置灰开关
+      // v1.2.8：补 native_blur / translucency，与真实返回体字段保持一一对应
       return {
         supported: false,
         tier: "none",
         reason: "mock: 浏览器预览环境无系统玻璃材质",
+        native_blur: false,
+        translucency: 0,
       };
     default:
       return null;

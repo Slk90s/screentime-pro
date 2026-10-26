@@ -128,49 +128,88 @@
       （需 Rust 侧抓屏采样，属新增能力，不在本版范围）。
       另：`overflow: hidden` 保留（防极端情况裁空），但 `fitWidth()` 每秒随内容伸缩窗口，
       实测 12 种数值组合 overflow 全为 false（13px + 2.45em 下最宽 457.2px）。
+  - 2026-10-24 @v1.2.8: 修复 - **macOS 上玻璃材质从右端溢出 + 双弧**，并重做玻璃配色分档。
+      ① 根因（用户 macOS 15 真机截图逐像素定标，非推测）：
+         旧结构单层 `width: max-content`，`fitWidth()` 按「内容宽 + 2px」设窗口，
+         而块级元素左对齐 → 多出的 2px **全落在右侧**。`window-vibrancy` 的
+         NSVisualEffectView 用 `view.bounds()` + autoresizing 铺满**整个窗口**，
+         胶囊内侧没有任何东西裁它 → 右侧露出 3px 中性带（实测 rgb(138,119,110)，
+         外侧壁纸仅 L≈2，带子亮度却恒定 L≈123，证明是材质自身边缘而非 CSS）；
+         它自带的 `cornerRadius(22)` 画在宽 403 的矩形上，与 CSS 宽 401 的圆角错开
+         → 右侧两角出现「双弧」。左侧因齐平，像素实测**零外溢**，正好反证。
+      ② 结构改造：模板拆成两层 —— 外层 `.float-bar` 改 `width: 100%` + 居中
+         （= 窗口矩形），内层 `.f-content` 承载 gap/padding 并作为 `fitWidth()` 与
+         ResizeObserver 的测量基准。外层铺满后「胶囊 ≡ 窗口 ≡ 材质矩形」，
+         三者圆角天然重合，溢出从原理上不可能再发生。
+         ⚠️ `WIDTH_SLACK` 保留为 2 但**语义已变**：不再是取整余量，而是
+         「外层 1px border × 2」的必需补偿（`box-sizing: border-box` 下内容区
+         = 窗口宽 − 2）。改 border 宽度必须同步改它。
+         ⚠️ 外层**不能**再持有 ref 给 fitWidth。它现在的宽度是"窗口宽度"这个结果，
+         拿它当输入会形成自反馈（永不收敛，宽度永远卡在初值 340）。
+      ③ 配色分档（`native_blur` 为真时走 `.is-glass.has-blur`）：原 `.is-glass` 的
+         0.48 压暗是**为 Windows 纯 CSS 场景定标的**，却被无条件套到 macOS，把
+         NSVisualEffectView 的模糊整层盖死 —— 截图实测胶囊内部是一条平滑暖灰渐变
+         （上 L≈95 → 下 L≈71），与正上方壁纸亮度相关系数 **r≈0.02**，桌面内容形状
+         完全看不出，等于花了一次系统模糊又亲手抹掉。有真模糊时压暗降到 0.26、
+         顶部白高光提到 0.28，让模糊透出来；Windows 档 0.48 不动（已实测达标）。
+      ④ `onMounted` 先拉一次 `float_glass_support` 拿 `native_blur`，**在首次 fitWidth
+         之前** —— 目的是让首帧就带上正确配色（`nativeBlur` 本身不影响布局，
+         见 `onMounted` 内的修正说明），避免"先画深色板再淡下去"的可见闪烁。
+         取不到按 false（重压暗保守档），绝不出现"字看不清"。
 -->
 <template>
+  <!-- v1.2.8：外层 = 窗口矩形（width:100%），内层 .f-content 承载内容与测量。
+       为什么必须两层（macOS 真机实测的血泪点）：
+       旧结构是单层 `width: max-content`，窗口由 fitWidth() 按「内容宽 + 2px 余量」设定，
+       多出的 2px 全部落在**右侧**（块级元素左对齐）。而 window-vibrancy 的
+       NSVisualEffectView 是按**窗口 bounds** 铺满的（autoresizing 跟随），胶囊内侧
+       没有任何东西裁它 → 那 2px 直接把系统材质露在桌面上，并且它自带的
+       cornerRadius(22) 画在「宽 403」的矩形上，与 CSS「宽 401」的圆角错开 → 右侧
+       出现「双弧 + 3px 外露带」。左侧因齐平故零外溢（像素实测印证）。
+       改成外层铺满窗口后，胶囊几何 ≡ 窗口矩形 ≡ 材质矩形，三者圆角天然重合，
+       溢出从原理上不可能发生；测量移到内层，宽度自适应逻辑不受影响。 -->
   <div
-    ref="rootRef"
-    :class="['float-bar', { 'is-glass': cfg.float_glass }]"
+    :class="['float-bar', { 'is-glass': cfg.float_glass, 'has-blur': cfg.float_glass && nativeBlur }]"
     @pointerdown="onPointerDown"
     @contextmenu.prevent
   >
-    <span class="f-dot" :style="dotStyle" :title="dotTitle"></span>
-    <span v-if="cfg.show_cpu" class="f-item">
-      <i>CPU</i><b>{{ pct(metrics?.cpu_usage) }}</b>
-    </span>
-    <span v-if="cfg.show_mem" class="f-item">
-      <i>MEM</i><b>{{ pct(metrics?.memory_usage) }}</b>
-    </span>
-    <span v-if="cfg.show_disk" class="f-item">
-      <i>DSK</i><b>{{ pct(metrics?.disk_usage) }}</b>
-    </span>
-    <template v-if="cfg.show_net">
-      <span v-if="hasAnyBefore" class="f-sep"></span>
-      <span class="f-item f-net">
-        <b class="down">↓{{ fmtRate(metrics?.net_rx_bps ?? 0) }}</b>
-        <b class="up">↑{{ fmtRate(metrics?.net_tx_bps ?? 0) }}</b>
+    <div ref="contentRef" class="f-content">
+      <span class="f-dot" :style="dotStyle" :title="dotTitle"></span>
+      <span v-if="cfg.show_cpu" class="f-item">
+        <i>CPU</i><b>{{ pct(metrics?.cpu_usage) }}</b>
       </span>
-    </template>
-    <!-- v0.8.2：尾部「截图」按钮。可见 = 截图开启 && 浮窗开启；pointerdown.stop
-         防止点按钮误触发整条拖拽；点击走 screenshot_trigger（与快捷键完全同路径） -->
-    <template v-if="shotEnabled">
-      <span v-if="hasAny" class="f-sep"></span>
-      <button
-        type="button"
-        class="f-shot"
-        :title="t('float.shot')"
-        @pointerdown.stop
-        @click="onShot"
-      >
-        <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-          <path d="M2 5.2V2h3.2M13.8 5.2V2h-3.2M2 10.8V14h3.2M13.8 10.8V14h-3.2" />
-          <circle cx="8" cy="8" r="2.4" />
-        </svg>
-      </button>
-    </template>
-    <span v-if="!hasAny && !shotEnabled" class="f-item"><b class="f-dim">ScreenTime Pro</b></span>
+      <span v-if="cfg.show_mem" class="f-item">
+        <i>MEM</i><b>{{ pct(metrics?.memory_usage) }}</b>
+      </span>
+      <span v-if="cfg.show_disk" class="f-item">
+        <i>DSK</i><b>{{ pct(metrics?.disk_usage) }}</b>
+      </span>
+      <template v-if="cfg.show_net">
+        <span v-if="hasAnyBefore" class="f-sep"></span>
+        <span class="f-item f-net">
+          <b class="down">↓{{ fmtRate(metrics?.net_rx_bps ?? 0) }}</b>
+          <b class="up">↑{{ fmtRate(metrics?.net_tx_bps ?? 0) }}</b>
+        </span>
+      </template>
+      <!-- v0.8.2：尾部「截图」按钮。可见 = 截图开启 && 浮窗开启；pointerdown.stop
+           防止点按钮误触发整条拖拽；点击走 screenshot_trigger（与快捷键完全同路径） -->
+      <template v-if="shotEnabled">
+        <span v-if="hasAny" class="f-sep"></span>
+        <button
+          type="button"
+          class="f-shot"
+          :title="t('float.shot')"
+          @pointerdown.stop
+          @click="onShot"
+        >
+          <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+            <path d="M2 5.2V2h3.2M13.8 5.2V2h-3.2M2 10.8V14h3.2M13.8 10.8V14h-3.2" />
+            <circle cx="8" cy="8" r="2.4" />
+          </svg>
+        </button>
+      </template>
+      <span v-if="!hasAny && !shotEnabled" class="f-item"><b class="f-dim">ScreenTime Pro</b></span>
+    </div>
   </div>
 </template>
 
@@ -190,11 +229,31 @@ const { t } = useI18n();
 
 /** 与 float_window.rs FLOAT_INITIAL_WIDTH 一致（逻辑像素），默认位计算用 */
 const BAR_W = 340;
-/** 宽度安全余量（逻辑像素）：抵消 set_size 物理像素取整造成的视口不足，见文件头 ⑤a */
+/**
+ * 宽度安全余量（逻辑像素）。
+ *
+ * v1.2.8 重新定义：**这里不再是"取整余量"，而是外层描边的厚度**。
+ *
+ * 旧结构是单层 `width: max-content`，测出的 rect.width 已含 padding 与 border，
+ * 再 +2 属于"多给的余量"，于是窗口比胶囊宽 2px、全落在右侧 → 系统材质外露
+ * （详见模板顶部注释）。新结构分两层后这个 2 有了精确的物理含义：
+ *   - 外层 `.float-bar` 是 `width: 100%` + `border: 1px` + 全局 `box-sizing: border-box`
+ *     → 其**内容区** = 窗口宽 − 2；
+ *   - 内层 `.f-content` 是 `width: max-content`（不含 border），要让它完整放下，
+ *     窗口必须 = 内层宽 + 2。
+ * 因此 2 不是余量而是**必需值**：取 0 会让内层比内容区宽 2px，
+ * 被外层 `overflow: hidden` 左右各裁 1px（虽然只裁到 padding 空白、肉眼无感，
+ * 但那是"碰巧没事"，不是正确几何）。
+ *
+ * ⚠️ 若将来改外层 border 宽度，本常量必须同步为 2 × border-width。
+ */
 const WIDTH_SLACK = 2;
 const POS_KEY = "float_pos";
 
-const rootRef = ref<HTMLElement | null>(null);
+/** v1.2.8：内层内容容器（宽度测量基准）。
+ *  外层 `.float-bar` 已改为铺满窗口、不再持有 ref —— 它自身的宽度是"窗口宽度"
+ *  这个**结果**，拿它当 fitWidth 的输入会形成自反馈（永不收敛，宽度卡在初值）。 */
+const contentRef = ref<HTMLElement | null>(null);
 const cfg = ref<StatusBarConfig>({
   enabled: false,
   show_cpu: true,
@@ -233,6 +292,23 @@ const hasAnyBefore = computed(
  * （防配置短暂脱节时按钮残留）。
  */
 const shotEnabled = computed(() => cfg.value.screenshot_enabled && cfg.value.float_enabled);
+
+/**
+ * v1.2.8：系统是否**真的**提供了背景模糊（不是"能力上支持"，是"这次真的应用上了"）。
+ *
+ * 为什么需要这个信号：玻璃模式的配色必须按背景来定，而两种背景的最优解完全相反。
+ * - 有真模糊（macOS 15 的 NSVisualEffectView / macOS 26 的 NSGlassEffectView）：
+ *   背景已被系统模糊 + 平均，像素噪声低，**不需要靠压暗来保对比度**；压暗过重反而
+ *   把系统模糊完全盖住 —— 用户实测截图里那块暖灰"板子"就是这么来的（内部亮度与
+ *   正上方壁纸相关系数 r≈0.02，桌面内容形状完全看不出）。
+ * - 无系统材质（Windows 全平台，见 float_glass.rs 模块头实测：ρ=0.001 ）：
+ *   背后是**未模糊**的原始桌面，像素噪声大，必须靠 0.48 压暗才能让白字过 WCAG AA。
+ *
+ * 来源：`float_glass_support` 的 `native_blur` 字段（Rust 侧如实上报，
+ * Windows 虽报 tier=acrylic 但 native_blur=false）。取不到时按 false 处理 ——
+ * 退回"重压暗"这个已在两种背景下都不至于不可读的保守档，绝不会出现"字看不清"。
+ */
+const nativeBlur = ref(false);
 
 /** 0~1 分数 → 百分比整数串（后端 cpu_usage / memory_usage / disk_usage 均为分数） */
 function pct(v: number | undefined): string {
@@ -349,25 +425,36 @@ async function onShot(): Promise<void> {
 /**
  * 宽度自适应：测量内容真实宽度并收缩窗口（Rust 侧做右边缘锚定）。
  *
- * 测量取 getBoundingClientRect().width 与 scrollWidth 的**较大者**：
- * 前者是元素 border-box 宽度（width:max-content 下即内容固有宽度，含 padding/border），
- * 后者在「视口比内容窄」时会给出内容实际需要宽度——两者取大最稳，不会漏算。
- * 再 +WIDTH_SLACK 抵消 set_size 的物理像素取整（见文件头 ⑤a）。
+ * v1.2.8 起测量目标是**内层 `.f-content`**，不再是外层 `.float-bar`：
+ * 外层已改为 `width: 100%`（跟随窗口），它自身的宽度是"窗口宽度"这个结果，
+ * 拿它当输入会让 fitWidth 变成自反馈（永不收敛、宽度卡在初值 340）。
+ *
+ * 测量仍取 getBoundingClientRect().width 与 scrollWidth 的**较大者**：
+ * 前者是 border-box 宽度（内层用 max-content，即内容固有宽度），
+ * 后者在「被父级挤压」时给出内容实际需要宽度——两者取大最稳，不会漏算。
  */
 async function fitWidth(): Promise<void> {
   if (dragging) return;
   await nextTick();
   if (dragging) return;
-  const el = rootRef.value;
+  const el = contentRef.value;
   if (!el) return;
   const need = Math.max(el.getBoundingClientRect().width, el.scrollWidth);
+  // 窗口宽 = 内容宽 + 外层左右描边（WIDTH_SLACK，见常量注释）。
+  // ceil 而非 round：宁可多给内层零点几像素余量，也不要把描边或末位字符裁掉。
   const w = Math.ceil(need) + WIDTH_SLACK;
   if (Math.abs(w - appliedW) < 1) return;
-  appliedW = w;
+  // ⚠️ appliedW 只在 invoke **成功之后**才更新（2026-10-25 复查修正）。
+  // 原实现先赋值再 invoke：若这次 resize 因窗口未创建/退出中失败，
+  // appliedW 已被改成 w，后续每秒的 fitWidth 都会因 |w-appliedW|<1 直接早退，
+  // 宽度就永久卡在"以为已经设过"的错误值上，直到内容再变化才恢复。
+  // 注：这个错误会被 1Hz tick 的自愈性掩盖大半（内容一变就会重试），
+  // 属于坏味道而非致命缺陷，但代价极低，顺手改对。
   try {
     await invoke("resize_float_window", { width: w });
+    appliedW = w;
   } catch {
-    /* 窗口尚未创建 / 退出中，忽略 */
+    /* 窗口尚未创建 / 退出中，忽略；不更新 appliedW，下次 tick 会重试 */
   }
 }
 
@@ -435,14 +522,33 @@ onMounted(async () => {
     el.style.overflow = "hidden";
   }
   await applyPosition();
+  // v1.2.8：先拉一次玻璃能力，拿到 native_blur 再决定配色档位。
+  //
+  // ⚠️ 修正一处早期注释的错误（2026-10-25 复查）：原注释说「配色会影响字号
+  // /槽位宽度，必须先定档再测宽」—— 这是**错的**。实测 `.has-blur` 档只改
+  // `background` 与 `border-color`，两者都不参与布局；字号 13px 与内距 14px
+  // 来自 `.is-glass`，跟 `has-blur` 无关。所以顺序其实不影响首帧宽度。
+  //
+  // 但**仍保持在 fitWidth 之前**，理由换成更实在的一条：`nativeBlur` 只影响
+  // 配色不影响布局 → 早拿晚拿宽度都一样；放在前面是为了让**首帧渲染**就已经
+  // 带上正确配色，避免"先画深色板、再淡下去"的一次可见闪烁（applyPosition
+  // 之后、fitWidth 之前正好是窗口还不可见的窗口期）。
+  //
+  // 失败按 false（重压暗保守档）处理，不阻断渲染。
+  try {
+    const cap = await tracker.getFloatGlassSupport();
+    nativeBlur.value = cap.native_blur === true;
+  } catch {
+    /* 命令未注册（旧后端）/ 退出中：保持 false */
+  }
   // v0.7.7：先按首帧内容收缩宽度，再显示——避免用户看到初始 340px 的宽态
   await fitWidth();
   // 内容宽度一变就立刻跟随（字体就绪 / DPI 变化 / 位数变多），不等下一个 1Hz tick
-  if (typeof ResizeObserver !== "undefined" && rootRef.value) {
+  if (typeof ResizeObserver !== "undefined" && contentRef.value) {
     resizeObs = new ResizeObserver(() => {
       void fitWidth();
     });
-    resizeObs.observe(rootRef.value);
+    resizeObs.observe(contentRef.value);
   }
   // 就绪后再显示（Rust 启动/开关路径也会 show，幂等；透明空窗 show 本就不可见）
   try {
@@ -470,14 +576,24 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* ===== v1.2.8 两层结构 =====
+ *
+ * 外层 .float-bar ：视觉载体（圆角/底色/描边/阴影）+ 撑满窗口
+ * 内层 .f-content：内容排布（gap/padding）+ 宽度测量基准
+ *
+ * ⚠️ 两者分工不可合并回去。旧版把「贴合内容 + 视觉载体」放在同一层，导致窗口
+ * （= 内容宽 + 2px 余量）比胶囊宽 2px，系统玻璃材质按窗口矩形铺满 → 右侧外露
+ * 3px 并出现双弧（macOS 15 真机截图逐像素证实，见模板顶部注释）。
+ * 现在外层 width:100% 恒等于窗口，胶囊 ≡ 窗口 ≡ 材质矩形，物理上不可能溢出。
+ */
 .float-bar {
-  /* max-content：元素宽度贴合内容，配合测量回调把窗口也收到同样宽 */
-  width: max-content;
+  /* 铺满窗口：宽度由 Rust set_size 决定，CSS 不再参与"窗口该多宽"的决策 */
+  width: 100%;
   height: 36px;
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 0 12px;
+  /* 内容居中：窗口比内容宽出取整余量时，余量均匀分到两侧，不会全堆在右边 */
+  justify-content: center;
   border-radius: 18px;
   background: rgba(22, 24, 30, 0.78);
   -webkit-backdrop-filter: blur(18px) saturate(140%);
@@ -498,6 +614,16 @@ onBeforeUnmount(() => {
   transition:
     background 0.18s ease,
     border-color 0.18s ease;
+}
+/* 内层：max-content 保证"有多宽就多宽"，flex:none 保证窗口万一窄 1px 时
+   内容不被 flex 压缩（宁可裁掉描边，也不能把数字挤变形） */
+.f-content {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 12px;
+  width: max-content;
+  flex: none;
 }
 .float-bar:hover {
   background: rgba(28, 30, 38, 0.86);
@@ -574,14 +700,43 @@ onBeforeUnmount(() => {
   text-shadow:
     0 1px 2px rgba(0, 0, 0, 0.62),
     0 0 1px rgba(0, 0, 0, 0.5);
-  /* 内边距略增：胶囊形两端是圆弧，文字贴边会视觉出血 */
-  padding: 0 14px;
   /* v1.2.3：玻璃模式字号 12→13px。
      44px 胶囊配 12px 字时「文字/胶囊」占比只有 27.3%（普通模式 36px 是 33.3%），
      视觉上框胖字小、中间显空。13px 把占比拉回 29.5%，接近普通模式手感。
      ⚠️ 实测宽度 400.7→**384.2px**（不是变宽而是变窄）：槽位 2.7em→2.45em 的
      收窄量（约 -12px/指标）超过了字号 +1px 的增量，净减 16.5px。 */
   font-size: 13px;
+}
+/* v1.2.8：内边距从外层移到内层（外层已不是内容载体）。
+   略增到 14px：胶囊形两端是圆弧，文字贴边会视觉出血。 */
+.float-bar.is-glass .f-content {
+  padding: 0 14px;
+}
+
+/* ===== v1.2.8：macOS 有真系统模糊时的配色档 =====
+ *
+ * 上一条 `.is-glass` 的 0.48 压暗是**为 Windows 纯 CSS 场景定标的**（背后是未模糊的
+ * 原始桌面，像素噪声大，必须重压暗才能让白字过 AA）。但它被无条件套用到了 macOS，
+ * 结果把 NSVisualEffectView 的模糊整层盖死 —— 用户 macOS 15 截图实测：胶囊内部
+ * 是一条平滑暖灰渐变（上 L≈95 → 下 L≈71），与正上方壁纸亮度的相关系数 r≈0.02，
+ * 桌面内容的形状完全看不出来，等于花了一次系统模糊又亲手抹掉。
+ *
+ * 分档依据：`float_glass_support` 的 `native_blur`（Rust 如实上报，见 float_glass.rs）。
+ * 有真模糊时系统已经把背景做了高斯平均，对比度天然比原始桌面稳定得多，
+ * 因此可以把压暗降到 0.26，让模糊透出来；顶部白高光同步提到 0.28，
+ * 因为浅色底需要更明显的"上边缘反光"才读得出玻璃边界。
+ *
+ * ⚠️ 0.26 未经真机对比度定标（本机无 macOS）。取值依据：
+ *   - 系统 HudWindow/UnderWindowBackground 材质本身带约 35~45% 的底色遮罩，
+ *     叠加本层 0.26 后总遮蔽量接近 Windows 档的 0.48~0.55；
+ *   - 若 macOS 真机实测某项对比度不足 4.5:1，按 0.02 步进加深本值即可，
+ *     **不要**回头去改 Windows 档的 0.48（那档已实测达标，动了会回归）。
+ */
+.float-bar.is-glass.has-blur {
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.06)),
+    rgba(0, 0, 0, 0.26);
+  border-color: rgba(255, 255, 255, 0.40);
 }
 /* 悬停：只提亮一点底色，不改变材质本身。
    ⚠️ 压暗量必须同步跟着默认态走：0.48 默认态下若 hover 仍用旧的 0.24，
@@ -592,6 +747,14 @@ onBeforeUnmount(() => {
     linear-gradient(rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.05)),
     rgba(0, 0, 0, 0.42);
   border-color: rgba(255, 255, 255, 0.42);
+}
+/* v1.2.8：有真模糊档的 hover 也必须跟着本档走（0.42 是 Windows 档的 hover 值，
+   套到 0.26 的 macOS 档上会变成"越悬停越暗"，方向反了） */
+.float-bar.is-glass.has-blur:hover {
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.09)),
+    rgba(0, 0, 0, 0.20);
+  border-color: rgba(255, 255, 255, 0.48);
 }
 /* 玻璃模式下按钮底色也要相应减淡，否则深灰方块盖在玻璃上很突兀 */
 .float-bar.is-glass .f-shot:hover {
