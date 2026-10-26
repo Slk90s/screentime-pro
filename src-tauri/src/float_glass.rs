@@ -241,10 +241,46 @@ fn platform_apply(window: &WebviewWindow, glass: bool) -> Result<(), String> {
     if !glass {
         // 两种材质互斥，但历史状态可能残留其一，全清最稳。
         // clear_* 返回 Ok(false) 表示"本来就没应用过"，属正常情况，不算错误。
-        let _ = clear_liquid_glass(window);
-        let _ = clear_vibrancy(window);
+        //
+        // ⚠️ v1.2.9（2026-10-26）：**改为循环清到干净**。原写法各调一次，而
+        // clear_* 是 `NSView.viewWithTag:` 语义（一次只摘最近的一层），历史叠加
+        // 若为 N 层，关掉玻璃开关后会残留 N-1 层灰板且不再有任何清除入口 ——
+        // 这正是用户反馈「关掉玻璃还留一块灰板、重启才消失」的直接成因。
+        // while 循环以 Ok(false) 收尾，有界（上限 = 现存层数），不会死循环。
+        while matches!(clear_liquid_glass(window), Ok(true)) {}
+        while matches!(clear_vibrancy(window), Ok(true)) {}
         return Ok(());
     }
+
+    // v1.2.9（2026-10-26）：**apply 幂等化 —— 先清再铺，永远只留一层**。
+    //
+    // 为什么必须清（这是「胶囊比设计更暗」「关掉玻璃还留一块灰板」的直接成因）：
+    //   `window-vibrancy 0.8.1` 的 apply 系列**不做去重** —— 每次调用都新建一个
+    //   NSVisualEffectView / NSGlassEffectView 并 addSubview(Below)，见
+    //   vibrancy.rs:42-59（没有任何「按 tag 复用」的判断）；而 clear 用的是
+    //   `NSView.viewWithTag:`，语义只返回**最近的一个**匹配子视图，一次只删一层
+    //   （vibrancy.rs:65-74）。于是 apply N 次 = N 层叠加，clear 1 次只删 1 层。
+    //
+    // 本应用的 apply 调用点有 4 处（float_window.rs:201 每次 show 前补一次、
+    // lib.rs:694 启动恢复、commands.rs:1255 开关翻转、commands.rs:1259 关闭），
+    // 实测首次启动就会叠到 3 层，之后每次进出全屏再 +1。后果有两个：
+    //   ① 多层 tint 叠乘（1-(1-0.26)^3 ≈ 59%），把 v1.2.8 刚按真机定标的 0.26
+    //      压暗档又抹回接近 0.48 的遮蔽量 —— 「刚定标完就失效」；
+    //   ② 用户关掉玻璃开关后 clear 只删一层，剩下的层**永久留在窗口里**，
+    //      表现为「浮窗上有一块擦不掉的灰板」。
+    //
+    // 为什么放在 match 之前：Liquid / Vibrancy 是两种互斥材质，但历史状态可能残留
+    // 另一种（26 上升级/降级、或旧版本写过 Liquid），与 !glass 分支「全清最稳」同理。
+    //
+    // ⚠️ **必须用循环清，不能只调一次**：clear 走的是 `NSView.viewWithTag:`，只返回
+    // 最近的一个匹配子视图、一次只摘一层（vibrancy.rs:65-74 /
+    // liquid_glass.rs:165-181）。若窗口里已经叠了 3 层，单次 clear 后还剩 2 层，
+    // 再铺一层又变 3 层 —— 等于没修。循环到返回 Ok(false)（没有可摘的了）为止才是
+    // 真正的幂等。循环次数上限 = 当前叠加层数，有界，不会死循环；Err 也直接退出
+    // （clear_* 的唯一 Err 来源是 UnsupportedPlatform / window_handle 获取失败，
+    // 两者都属于「清不了」，继续循环无意义）。
+    while matches!(clear_liquid_glass(window), Ok(true)) {}
+    while matches!(clear_vibrancy(window), Ok(true)) {}
 
     match platform_support() {
         GlassTier::Liquid => {

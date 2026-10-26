@@ -980,17 +980,29 @@ fn semver_gt(latest: &str, current: &str) -> bool {
 // 两条 settings 键（复用既有 settings 表，不新建表）：
 //   - update_last_check_at   上次**成功**检查的时间戳（秒）。失败不写入，
 //     否则一次断网就会把接下来 24 小时全部锁死（用户再没机会知道有新版本）。
+//     v1.2.9（2026-10-26）：该时间戳改为**只在「确认远端无更新」或「发现新版本」
+//     之后写入**，不再在「刚抓取成功、还没比版本」时提前写 —— 见 ③ 处说明。
 //   - update_dismissed_version  用户点过「关闭」的版本号。只有版本号**严格大于**
 //     它才再次提示——即「这个版本我不想装」，但下个版本仍然会提示。
 //
 // ⚠️ 为什么失败必须静默：断网、公司网络拦 GitHub、API 限流（未认证 60 次/小时/IP）
 // 都是常态。给用户弹「检查更新失败」等于把基础设施问题伪装成软件故障，
 // 用户既无法处理也不需要知道。失败只写日志，UI 完全不出现任何痕迹。
+// ⚠️ 但「静默」≠「不留痕」：v1.2.9 起所有跳过/失败路径都提到 info/warn 级
+//    （原为 debug，而 release 构建默认过滤级别是 info，等于完全不落盘）。
+//    用户反馈「没自动检测到更新」时，第一步就是看日志里有没有这条命令的记录。
 
-/// 自动检查的最小间隔：24 小时。
-/// 取 24h 而不是「每次启动」的原因：重度用户一天会开十几次应用，
-/// 不节流就是十几次无效请求，且 GitHub 未认证 API 有 60 次/小时/IP 的限流。
-const UPDATE_CHECK_INTERVAL_SECS: i64 = 24 * 60 * 60;
+/// 自动检查的最小间隔：6 小时。
+///
+/// v1.2.9（2026-10-26）：由 24h 收紧到 6h。原因是 24h 与「应用常驻」叠加后会出现
+/// 「永远错过」：用户 T 时刻启动检查一次（无新版）→ 写时间戳 → 16 小时后发新版 →
+/// 用户 17 小时后重启应用 → elapsed < 24h 直接 return，**连网络请求都不发**。
+/// 6h 让最坏情况从「错过一整天」压到「最多晚 6 小时」，同时仍远低于
+/// GitHub 未认证 API 的 60 次/小时/IP 限额（每 6h 一次 = 每天 4 次）。
+///
+/// 取 6h 而不是「每次启动」的原因：重度用户一天会开十几次应用，
+/// 不节流就是十几次无效请求。
+const UPDATE_CHECK_INTERVAL_SECS: i64 = 6 * 60 * 60;
 
 #[derive(serde::Serialize, Clone)]
 pub struct AutoUpdateInfo {
@@ -1015,46 +1027,105 @@ pub async fn auto_check_update(
     let current = app.config().version.clone().unwrap_or_else(|| "0.0.0".to_string());
     let no_update = AutoUpdateInfo { has_update: false, current: current.clone(), latest: String::new(), url: String::new() };
 
-    // ① 节流：距上次成功检查不足 24h 就跳过，不发请求
+    // ① 节流：距上次成功检查不足 6h 就跳过，不发请求
     let now = Local::now().timestamp();
     if let Some(last) = state.db.get_setting("update_last_check_at").and_then(|v| v.parse::<i64>().ok()) {
         // 负值（系统时间被回拨）也视为需要重新检查，避免永久锁死
         let elapsed = now - last;
         if elapsed >= 0 && elapsed < UPDATE_CHECK_INTERVAL_SECS {
-            tracing::debug!(elapsed_secs = elapsed, "自动检查更新：24h 内已检查过，跳过");
+            // v1.2.9：debug → info。这是「用户说没检测到更新」时最常见的答案，
+            // 必须能落盘（release 默认级别 info，debug 会被直接丢弃）。
+            tracing::info!(
+                elapsed_secs = elapsed,
+                interval_secs = UPDATE_CHECK_INTERVAL_SECS,
+                "自动检查更新：节流窗口内已检查过，跳过"
+            );
             return Ok(no_update);
         }
     }
 
-    // ② 抓取。失败静默：写日志、不写时间戳（下个启动周期重试）、返回 no_update
+    // ② 抓取。失败静默：写日志、不写时间戳（下个周期重试）、返回 no_update
     let (latest, url, _notes) = match fetch_latest_release().await {
         Ok(v) => v,
         Err(e) => {
-            tracing::debug!(error = %e, "自动检查更新失败（静默忽略）");
+            // v1.2.9：debug → warn。失败是**唯一会让用户看到「什么都没发生」**的分支，
+            // 必须是 warn 才能进日志（原来 debug 在 release 下完全不落盘，
+            // 导致「到底请求没请求」无法事后判断）。
+            tracing::warn!(error = %e, "自动检查更新失败（静默忽略，不占节流窗口）");
             return Ok(no_update);
         }
     };
 
-    // ③ 成功才写时间戳：保证「失败不占用节流窗口」
-    if let Err(e) = state.db.set_setting("update_last_check_at", &now.to_string()) {
-        tracing::warn!(error = %e, "写入 update_last_check_at 失败");
+    // ③ 判有无新版本（**先判、再写时间戳**）
+    //
+    // v1.2.9 修正：原代码把「写时间戳」放在这里之前，等于「只要抓取成功就烧掉
+    // 一整个节流窗口」——包括「已是最新」这种情况。配合 24h 窗口就是那个致命序列：
+    //   T 时刻检查（无新版）→ 写 T → T+16h 发新版 → T+17h 用户重启 →
+    //   elapsed < 24h 直接 return，连请求都不发。
+    // 现在改成「确认过一次远端状态后才写」，语义是「上次**确认**过」，与键名一致。
+    // 落点放在所有 return 之前（无新版 / 已 dismissed / 有新版本 三条都要写），
+    // 否则「已是最新」会变成每次启动都请求（节流失效）。
+    let has_new = semver_gt(&latest, &current);
+
+    // ④ 用户已关闭过这个版本 → 不再提示（但更高版本仍会提示）
+    //    必须先于「发现新版本」的 info 日志判断，否则日志会说「发现新版本」
+    //    而实际返回 has_update:false，排查时被误导。
+    let dismissed_blocked = if has_new {
+        match state.db.get_setting("update_dismissed_version") {
+            Some(raw) => {
+                let dismissed = raw.trim().to_string();
+                if dismissed.is_empty() {
+                    false
+                } else if !semver_gt(&dismissed, &current) {
+                    // v1.2.9：**记录自愈**。`dismissed <= current` 说明用户已经
+                    // 升级到（或越过）当初忽略的那个版本了，这条记录再无意义 → 清空。
+                    //
+                    // 为什么必须清：判断用的是「严格大于才提示」，只要键留着
+                    // `dismissed == "1.2.8"`，而远端 latest 仍是 1.2.8（重切同名 tag、
+                    // 或用户在预发布阶段点过关闭），该用户就**永远收不到这条提示**，
+                    // 且没有任何 UI 能让他撤销这个状态（横幅本身已经不显示了）。
+                    // 清空后下次检查即恢复正常。
+                    tracing::info!(
+                        dismissed = %dismissed,
+                        current = %current,
+                        "更新忽略记录已过期（用户已在该版本或更高），清除"
+                    );
+                    let _ = state.db.set_setting("update_dismissed_version", "");
+                    false
+                } else if !semver_gt(&latest, &dismissed) {
+                    tracing::info!(latest = %latest, dismissed = %dismissed, "自动检查更新：该版本已被用户关闭，不再提示");
+                    true
+                } else {
+                    false
+                }
+            }
+            None => false,
+        }
+    } else {
+        false
+    };
+
+    // ⑤ 到这里才算「本次确认完成」，写时间戳。
+    //    ⚠️ 三条出口（无新版 / 已 dismissed / 有新版本）都会执行到这里，不要提前 return。
+    match state.db.set_setting("update_last_check_at", &now.to_string()) {
+        Ok(_) => tracing::info!(
+            current = %current,
+            latest = %latest,
+            has_new,
+            dismissed_blocked,
+            "自动检查更新完成"
+        ),
+        Err(e) => tracing::warn!(error = %e, "写入 update_last_check_at 失败"),
     }
 
-    // ④ 无新版本
-    if !semver_gt(&latest, &current) {
-        tracing::debug!(current = %current, latest = %latest, "自动检查更新：已是最新版本");
+    if !has_new {
+        return Ok(no_update);
+    }
+    if dismissed_blocked {
         return Ok(no_update);
     }
 
-    // ⑤ 用户已关闭过这个版本 → 不再提示（但更高版本仍会提示）
-    if let Some(dismissed) = state.db.get_setting("update_dismissed_version") {
-        if !semver_gt(&latest, &dismissed) {
-            tracing::debug!(latest = %latest, dismissed = %dismissed, "自动检查更新：该版本已被用户关闭");
-            return Ok(no_update);
-        }
-    }
-
-    tracing::info!(current = %current, latest = %latest, "自动检查更新：发现新版本");
+    tracing::info!(current = %current, latest = %latest, "自动检查更新：发现新版本，将展示横幅");
     Ok(AutoUpdateInfo { has_update: true, current, latest, url })
 }
 
@@ -1063,8 +1134,9 @@ pub async fn auto_check_update(
 /// 走 save_settings 会顺带覆写其他设置（它要求传全部字段）。
 #[tauri::command]
 pub fn dismiss_update(state: tauri::State<'_, Arc<AppState>>, version: String) -> Result<bool, String> {
-    state.db.set_setting("update_dismissed_version", version.trim()).map_err(|e| e.to_string())?;
-    crate::logging::audit("update_dismissed", &format!("version={version}"));
+    let trimmed = version.trim();
+    state.db.set_setting("update_dismissed_version", trimmed).map_err(|e| e.to_string())?;
+    crate::logging::audit("update_dismissed", &format!("version={trimmed}"));
     Ok(true)
 }
 

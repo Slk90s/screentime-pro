@@ -240,6 +240,31 @@ const updateBanner = ref<AutoUpdateInfo | null>(null);
 
 /** 定时器句柄：组件卸载时要清掉，否则窗口关闭后仍会触发一次 IPC */
 let updateTimer: ReturnType<typeof setTimeout> | null = null;
+/** v1.2.9：周期复查定时器句柄（见 onMounted 内说明） */
+let updateInterval: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * 自动检查的启动延时（毫秒）。等首屏数据和图表都画完再发请求，避免和首屏抢带宽/主线程。
+ */
+const UPDATE_FIRST_DELAY_MS = 15_000;
+
+/**
+ * v1.2.9（2026-10-26）：**周期复查间隔 = 6 小时**，与后端
+ * `UPDATE_CHECK_INTERVAL_SECS` 保持一致（后端 6h 节流，前端 6h 触发；
+ * 前端比后端慢或等速都能命中，快于后端则会被节流挡掉，只多一次 IPC 开销）。
+ *
+ * 为什么必须有这个 setInterval（这是「版本 27 没检测到更新」的主因）：
+ * 原来只有 `setTimeout(..., 15_000)` 一次。而本应用是**常驻托盘**的
+ * （lib.rs 的 on_window_event 里 CloseRequested → prevent_close + hide），
+ * 用户点「×」只是隐藏窗口，WebView 不销毁、进程不退、onMounted 不会再跑。
+ * 于是「进程启动 + 15 秒」是这个进程**一生**唯一的一次检查时机：
+ *   - 实测样本：v1.2.4 从 10-23 07:54Z 连续运行 3 天 22 小时，期间 0 次检查，
+ *     v1.2.8 于 10-26 11:54 发布时那个进程完全不知道。
+ *   - 用户说的「打开应用后没检测到更新」= 从托盘唤出窗口（不是重启进程），
+ *     所以在旧实现下永远不会触发。
+ * 加上周期复查后，最坏延迟从「永不」压到 6 小时。
+ */
+const UPDATE_RECHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 async function checkUpdateSilently() {
   try {
@@ -283,13 +308,23 @@ onMounted(() => {
   loadDevices();
   loadRange();
   loadDetails();
-  updateTimer = setTimeout(checkUpdateSilently, 15_000);
+  // v1.2.9：首次延时 15s（等首屏画完）+ 此后每 6h 复查一次。
+  // 见 UPDATE_RECHECK_INTERVAL_MS 的注释：应用常驻托盘，单次 setTimeout
+  // 会让「一次检查」变成这个进程唯一的检查时机，新版本永远不会被发现。
+  updateTimer = setTimeout(checkUpdateSilently, UPDATE_FIRST_DELAY_MS);
+  updateInterval = setInterval(checkUpdateSilently, UPDATE_RECHECK_INTERVAL_MS);
 });
 // 卸载时清掉定时器：否则用户 15s 内切走或关窗后，回调仍会打一次 IPC
 onBeforeUnmount(() => {
   if (updateTimer) {
     clearTimeout(updateTimer);
     updateTimer = null;
+  }
+  // v1.2.9：周期定时器同样必须清，否则组件卸载后每 6h 仍会打一次 IPC
+  // （Dashboard 目前是主窗口常驻组件，但 keep-alive/条件渲染后就会泄漏）
+  if (updateInterval) {
+    clearInterval(updateInterval);
+    updateInterval = null;
   }
 });
 // 切换时间范围或设备时重新拉取概览数据

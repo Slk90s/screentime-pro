@@ -362,12 +362,29 @@ pub fn run() {
             if let Err(e) = screenshot::shortcut::apply(app.handle(), &screenshot_cfg) {
                 tracing::warn!(error = %e, "启动期注册截图快捷键失败");
             }
-            // v0.9.4（Task 79）：启动 3 秒后预请求「屏幕录制」授权（仅 macOS）。
-            // 把登记 + 弹系统授权框从「第一次截图时」提前到「启动时」：用户在主界面
-            // 从容处理授权框，而不是按快捷键截图时被突然弹出的系统框打断。
-            // 已授权的应用启动时只做一次轻量预检，零打扰。
-            #[cfg(target_os = "macos")]
-            screenshot::macos::schedule_startup_permission_request(app.handle().clone());
+            // v1.2.9（2026-10-26）：**删除启动 3 秒预请求「屏幕录制」授权**
+            // （原 v0.9.4 Task 79 的 `schedule_startup_permission_request`）。
+            //
+            // 为什么删（用户反馈「每次打开都弹权限框，弹窗太多」）：
+            //   ① 该预请求的判据是**单信号** `is_screen_capture_trusted()`
+            //      （= CGPreflightScreenCaptureAccess），而该 API 有「进程内一旦
+            //      返回 false 就一直 false」的已知行为（本模块与
+            //      screenshot/macos.rs 模块头各记了一遍）。于是**已授权用户每次
+            //      启动都可能被再弹一次系统授权框** —— 这是「反复弹」的主因。
+            //   ② 它无条件在每次 setup 执行，与「新授权只对新进程生效」叠加后，
+            //      首启用户会陷入「弹框 → 授权 → 提示重启 → 重启 → 再弹框」循环。
+            //   ③ 时长统计**不依赖**这张授权（NSWorkspace.frontmostApplication
+            //      无需任何 TCC），只有「窗口标题粒度」和「截图取字」需要。启动时
+            //      就为它弹框，属于「无明确用户意图时索要权限」。
+            //
+            // 现在改为**按需请求**：用户第一次真正截图时，由
+            // `screenshot::macos::ensure_ready()`（同样是双信号判据，且已有完整
+            // 引导弹窗）发起请求。启动阶段只做**静默查询**，不 request、不 emit。
+            //
+            // ⚠️ 旧约定失效：`screenshot-permission-changed` 事件不再有发出方
+            // （唯一的 emit 点随本函数删除）。前端 App.vue 仍保留了监听以防旧版
+            // 后端，但正常路径下不会再触发；启动首屏的权限说明由
+            // `tracker.checkPermissions()`（横幅）承担。
             // 桌宠「按身体 alpha 命中」穿透轮询线程（修透明区点击死区）
             pet::hit_mask::spawn_watcher(app.handle().clone());
             app.manage(LogGuardHolder(log_guard.unwrap_or_default()));

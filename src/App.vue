@@ -64,7 +64,7 @@
       <span>{{ accessibilityNeverGranted ? t("app.permWarning") : t("app.permWarningInvalidated") }}</span>
       <div class="perm-actions">
         <button @click="openSettings">{{ t("app.openSettings") }}</button>
-        <button class="perm-dismiss" @click="accessibilityNeverGranted ? (permDismissed = true) : (permInvalidDismissed = true)" :title="t('app.dismissTip')"><AppIcon name="x" /></button>
+        <button class="perm-dismiss" @click="dismissPermBanner" :title="t('app.dismissTip')"><AppIcon name="x" /></button>
       </div>
     </div>
 
@@ -90,9 +90,12 @@
     </div>
 
     <!-- v0.9.4：macOS「屏幕录制」授权紧凑弹窗（一句话原因 + 去授权/重置并重启 +
-         2s 轮询翻转「已授权点此重启」+ 详情折叠）。由 screenshot-permission-blocked
-         （截图被闸门拦）与 screenshot-permission-changed（启动预请求后仍未授权）
-         两个事件驱动；取代 v0.9.2/3 的大段错误 toast。 -->
+         2s 轮询翻转「已授权点此重启」+ 详情折叠）。
+         v1.2.9（2026-10-26）：**只剩一个驱动源** —— screenshot-permission-blocked
+         （用户真的按了截图快捷键、被闸门拦下）。原先还有 screenshot-permission-changed
+         （启动预请求后仍未授权），但那个预请求已删除（见 lib.rs setup 内说明：
+         每次启动无条件请求 = 「反复弹窗」主因）。现在**启动不再自动弹本弹窗**，
+         用户不截图就不会看到它。 -->
     <PermissionDialog
       v-if="permDialogReason"
       :reason="permDialogReason"
@@ -166,13 +169,46 @@ const live = ref<CurrentForegroundOut>({
 });
 // 系统权限状态
 const perm = ref<PermissionStatus>({ accessibility: true, screen_capture: true });
-// 用户手动关闭了权限横幅（关闭后不再显示，除非页面重新加载）
-const permDismissed = ref(false);
+
+// ===== v1.2.9（2026-10-26）：权限横幅的「已关闭」状态落盘 =====
+//
+// 为什么必须落盘（用户反馈「弹窗反复、干扰」）：
+//   原来两个 dismiss 标记都是纯 `ref(false)`，只活在内存里。于是：
+//     ① 每次重启应用横幅必然复活（用户点过的「×」毫无记忆）；
+//     ② 每次窗口 focus 都被重置（见 onMounted 的 tauri://focus 回调原先会
+//        把两个标记都设回 false）—— 用户从系统设置回来、甚至只是切个窗口，
+//        刚关掉的横幅又出现了。这是「反复弹」体感最直接的来源。
+//
+// 键名带版本号：升级后允许重新提示一次（新版可能新增了权限要求），
+// 但不能每次启动都重置 —— 那等于没落盘。
+const PERM_DISMISS_KEY = "perm_banner_dismissed";
+const PERM_INVALID_DISMISS_KEY = "perm_banner_invalid_dismissed";
+
+/** 读一个布尔型 localStorage（异常/无痕模式下静默返回 false，绝不抛） */
+function readFlag(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+/** 写一个布尔型 localStorage（隐私模式 / 配额满时静默忽略） */
+function writeFlag(key: string, on: boolean): void {
+  try {
+    if (on) localStorage.setItem(key, "1");
+    else localStorage.removeItem(key);
+  } catch {
+    /* localStorage 不可用（隐私模式）时退化为「每次都提示」，不影响主功能 */
+  }
+}
+
+// 用户手动关闭了权限横幅（v1.2.9：落盘，重启后仍记得）
+const permDismissed = ref(readFlag(PERM_DISMISS_KEY));
 // v1.0.1：授权失效横幅只提示一次（用户关闭后不再骚扰）。
 // 「失效」= 屏幕录制已授权但辅助功能未授权 —— 这是升级后 TCC 身份漂移的典型特征
 // （ad-hoc 签名每次重建指纹都变，旧授权对新版二进制失效，系统设置开关看着还开着）。
 // 与「从未授权」不同：用户大概率以前授权过，只是需要关掉再重开一次，常驻横幅只会造成困扰。
-const permInvalidDismissed = ref(false);
+const permInvalidDismissed = ref(readFlag(PERM_INVALID_DISMISS_KEY));
 // WebView2 检测结果（仅 Windows 真正生效）
 const webview2 = ref<{ os: string; available: boolean; version: string; hint: string } | null>(null);
 // 用户手动关闭了 WebView2 横幅
@@ -184,8 +220,9 @@ let toastTimer: number | undefined;
 // 下方紧凑授权弹窗 PermissionDialog），因此从 {msg,perm} 简化为纯字符串。
 const shotError = ref<string | null>(null);
 let errTimer: number | undefined;
-// v0.9.4：紧凑授权弹窗的当前原因码（null = 关闭）。两条链路写入：
-// screenshot-permission-blocked（截图被闸门拦）/ screenshot-permission-changed（启动预请求后仍未授权）
+// v0.9.4：紧凑授权弹窗的当前原因码（null = 关闭）。v1.2.9 起**只有一个写入源**：
+// screenshot-permission-blocked（用户真按了截图快捷键、被权限闸门拦下时 Rust 发出）。
+// 旧的两个写入源之一是启动预请求的 screenshot-permission-changed，该预请求已删除。
 const permDialogReason = ref<string | null>(null);
 let timer: number | undefined;
 // v1.1.0：延时截图倒计时剩余秒数（0 = 无倒计时）。由 Rust screenshot-countdown 事件驱动
@@ -207,6 +244,24 @@ const showPermWarning = computed(() => {
     ? !permDismissed.value
     : !permInvalidDismissed.value;
 });
+
+/**
+ * v1.2.9：关闭权限横幅 —— 按当前横幅属于哪一档，写入对应的落盘标记。
+ *
+ * 为什么要抽成函数（原来是模板里的三元表达式）：现在要**同时**改 ref 和
+ * localStorage，写在模板里既读不出意图、也容易漏写其中一半（漏写 localStorage
+ * 就退回「每次重启都复活」的老问题）。
+ * 两档分开记：用户关掉「从未授权」的提示，不应该连带把「升级后失效」的提示也永久静音。
+ */
+function dismissPermBanner(): void {
+  if (accessibilityNeverGranted.value) {
+    permDismissed.value = true;
+    writeFlag(PERM_DISMISS_KEY, true);
+  } else {
+    permInvalidDismissed.value = true;
+    writeFlag(PERM_INVALID_DISMISS_KEY, true);
+  }
+}
 // WebView2 缺失横幅（仅 Windows + 未安装时显示）
 const showWebview2Warning = computed(() => webview2.value !== null && webview2.value.os === "windows" && !webview2.value.available);
 
@@ -311,11 +366,22 @@ onMounted(async () => {
         // 聚焦后延迟 300ms 重检（macOS TCC 状态更新有微小延迟）
         setTimeout(async () => {
           try {
+            const wasAccessibility = perm.value.accessibility;
             perm.value = await tracker.checkPermissions();
-            // 如果检测到权限已恢复，重置关闭标记
-            if (perm.value.accessibility) {
+            // v1.2.9：**只在「权限真的从无到有」时清除关闭标记**。
+            //
+            // 原写法是「只要当前 accessibility 为真就重置两个 dismiss 标记」——
+            // 但用户从系统设置**授权失败**地回来、或压根没动设置只是切了下窗口，
+            // 这个条件同样成立（accessibility 一值未变），于是刚关掉的横幅立刻复活。
+            // 这是「点了 × 还在反复弹」最直接的成因之一（另一个是标记没落盘）。
+            //
+            // 现在改成边沿触发：false → true 才算「恢复」，此时清标记 + 清落盘，
+            // 目的是让用户下次真的再次失去权限时还能收到提示（否则永久静音）。
+            if (!wasAccessibility && perm.value.accessibility) {
               permDismissed.value = false;
               permInvalidDismissed.value = false;
+              writeFlag(PERM_DISMISS_KEY, false);
+              writeFlag(PERM_INVALID_DISMISS_KEY, false);
             }
           } catch { /* ignore */ }
         }, 300);
@@ -362,14 +428,19 @@ onMounted(async () => {
         permDialogReason.value = ev.payload || "not_granted";
       })
     );
-    // v0.9.4：启动预请求完成后仍未授权（Rust schedule_startup_permission_request 发出）。
-    // 首启用户会在这里被引导完成授权 —— 不再等第一次截图时才发现。
+    // v0.9.4：启动预请求完成后仍未授权 → 弹紧凑授权窗。
+    // v1.2.9（2026-10-26）：**Rust 侧已删除启动预请求，本事件在生产路径上不再发出**
+    // （唯一 emit 点随 schedule_startup_permission_request 一起移除）。
+    // 这里仍保留监听做两层兜底：① 用户从旧版升级、旧进程可能还在跑；
+    // ② 将来若在别处重新引入「主动请求后广播」，语义仍然是「只更新状态，不自动弹窗」——
+    //    纯查询引起的状态变化不该抢用户注意力，弹窗只应由「截图被拦」这种明确意图触发。
     unlisteners.push(
       await listen<{ reason: string; permitted: boolean }>(
         "screenshot-permission-changed",
         (ev) => {
-          if (!ev.payload?.permitted && !permDialogReason.value) {
-            permDialogReason.value = ev.payload.reason || "not_granted";
+          if (ev.payload?.permitted) {
+            // 授权已生效：顺手清掉可能残留的弹窗（避免用户授权后仍被挡住）
+            permDialogReason.value = null;
           }
         }
       )

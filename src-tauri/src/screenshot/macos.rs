@@ -45,6 +45,16 @@
 //!     ② 新增权限状态快照 `status_snapshot` / 主动请求 `request_permission` /
 //!     打开设置 `open_permission_settings` / 启动预请求 `schedule_startup_permission_request`，
 //!     配合前端紧凑授权弹窗（轮询 + 引导重启）与启动期预登记。
+//!   - 2026-10-26 @v1.2.9: **删除** `preflight_request_on_startup` /
+//!     `schedule_startup_permission_request` / `STARTUP_HANDLE`（连同 `tauri::AppHandle`
+//!     与 `Emitter` 两个 import）。原因：用户反馈「每次打开都弹权限框」，根因是该预请求
+//!     的判据是单信号 `CGPreflightScreenCaptureAccess`（其「进程内一旦 false 就恒 false」
+//!     的已知行为见本文件开头与 tracker/macos.rs），已授权机器也会被再弹一次；
+//!     且它无条件在每次 setup 执行，与「新授权只对新进程生效」叠加成
+//!     「弹框→授权→提示重启→重启→再弹框」循环。
+//!     **新约定**：启动阶段只做静默查询（`status_snapshot`），不 request、不 emit；
+//!     真正的授权请求一律由 `ensure_ready()` 在用户**首次截图**时发起。
+//!     `screenshot-permission-changed` 事件因此不再有发出方（旧约定失效）。
 //!
 
 use core_foundation_sys::array::{CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef};
@@ -60,7 +70,6 @@ use core_graphics::window::{
     kCGWindowName, kCGWindowOwnerPID,
 };
 use std::os::raw::{c_char, c_void};
-use tauri::{AppHandle, Emitter};
 
 /// 本应用的 bundle id —— 必须与 `tauri.conf.json` 的 `identifier` 逐字一致，
 /// 否则 `tccutil reset` 会去重置一个不存在的条目（失败但不报错，白忙一场）。
@@ -528,55 +537,6 @@ pub fn open_permission_settings() {
         .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
         .spawn();
     crate::logging::audit("open_screen_capture_settings", "Privacy_ScreenCapture");
-}
-
-/// 启动时预请求授权（Task 79）：把本应用登记进系统设置列表 + 首次弹系统授权框。
-///
-/// 为什么在启动做：v0.9.3 及以前，登记发生在**第一次截图**时 —— 用户第一次按快捷键，
-/// 屏幕上突然弹出一个系统授权框，而遮罩窗流程已经开始走，体验割裂且容易误点「不允许」。
-/// 启动后 3 秒在后台线程预请求，用户在主界面就能从容看到并处理这个框。
-///
-/// 只在「预检为 false」时请求（已授权的应用每次启动都弹框就是骚扰了）。
-/// 结果只记日志，不弹任何 UI —— 前端紧凑弹窗（Task 81）会通过
-/// `screenshot_permission_status` 轮询自行感知状态变化。
-pub fn preflight_request_on_startup() {
-    if crate::tracker::macos::is_screen_capture_trusted() {
-        tracing::debug!("屏幕录制授权已生效，启动预请求跳过");
-        return;
-    }
-    tracing::info!("启动预请求：向系统登记并请求「屏幕录制」授权");
-    let granted = crate::tracker::macos::request_screen_capture_access();
-    let sig = collect();
-    tracing::info!(
-        granted,
-        signals = %sig.summary(),
-        "启动预请求完成（新授权仅对新启动的进程生效）"
-    );
-    // 把状态变化广播给主窗：前端据此决定是否亮出紧凑授权引导弹窗（Task 81）
-    let _ = STARTUP_HANDLE.get().map(|h| {
-        let _ = h.emit("screenshot-permission-changed", status_snapshot());
-    });
-}
-
-/// 启动期缓存的 AppHandle（`preflight_request_on_startup` 里发事件用）。
-///
-/// 用 `OnceLock` 存一份全局句柄：setup 阶段写入，之后任何线程都能安全读取。
-static STARTUP_HANDLE: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
-
-/// setup 阶段调用：缓存 AppHandle + 3 秒后在后台线程执行预请求。
-///
-/// 为什么延迟 3 秒：启动瞬间主窗还在初始化，立刻弹系统授权框容易和
-/// 应用自身的首屏渲染抢焦点；延后几秒体验更从容。且**必须**在独立线程：
-/// `CGRequestScreenCaptureAccess` 首次调用会同步等用户点击，绝不能占住主线程。
-pub fn schedule_startup_permission_request(handle: AppHandle) {
-    let _ = STARTUP_HANDLE.set(handle.clone());
-    std::thread::Builder::new()
-        .name("perm-preflight".into())
-        .spawn(move || {
-            std::thread::sleep(std::time::Duration::from_secs(3));
-            preflight_request_on_startup();
-        })
-        .ok();
 }
 
 /// 重置本应用的「屏幕录制」授权记录（`tccutil reset ScreenCapture <bundle id>`）。
