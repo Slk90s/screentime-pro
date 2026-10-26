@@ -91,7 +91,7 @@
 
     <!-- v0.9.4：macOS「屏幕录制」授权紧凑弹窗（一句话原因 + 去授权/重置并重启 +
          2s 轮询翻转「已授权点此重启」+ 详情折叠）。
-         v1.2.9（2026-10-26）：**只剩一个驱动源** —— screenshot-permission-blocked
+         v1.2.10（2026-10-26）：**只剩一个驱动源** —— screenshot-permission-blocked
          （用户真的按了截图快捷键、被闸门拦下）。原先还有 screenshot-permission-changed
          （启动预请求后仍未授权），但那个预请求已删除（见 lib.rs setup 内说明：
          每次启动无条件请求 = 「反复弹窗」主因）。现在**启动不再自动弹本弹窗**，
@@ -170,7 +170,7 @@ const live = ref<CurrentForegroundOut>({
 // 系统权限状态
 const perm = ref<PermissionStatus>({ accessibility: true, screen_capture: true });
 
-// ===== v1.2.9（2026-10-26）：权限横幅的「已关闭」状态落盘 =====
+// ===== v1.2.10（2026-10-26）：权限横幅的「已关闭」状态落盘 =====
 //
 // 为什么必须落盘（用户反馈「弹窗反复、干扰」）：
 //   原来两个 dismiss 标记都是纯 `ref(false)`，只活在内存里。于是：
@@ -202,7 +202,7 @@ function writeFlag(key: string, on: boolean): void {
   }
 }
 
-// 用户手动关闭了权限横幅（v1.2.9：落盘，重启后仍记得）
+// 用户手动关闭了权限横幅（v1.2.10：落盘，重启后仍记得）
 const permDismissed = ref(readFlag(PERM_DISMISS_KEY));
 // v1.0.1：授权失效横幅只提示一次（用户关闭后不再骚扰）。
 // 「失效」= 屏幕录制已授权但辅助功能未授权 —— 这是升级后 TCC 身份漂移的典型特征
@@ -220,7 +220,7 @@ let toastTimer: number | undefined;
 // 下方紧凑授权弹窗 PermissionDialog），因此从 {msg,perm} 简化为纯字符串。
 const shotError = ref<string | null>(null);
 let errTimer: number | undefined;
-// v0.9.4：紧凑授权弹窗的当前原因码（null = 关闭）。v1.2.9 起**只有一个写入源**：
+// v0.9.4：紧凑授权弹窗的当前原因码（null = 关闭）。v1.2.10 起**只有一个写入源**：
 // screenshot-permission-blocked（用户真按了截图快捷键、被权限闸门拦下时 Rust 发出）。
 // 旧的两个写入源之一是启动预请求的 screenshot-permission-changed，该预请求已删除。
 const permDialogReason = ref<string | null>(null);
@@ -246,7 +246,7 @@ const showPermWarning = computed(() => {
 });
 
 /**
- * v1.2.9：关闭权限横幅 —— 按当前横幅属于哪一档，写入对应的落盘标记。
+ * v1.2.10：关闭权限横幅 —— 按当前横幅属于哪一档，写入对应的落盘标记。
  *
  * 为什么要抽成函数（原来是模板里的三元表达式）：现在要**同时**改 ref 和
  * localStorage，写在模板里既读不出意图、也容易漏写其中一半（漏写 localStorage
@@ -368,7 +368,7 @@ onMounted(async () => {
           try {
             const wasAccessibility = perm.value.accessibility;
             perm.value = await tracker.checkPermissions();
-            // v1.2.9：**只在「权限真的从无到有」时清除关闭标记**。
+            // v1.2.10：**只在「权限真的从无到有」时清除关闭标记**。
             //
             // 原写法是「只要当前 accessibility 为真就重置两个 dismiss 标记」——
             // 但用户从系统设置**授权失败**地回来、或压根没动设置只是切了下窗口，
@@ -429,7 +429,7 @@ onMounted(async () => {
       })
     );
     // v0.9.4：启动预请求完成后仍未授权 → 弹紧凑授权窗。
-    // v1.2.9（2026-10-26）：**Rust 侧已删除启动预请求，本事件在生产路径上不再发出**
+    // v1.2.10（2026-10-26）：**Rust 侧已删除启动预请求，本事件在生产路径上不再发出**
     // （唯一 emit 点随 schedule_startup_permission_request 一起移除）。
     // 这里仍保留监听做两层兜底：① 用户从旧版升级、旧进程可能还在跑；
     // ② 将来若在别处重新引入「主动请求后广播」，语义仍然是「只更新状态，不自动弹窗」——

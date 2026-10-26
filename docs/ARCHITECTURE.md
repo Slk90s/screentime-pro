@@ -46,6 +46,16 @@
     同批合并进重切版：mac / Linux 取字**三重不可用**修复（运行库落盘路径曾返回目录而非文件名
     → 运行库永远落不了盘；下载超时过短；平台感知默认引擎 + 存量配置自愈）。
     **本版为同名 tag 重切**：v0.9.0 首发版对 macOS / Linux 的取字链路不可用，故修复后重切发布。
+  - 2026-10-26 @v1.2.10: 修复 - macOS 交互体验专项（六修复 + 一新增，Windows / Linux 零功能改动）。
+    a) 浮窗浅色外观反色（白字 1.36:1 → 全过 AA），只挂 `.has-blur` 即仅 macOS；
+    b) 浮窗高度/圆角归一到单一源（Rust `set_size`），修「底部露 8px 材质 + 纵向双弧」；
+    c) 菜单栏图标改 template 剪影（浅色栏 1.91:1 → 跟系统染色）+ 新增 `trayTemplate*.png`；
+    d) 更新检测三成因（只查一次 / 时间戳烧掉窗口 / `system-proxy` 丢失）+ 三通道抓取；
+    e) 权限弹窗反复弹（启动预请求 + 单信号判据 + focus 回调非边沿触发）；
+    f) 浮窗材质层只增不减（`window-vibrancy` apply 不去重、clear 一次只摘一层）；
+    g) 新增设置页权限中心；⑧ `tauri.conf.json` float 窗口补 x/y（height/minHeight 刻意维持 36）。
+    头部「最后更新」推进至 v1.2.10；§1 当前版本号同步；§5 IPC 表「权限」行补 `screen_capture`
+    字段与双信号口径说明。IPC 总数不变（**85**）。
   - 2026-10-20 @v1.2.1: 修复 - 三处跨平台实机问题（前两处 Windows，第三处 macOS）。
     a) 「状态栏开了却看不到」：localStorage `float_pos` 存的是副屏还在时的负坐标，副屏移除后
        被无校验恢复，窗口离屏（实测物理 (-695,159)，单屏 1536×864）。`float_window.rs` 新增
@@ -63,31 +73,69 @@
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-10-26（同步至 **v1.2.8**——macOS 15 悬浮窗玻璃右端外溢 3px + 双弧修复）——
-> **本版为跳过四个中间版本号的合并发布**（远端上一版 v1.2.2），核心是三类「静默失效」。
-> ① **设置页初始化竞态（丢更新 + 反向数据损坏）**：`Settings.vue` 原用
-> `ref.value = await load()` **整体替换**，加载晚于用户操作时冲掉改动；提交时又发**整个本地对象**
-> （初值全是默认值），把后端本是 `true` 的开关一并写成 `false` 并持久化 —— 实测只点「显示网速」，
-> 另 4 个字段被静默关闭写库。现统一改 **「权威基线 + 用户差量」**：`baseline` 存后端权威快照、
-> `dirty` 存用户真正改过的键集合；加载返回 `{ ...loaded, ...delta }`、提交 `{ ...baseline, ...delta }`；
-> 基线为 null 时提交前先同步 `ensure*Baseline()` 拉一次真值（**不可用 `?? ref.value` 兜底**，
-> 那等于拿本地默认值当权威）。覆盖 statusBar（2 写入点 + 托盘推送事件）、shotConfig（4 写入点 +
-> 2 个 v-model 数值项）、通用设置表单、备份开关。
-> ⚠️ 两个踩坑已写进代码注释：**首次加载基线为 null 时不能 `return`**（要用 `FORM_INIT` 当隐式基线）；
-> **比较必须在覆盖基线之前**（否则空 `device_name` 与后端值必然不等，会误判成「用户改过」）。
-> ② **截图遮罩窗抢前台导致采集静默停止（P0）**：`capture` 窗 `visible:false` + `focus:true`，
-> 隐藏窗创建即成为前台且不让出 → `GetForegroundWindow()` 恒返回它，采样每 tick 命中
-> `SELF_HELPER_TITLES` 白名单跳过（实测前台为它 18s 新增 0 条 / 真实应用 1 条）。
-> 修复：`focus` 改 `false` + 采集侧新增「前台不可见即跳过」通用兜底 + 截图收尾主动让出焦点。
-> ③ **OCR 行排序违反全序 panic**：成对阈值（`(a.h+b.h)/2×0.6`）导致 A≈B、B≈C 却 A<C，
-> 改为三段式（y 中心排 → 全局常量阈值归并行号 → 按 (行号,x) 排）。
-> ④ **体积优化 −62.6%（23.31MB → 8.72MB）**：补齐 `src-tauri/Cargo.toml` 的 `[profile.release]`
-> （`codegen-units=1` / `lto` / `opt-level="s"` / `panic="abort"` / `strip`），前置校验全仓
-> `catch_unwind` 0 处、bundle 不含 `.pdb`；桌宠图 PNG→WebP（5.30MB→0.64MB，alpha MAE=0.000）。
-> ⑤ **其余**：液态玻璃浮窗对比度不达标（压暗 0.48，四项全过 AA）；macOS 图标 `ic04/ic05`+ARGB；
-> 桌宠皮肤注册期误校验致丢失；WAL 收敛（`wal_autocheckpoint=256`，4.13→1.05MB）；
-> 启动自动检查更新（`auto_check_update` 永不返回 Err，24h 后端节流，失败全静默）。
-> IPC 总数 **84**（本批未增减）。
+> 最后更新：2026-10-26（同步至 **v1.2.10**——macOS 交互体验专项修复；Windows / Linux 零功能改动）——
+> 六项修复 + 一项新增，全部落在 macOS 观感与授权体验。**总纲：凡「同一件事有两个源」或
+> 「一档配色无条件套用到两个平台」的地方，都会在某个时刻露馅。**
+> ① **浮窗浅色外观下白字看不清（P0）**：字号/颜色/压暗量全按深色背景定标，**没跟随
+> `prefers-color-scheme`**（浅色壁纸的玻璃底上白字仅 **1.36:1**，AA 正文线 4.5:1）。
+> **降 alpha 治不了** —— 压暗到 0.48 仍只有 3.40:1、加到 0.80 也才 3.9 上下，数学上过不了 4.5，
+> **唯一出路是反色**。新增 `@media (prefers-color-scheme: light)` 档：白遮罩 + 近黑字 `#1c1c1e`
+> （NSColor.labelColor 浅色值）。⚠️ **反色只挂 `.has-blur`（仅 macOS），Windows 明确不参与**：
+> ① Windows 无系统材质跟随 appearance（DWM 透光率 0.001，已刻意停用），CSS 是唯一视觉来源；
+> ② 反色在深壁纸上**大幅变差** —— Win11 Bloom `rgb(46,32,78)` 上现状 16.78:1，照搬本档只剩
+> **6.32:1**（净亏 10.5），且胶囊会变成 srgb(161,155,175) 的灰白板；③ 与关玻璃时的深色胶囊
+> `rgba(28,30,38,.86)` 割裂。配色定标：材质后底下界由 v1.2.8 深色真机实测**反推**
+> （压暗 0.48 后观测 L≈95/71 ÷ 0.52 → 183/137），按 137 保守取值扫全程 130~255 取最差：
+> 主数字 10.38 / 标签 5.16 / 网速↓ 4.74 / 网速↑ 4.82 / 截图 5.49，**全过 AA**。
+> ② **浮窗高度/圆角有两个源**：Rust `set_size` 下发 36 或 44，CSS 又硬编码 `height:36px` /
+> `.is-glass{height:44px}`，两条时间线不同源 → 冷启动与开关翻转时胶囊底部露出 8px 系统材质、
+> 材质 radius 22 vs CSS 18 呈纵向双弧。改 `.float-bar` 为 `height:100%` + `border-radius:999px`
+> 并删掉 `.is-glass` 里的 44px/22px，**高度只剩一处定义**（与 v1.2.8 对宽度的改造完全同构：
+> 该文件「宽度」那次也是把 `width` 从定义改成跟随）。
+> ③ **菜单栏图标浅色栏显脏灰**：托盘取彩色 App 图标（alpha=255 占 90.6%），浅色栏上仅
+> **1.91:1**（就是一块糊在栏上的色块）。改用 **template 剪影图**（纯黑 + alpha 的圆环 + 圆心），
+> 系统按菜单栏明暗自动染色。新增 `icons/trayTemplate.png`(22²)/`@2x`(44²)，4x 超采样后 LANCZOS
+> 缩小，有效覆盖率 **25.0% / 25.1%**（理论 24.8%，误差 <0.3%）。macOS 分支内嵌 **@2x** ——
+> `tray-icon 0.24.2` 的 macOS 实现是单张 `NSImage::initWithData`（`platform_impl/macos/icon.rs:20`），
+> 无法表达 1x/2x 多表示；且系统把图标压到固定 18pt（`macos/mod.rs:296`），44px 下采样更锐利。
+> `.icon_as_template(cfg!(target_os="macos"))` —— 该 API 无 cfg 门控，非 macOS 是空操作，
+> 但仍按平台置真，避免将来 tray-icon 给 Windows 加 template 语义时误伤。
+> ⚠️ 素材**不写进** `tauri.conf.json` 的 `bundle.icon`（那里 `find_icon` 取不到会 panic）。
+> ④ **检测不到版本更新（三个独立成因全处理）**：**(a)** 前端只有一个 `setTimeout`，常驻托盘
+> 应用等于「进程一生只查一次」→ 改 6 小时 `setInterval`；**(b)** 时间戳在「抓取成功」后就写、
+> **包括「已是最新」**，导致接下来 24h 不再检查 → 改为「确认远端状态」之后才写、节流 24h→6h；
+> **(c)** `reqwest` 用 `default-features = false` **连带丢了 `system-proxy`**
+> （`reqwest-0.12.28/Cargo.toml:101-106`），只认 `HTTP_PROXY` 环境变量、**不读系统代理** ——
+> Clash/Surge 这类 GUI 客户端默认改的正是系统代理，用户以为「开着代理」而进程实际直连出境，
+> 三条通道全灭后前端报「已是最新」→ 补回该 feature。另：三通道抓取（GitHub atom → GitHub REST
+> → **Gitee 镜像**）全失败才算失败；每条通道加 `is_version_tag` 校验（`ocr-runtime` 这类资源型
+> Release 会让前端弹「发现新版本 ocr-runtime」死链）；`semver_gt` 修正 dismissed 自愈（依赖
+> 「相等返回 false」，否则忽略过的版本永久不再提示）；错误正文按**字符**截断
+> （`String::truncate` 按字节切且非 char 边界会 panic，不能用）。
+> ⑤ **权限弹窗反复弹**：删掉启动 3 秒的预请求（判据是单信号 `CGPreflight`，已授权用户也会被
+> 再弹一次），改首次截图时由 `ensure_ready` 按需请求、启动阶段只静默查询；
+> `check_permissions` 的屏幕录制改**双信号口径**（与截图侧一致），修正「升级后失效」被误判成
+> 「从未授权」的文案错误；权限横幅点 × 后 dismiss 标记落盘 localStorage、focus 回调由
+> 「accessibility 为真就清标记」改**边沿触发**（false→true 才算恢复）。
+> ⑥ **浮窗材质层只增不减**：`window-vibrancy 0.8.1` 的 `apply` **不去重**（每次新建
+> `NSVisualEffectView` 并 `addSubview`）而 `clear` 走 `viewWithTag:` **一次只摘一层** →
+> apply N 次 = N 层叠加，关玻璃后剩余层永久留下（「浮窗上有一块擦不掉的灰板」）。改为 apply 前
+> 循环清到干净、`!glass` 分支同样循环清，循环以 `Ok(false)` 收尾（**有界**）。
+> ⑦ **新增：设置页「权限中心」（仅 macOS）** —— 截图卡片后新增只读卡片：屏幕录制 / 辅助功能
+> 真实状态 + 手动刷新 + 「授予」（跳系统设置）/「重置并重启」。刻意**不轮询**：
+> `check_permissions` 在未放行时会 fork `codesign`/`xattr`，1Hz 代价过高。含 ad-hoc 签名专项
+> 提示（升级后授权失效的物理成因是 cdhash 每次构建都变）。
+> ⑧ **`tauri.conf.json` 给 float 窗口补 `x/y: 24`**：`tao-0.35.3` 无 position 时兜底
+> `ns_window.center()`（`platform_impl/macos/window.rs:331`），而 float 340px / main 1040px
+> 且 main 自身 center → 首开残影**正好压在主窗口正中**。`height`/`minHeight` **刻意维持 36**：
+> `set_float_visible` 里的 `window.show()`（lib.rs:835）早于 webview `onMounted → fitWidth()`
+> （FloatBar.vue:545），conf 写 44 会让非玻璃用户看见一帧 44px 胶囊；而玻璃档的 44 已由 setup
+> 里的 `set_size(cur_w, 44)` 在 show **之前**落定，conf 再写一遍纯属重复。
+> **验证**：`cargo check` 零警告 / `cargo test --lib` **35 passed / 0 failed / 4 ignored**
+> （本版新增 11 个单测）/ `vue-tsc --noEmit` 零错误；macOS 代码经 `aarch64-apple-darwin`
+> 交叉探针 + 双向反证（`new_owned`→`new_owned_XXX` E0599、`into_raw()`→`as_raw()` E0308）；
+> CSS 特异性矩阵脚本核验 light 块 **9 条规则全挂 `.has-blur`**（Windows 零波及）且每条都赢过
+> 暗色档（含 2 条同特异性靠源码顺序取胜的）。IPC 总数 **85**（本版未增减）。
 
 ---
 
@@ -95,7 +143,7 @@
 
 跨平台应用使用时长追踪（macOS / Windows / Linux），对标 iOS「屏幕使用时间」。**数据 100% 本地（SQLite bundled），零上传，隐私优先**。
 
-栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v1.2.8**（详见 [`RELEASE.md`](RELEASE.md)）。
+栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v1.2.10**（详见 [`RELEASE.md`](RELEASE.md)）。
 
 > ⚠️ 本节版本号在 v0.7.0 → v0.7.5 期间**长期未更新**（曾停留在 v0.7.0），与 `tauri.conf.json` 脱节。
 > 版本号唯一真实来源是 **`src-tauri/tauri.conf.json` 的 `version`**，改版本时务必回来同步本节。
@@ -295,7 +343,7 @@ Rust 端在 `commands.rs` / `pet/` 定义，**在 `lib.rs` 的 `generate_handler
 | 截图（`screenshot::`） | `screenshot_get_config` / `screenshot_set_config` / `screenshot_trigger` / `screenshot_frame` / `screenshot_commit` / `screenshot_cancel` / `screenshot_list` / `screenshot_delete` / `screenshot_reveal` / `screenshot_thumbnail` / `screenshot_dir` / `screenshot_ocr` / `screenshot_copy_text` | **v0.8.0**：配置 / 触发 / 取整屏帧（标注背景）/ 提交（收前端合成 PNG）/ 取消 / 历史增删查 + 缩略图 + 目录（共 11 个）。`set_config` 返回 `ApplyResult`（快捷键真实注册结果）。<br>**v0.8.1**：+`screenshot_ocr`（对缓存帧的指定**物理像素**矩形做本地离线 OCR，入参 `x/y/width/height`，返回 `OcrOut{text,width,height,language}`）/ `screenshot_copy_text`（走 `arboard` 写系统剪贴板，避开 WebView 剪贴板权限），合计 **13** 个 |
 | 系统指标 | `get_system_metrics` / `get_system_metrics_enabled` / `set_system_metrics_enabled` / `get_status_bar_config` / `set_status_bar_config` | CPU/内存/磁盘/网速，三端统一由悬浮指标条展示（v0.7.11 起） |
 | 悬浮指标条（`float_window::`） | `create_float_window` / `show_float_window` / `hide_float_window` / `move_float_window` / `resize_float_window` | 悬浮窗生命周期与位置尺寸（共 5 个） |
-| 权限 | `check_permissions` / `open_privacy_settings` | macOS 辅助功能 |
+| 权限 | `check_permissions` / `open_privacy_settings` | macOS 辅助功能 + 屏幕录制。`check_permissions` 返回 `{ accessibility, screen_capture }`（`db/models.rs:107`），**v1.2.10 起屏幕录制改双信号口径**（`CGPreflight` ∨ 窗口标题探针）与截图侧一致 —— 单信号会把「升级后授权失效」误判成「从未授权」。设置页**权限中心**（仅 macOS）复用它，刻意不轮询（未放行时会 fork `codesign`/`xattr`，1Hz 代价过高） |
 | 环境 | `check_webview2` / `open_webview2_download` / `reveal_path` | Windows WebView2 检测等 |
 | 元 | `check_for_update` / `open_url` / `export_logs` / `get_log_size` / `get_log_dir` | 升级、日志导出 |
 

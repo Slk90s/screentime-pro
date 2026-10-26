@@ -27,6 +27,11 @@
     修正 §4.1 中「CI 面对已存在 Release 行为不确定 → 必须删掉重建」的旧判断（实测 CI 走
     「找到既存 Release → 上传」且三次成功）；§3.1 补重切实测资产体积（MiB 口径）；
     §7 v0.9.0 行补 tag/commit 与两端 Release id、资产数与体积。
+  - 2026-10-26 @v1.2.10: 修正 - 头部推进至 v1.2.10（macOS 交互体验专项：浅色反色 / 高度单一源 /
+    菜单栏 template 图 / 更新检测三成因 / 权限弹窗 / 材质层泄漏 + 权限中心 + conf 补 x/y）；
+    按「只留当前版 + 上一版一行」压缩，v1.2.8 收成一行；§3.1「当前 releaseBody 现值」由 v1.2.8
+    更新为 **v1.2.10**（82 行 / 9265 字节 × 3 份逐字节相同）；§7 版本表补 v1.2.10 行。
+    ⚠️ 本版**尚未发布**，§7 行的「发布落点」待 CI 跑完后回填（第二个提交，不得移动 tag）。
   - 2026-10-26 @v1.2.8: 修正 - v1.2.8 双端发布后对账。① 头部「最后更新」推进至 v1.2.8，
     并把**累积了 8 个版本（v0.9.5 ~ v1.2.7）的「上一版」堆叠段落压回 v1.2.7 一行**——
     原头部占 46 行、越滚越长已不可读，本文件价值在「怎么发」而非「发过什么」（后者归 §7 与
@@ -37,26 +42,36 @@
 
 > 目的：定义 **版本号从哪来、发版前改哪些地方、CI 怎么跑、出问题怎么回滚**。
 > 与 README 区别：README 是用户面（去哪下载、每个版本有什么），本文件是维护者面（怎么发出去）。
-> 最后更新：2026-10-26（**v1.2.8 已发布并对账** —— macOS 15 悬浮窗玻璃右端外溢 3px + 双弧；
+> 最后更新：2026-10-26（**v1.2.10 待发布** —— macOS 交互体验专项修复；
 > 版本号同步见 §1.1，IPC 总数 **85**）。
-> 本版内容：**macOS 15 悬浮窗「玻璃右端 3px 灰边 + 右角双弧」P0 修复** ——
-> 根因是**两层同尺寸且都带 `border-radius`**：外层 `.float-bar` 全面铺满窗口并画圆角 + 边框，
-> 内层 `.f-content` 又画一次圆角，两个圆角的曲率中心不重合 → 右侧出现「双弧」；同时外层
-> `width:100%` 在 `box-sizing:border-box` 下把内容区撑得比窗口窄 2px，玻璃材质（NSVisualEffectView）
-> 按窗口矩形绘制、CSS 只覆盖到内容区，右端留出约 3px 未被 CSS 覆盖的**材质原色带**（浅色壁纸上即灰边）。
-> 修法：① DOM 改**双层职责分离**——外层仅负责窗口铺满 + 居中（`width:100%`、
-> `justify-content:center`、不参与测量），内层 `.f-content` 负责真实尺寸（`width:max-content`、
-> `flex:none`、唯一被 `ResizeObserver` 测量的元素），圆角与边框只保留在**外层一次**；
-> ② `WIDTH_SLACK = 2` 语义随之明确为「2 × 外层边框宽度」，窗口宽度按内层实测宽 + 2 计算，消除右端缝隙；
-> ③ 材质换档 `HudWindow`(13) → **`UnderWindowBackground`(21)** —— 前者本身偏灰、暗色遮罩重，
-> 在浅色壁纸上呈「灰板」而非玻璃；④ 新增 `native_blur: bool` 做**配色分档**：
-> 原生模糊可用（Liquid / Vibrancy）时压低 CSS 背景不透明度、把对比度交给系统材质；
-> 原生材质不可用（Acrylic / None）时由 CSS 全权承担（沿用 v1.2.2 结论：Windows 不调系统材质）。
-> `translucency` 字段随 `FloatGlassSupport` 一并下发（Liquid 0.85 / Vibrancy 0.55 / 其余 0.0），
-> **本版前端尚未消费**，留待 macOS 26 真机对比度数据到位后再接。
-> ⚠️ **本版 macOS 15 真机观感未复验**：Windows 侧只能验证「能编译、能跑、逻辑不回归」，
-> 玻璃观感属 macOS 独有渲染路径，须在 Mac 上目视确认三件事——右端 3px 灰边没了没、玻璃透不透、字清不清楚。
-> 上一版 v1.2.7：tag / commit `e704b2d`（轻量 tag）；CI run `39906361489` 三平台全 success；GitHub Release `421483547` **6 资产 / 195.89 MiB**（AppImage 99.15 / exe 21.69 / app.tar.gz 18.30 / deb 18.91 / dmg 18.91 / rpm 18.91 MiB）；Gitee Release `1232618` **5 附件 / 96.74 MiB + 2 源码包**（AppImage 超 Gitee 单文件 100 MB 上限，仅 GitHub 提供）。内容——**累积修复版（v1.2.3 ~ v1.2.6 四版合并发布）**——① **设置页初始化竞态**（`ref.value = await load()` 整体替换 + 提交整个本地对象 → 反向数据损坏，统一改「权威基线 + 用户差量」）② **截图遮罩窗抢前台致采集静默停止（P0）**（`focus:true` 隐藏窗恒为前台，采样每 tick 跳过；修复前 6 分钟跳过 833 次、采集 0 次）③ **OCR 行排序违反全序 panic**（成对阈值 → 三段式排序）；另含液态玻璃浮窗对比度压暗 0.48、macOS 图标 `ic04/ic05`、桌宠皮肤丢失、体积 −62.6%、桌宠图 WebP 化、WAL −75%、启动自动检查更新。IPC 总数 **84**（本批未增减）。
+> 本版内容：**六项修复 + 一项新增，全部落在 macOS 观感与授权体验；Windows / Linux 零功能改动，可不升级**。
+> ① **浮窗浅色外观白字看不清（P0）** —— CSS 全按深色背景定标、**没跟随 `prefers-color-scheme`**，
+> 浅色壁纸的玻璃底上白字仅 **1.36:1**（AA 正文线 4.5:1）；**降 alpha 治不了**（压暗 0.48 仍 3.40:1、
+> 加到 0.80 也才 3.9），**唯一出路是反色**。新增 light 档（白遮罩 + `#1c1c1e`）。
+> ⚠️ 反色**只挂 `.has-blur`（仅 macOS）**：Windows 无系统材质跟随 appearance，且反色在 Win11 Bloom
+> 深壁纸上会从 16.78:1 掉到 **6.32:1**（净亏 10.5）并把胶囊变成灰白板。
+> ② **浮窗高度/圆角两个源** —— Rust `set_size` 下发值与 CSS 硬编码并存，冷启动/开关翻转时底部露
+> 8px 材质、radius 22 vs 18 呈双弧；改 `height:100%` + `border-radius:999px`，高度只剩一处定义。
+> ③ **菜单栏图标浅色栏显脏灰** —— 彩色 App 图标在浅色栏仅 **1.91:1**；改用 template 剪影图，
+> 系统按栏明暗自动染色（新增 `trayTemplate.png`/`@2x`，覆盖率 25.0%/25.1% vs 理论 24.8%）。
+> ④ **检测不到更新（三成因）** —— 只查一次（`setTimeout`→6h `setInterval`）/ 时间戳在「已是最新」
+> 时也写掉 24h 窗口 / `reqwest` 关掉 `default-features` **连带丢 `system-proxy`**（只认环境变量、
+> 不读系统代理，Clash·Surge 用户必中）。另加三通道抓取（atom→REST→Gitee）+ `is_version_tag` 校验。
+> ⑤ **权限弹窗反复弹** —— 删启动预请求；`check_permissions` 屏幕录制改双信号口径；横幅 dismiss
+> 标记落盘 + focus 回调改边沿触发。⑥ **浮窗材质层只增不减** —— `window-vibrancy` 的 `apply` 不去重、
+> `clear` 一次只摘一层，改循环清到 `Ok(false)` 收尾。
+> **新增**：设置页「权限中心」（仅 macOS，只读、不轮询）。**另**：`tauri.conf.json` float 窗口补
+> `x/y: 24`（`tao` 无 position 时 `ns_window.center()` 会让首开残影压在主窗口正中），
+> `height`/`minHeight` **刻意维持 36**（`show()` 早于 `fitWidth`，写 44 会看见一帧 44px 胶囊）。
+> ⚠️ **本版 macOS 侧改动未经真机目视复验**：浅色档实际材质亮度、模板图在菜单栏的观感、
+> 权限中心文案在紧凑弹窗里是否被截断，均须在 Mac 上确认。
+> 上一版 v1.2.8：**macOS 15 悬浮窗玻璃右端外溢 3px + 双弧** —— 两层同尺寸且都带 `border-radius`
+> （曲率中心不重合 → 双弧）+ 外层 `width:100%` 在 `border-box` 下让内容区比窗口窄 2px、
+> `NSVisualEffectView` 按窗口矩形绘制 → 右端 3px 材质原色带。修法：双层职责分离（外层只管铺满+居中、
+> 内层 `width:max-content` 只管真实尺寸，圆角只保留外层一次）+ `WIDTH_SLACK=2` 语义明确为
+> 「2 × 外层边框宽」+ 材质 `HudWindow`(13)→`UnderWindowBackground`(21) + 新增 `native_blur` 做配色分档。
+> tag / commit `bd58503`；CI run `40266414622` 三平台全 success；GitHub Release `423843748`
+> **6 资产 / 195.90 MiB**；Gitee Release `1241841` **5 附件 / 96.75 MiB**（AppImage 超 100 MB 仅 GitHub）。
 ---
 
 ## 1. 版本号的唯一真实来源
@@ -141,16 +156,18 @@ grep -n 'badge/version' README.md
 `.github/workflows/build.yml` 中三个 job（windows / linux / macos）**各写了一份**
 `releaseBody`，内容是**硬编码的字符串**，不会自动跟着版本变。
 
-**当前仓库的三份 `releaseBody` 已是 v1.2.8 的文案**（v0.7.6 起每版发版时同步改写），
-三份**逐字相同**（实测各 2423 chars，YAML 解析后 2424），可用「缩进块扫描」而非正则校验一致性：
+**当前仓库的三份 `releaseBody` 已是 v1.2.10 的文案**（v0.7.6 起每版发版时同步改写），
+三份**逐字节相同**（实测各 **9265 字节 / 82 行**），可用「缩进块扫描」而非正则校验一致性：
 取 `releaseBody: |` 的基准缩进，正文缩进为基准 +2，遇到首个非空且缩进 ≤ 基准的行即视为块结束。
 （历史上用正则 `releaseBody: \|\n(.*?)(?=\n      - name:)` 抽取，会吞掉后续兄弟键，
 症状是三份「长度分别为 3757/3757/3758」且差异恰好落在 `release: true` vs `release: false`。）
-v1.2.8 的 body 结构为：标题行 `### 屏幕时间管家 ScreenTime Pro — v1.2.8` →
-`🐞 P0 修复`（玻璃右端 3px 灰边 + 右角双弧的根因与四步修法）→ `🔍 为什么会这样`（材质按窗口矩形绘制、
-CSS 只覆盖内容区的机制说明）→ `✅ 验证` → `📌 已知局限`（**明确写出 macOS 15 真机观感未复验**）。
-上一版 v1.2.7 的 body 为「累积修复版（v1.2.3 ~ v1.2.6 四版合并）」——三类静默失效（设置页初始化竞态 /
-截图遮罩窗抢前台 / OCR 行排序 panic）+ 体积 −62.6%。
+v1.2.10 的 body 结构为：标题行 `### 屏幕时间管家 ScreenTime Pro — v1.2.10` →
+`🐞 修复一~六`（浅色反色 / 高度双源 / 菜单栏图标 / 更新检测三成因 / 权限弹窗 / 材质层泄漏）→
+`✨ 新增`（权限中心）→ `📌 已知局限`（**明确写出 macOS 侧未经真机目视复验**）→ `✅ 验证`。
+上一版 v1.2.8 的 body 为 `🐞 P0 修复`（玻璃右端 3px 灰边 + 右角双弧的根因与四步修法）→
+`🔍 为什么会这样`（材质按窗口矩形绘制、CSS 只覆盖内容区的机制说明）→ `✅ 验证` →
+`📌 已知局限`（2423 chars / 37 行）。更早的 v1.2.7 为「累积修复版（v1.2.3 ~ v1.2.6 四版合并）」——
+三类静默失效（设置页初始化竞态 / 截图遮罩窗抢前台 / OCR 行排序 panic）+ 体积 −62.6%。
 更早的 v1.0.0 为两段：「#### ✨ 新功能（本版重点）」滑动截长图 + mac 画中画 + 文字标注可拖动，
 「#### 🧹 工程收口」proc::hidden / cfg 收口 / IPC 88→92，末尾「#### 📊 包体积」表。
 历史教训：v0.7.5 及以前长期停留在 v0.7.0 的旧文案（"整合 0.6.2 全部 Beta 修复"、
@@ -362,6 +379,7 @@ echo "   git push origin main && git push origin v$NEW"
 
 | 版本 | 发布时间 | 状态 | 关键说明 |
 |------|----------|------|----------|
+| **v1.2.10** | 2026-10-26 | 🐞 **修复版（macOS 交互体验专项；Windows / Linux 零功能改动）** | **六项修复 + 一项新增，全部落在 macOS 观感与授权体验**。① **浮窗浅色外观白字看不清（P0）**：CSS 全按深色背景定标、**未跟随 `prefers-color-scheme`**，浅色壁纸玻璃底上白字仅 **1.36:1**（AA 正文线 4.5:1）；**降 alpha 无解**（0.48 仍 3.40:1、0.80 也才 3.9，数学上过不了 4.5），**唯一出路是反色**。新增 light 档（白遮罩 + `#1c1c1e` = NSColor.labelColor 浅色值），**只挂 `.has-blur`（仅 macOS）**——Windows 无系统材质跟随 appearance，且反色在 Win11 Bloom `rgb(46,32,78)` 上从 16.78:1 掉到 **6.32:1**（净亏 10.5）并把胶囊变成 `srgb(161,155,175)` 灰白板。配色按 v1.2.8 深色真机实测**反推材质后底下界**（L≈95/71 ÷ 0.52 → 183/137，取 137 保守）扫 130~255 取最差：主数字 10.38 / 标签 5.16 / 网速↓ 4.74 / 网速↑ 4.82 / 截图 5.49，全过 AA（网速色因此加深 `#0a658c`→`#055a70`、`#8a4d08`→`#7a4405`）。② **浮窗高度/圆角两个源**：Rust `set_size` 下发 36/44 与 CSS 硬编码 `height:36px`/`.is-glass{height:44px}` 并存 → 冷启动与开关翻转时胶囊底部露 **8px 系统材质**、材质 radius 22 vs CSS 18 呈纵向双弧；改 `height:100%` + `border-radius:999px` 并删 `.is-glass` 里的 44/22，**高度只剩一处定义**（与 v1.2.8 对宽度的改造同构）。③ **菜单栏图标浅色栏显脏灰**：托盘取彩色 App 图标（alpha=255 占 90.6%），浅色栏 **1.91:1**；改 template 剪影图（纯黑 + alpha 圆环 + 圆心），系统按栏明暗染色。新增 `icons/trayTemplate.png`(22²)/`@2x`(44²)，4x 超采样 + LANCZOS，覆盖率 **25.0%/25.1%**（理论 24.8%，误差 <0.3%）；macOS 分支内嵌 **@2x**（`tray-icon 0.24.2` 的 macOS 实现是单张 `NSImage::initWithData`，无法表达 1x/2x；系统压到固定 18pt，44px 下采样更锐利）。④ **检测不到更新（三独立成因）**：**(a)** 前端只有一个 `setTimeout` → 常驻托盘等于「进程一生只查一次」，改 6h `setInterval`；**(b)** 时间戳在「抓取成功」后就写、**含「已是最新」**，烧掉接下来 24h → 改为「确认远端状态」后才写、节流 24h→6h；**(c)** `reqwest` 关掉 `default-features` **连带丢 `system-proxy`**（`reqwest-0.12.28/Cargo.toml:101-106`），只认 `HTTP_PROXY` 环境变量、**不读系统代理** —— Clash/Surge 默认改的正是系统代理，用户以为「开着代理」而进程直连出境 → 补回该 feature（`cargo tree -e features` 复核 `client-proxy-system` 已启用；代价 4 个纯系统绑定 crate，无新 TLS）。另：三通道抓取（GitHub atom → GitHub REST → **Gitee 镜像**）全失败才算失败；每条通道加 `is_version_tag` 校验（`ocr-runtime` 这类资源型 Release 会让前端弹「发现新版本 ocr-runtime」死链）；`semver_gt` 修正 dismissed 自愈（依赖「相等返回 false」）；错误正文按**字符**截断（`String::truncate` 按字节切非 char 边界会 panic）。⑤ **权限弹窗反复弹**：删启动 3 秒预请求（单信号 `CGPreflight` 判据，已授权者也被再弹），改首次截图由 `ensure_ready` 按需请求、启动只静默查询；`check_permissions` 屏幕录制改**双信号口径**（`CGPreflight` ∨ 窗口标题探针）与截图侧一致，修正「升级后失效」被误判成「从未授权」；横幅 dismiss 标记落盘 localStorage、focus 回调由「accessibility 为真就清标记」改**边沿触发**。⑥ **浮窗材质层只增不减**：`window-vibrancy 0.8.1` 的 `apply` **不去重**（每次新建 `NSVisualEffectView` + `addSubview`）、`clear` 走 `viewWithTag:` **一次只摘一层** → apply N 次 = N 层，关玻璃后剩余层永久留下（「擦不掉的灰板」）；改 apply 前循环清到干净、`!glass` 分支同样循环清，以 `Ok(false)` 收尾（**有界**）。**新增**：设置页**权限中心**（仅 macOS，只读）—— 屏幕录制/辅助功能真实状态 + 手动刷新 + 「授予」（跳系统设置）/「重置并重启」，刻意**不轮询**（未放行时 `check_permissions` 会 fork `codesign`/`xattr`，1Hz 代价过高），含 ad-hoc 签名专项提示（升级后授权失效的物理成因是 cdhash 每次构建都变）。**另**：`tauri.conf.json` 给 float 补 `x/y: 24`（`tao-0.35.3/platform_impl/macos/window.rs:331` 无 position 时兜底 `ns_window.center()`，而 float 340 / main 1040 且 main 自身 center → 首开残影压在主窗口正中）；`height`/`minHeight` **刻意维持 36**（`window.show()` @lib.rs:835 早于 webview `onMounted→fitWidth` @FloatBar.vue:545，conf 写 44 会让非玻璃用户看见一帧 44px；玻璃档 44 已由 setup 的 `set_size(cur_w,44)` 在 show 前落定）。**验证**：`cargo check` 零警告 / `cargo test --lib` **35 passed / 0 failed / 4 ignored**（本版新增 11 单测）/ `vue-tsc --noEmit` 零错误；macOS 代码经 `aarch64-apple-darwin` 交叉探针 + 双向反证（`new_owned`→`new_owned_XXX` E0599、`into_raw()`→`as_raw()` E0308）；CSS 特异性矩阵脚本核验 light 块 **9 条全挂 `.has-blur`**（Windows 零波及）且每条都赢过暗色档（含 2 条同特异性靠源码顺序取胜）；i18n zh/en 各 **444** 叶子键、差异 0（本版净增 14）。**IPC 总数 85**（本版未增减）。⚠️ **macOS 侧未经真机目视复验**（浅色档实际材质亮度 / 模板图观感 / 权限中心文案是否被截断）。**发布落点**：⏳ 待发布后回填（tag / commit / CI run / 两端 Release id 与资产字节 / Gitee 配额）—— 该项**不属于发版提交**，须等 CI 跑完再单独补一个提交，且不得移动 tag。 |
 | **v1.2.8** | 2026-10-26 | 🐞 **修复版（macOS 15 悬浮窗玻璃右端 3px + 双弧）** | **macOS 15 悬浮窗玻璃「右端溢 3px 灰边 + 右角双弧」P0 修复**。根因：**两层同尺寸且都带 `border-radius`** —— 外层 `.float-bar`（铺满窗口、画圆角 + 边框）与内层 `.f-content`（又画一次圆角）**曲率中心不重合** → 右端呈双弧；同时外层 `width:100%` 在全局 `box-sizing:border-box` 下把内容区撑得比窗口窄 2px，而 `NSVisualEffectView` 按**窗口矩形**绘制、CSS 只覆盖到内容区 → 右端露出一条约 3px **未被 CSS 覆盖的材质原色带**（浅色壁纸上是灰边，深色上不易察觉）。修法：① **双层职责分离** —— 外层只管铺满 + 居中（`width:100%` / `justify-content:center` / 不参与测量），内层只管真实尺寸（`width:max-content` / `flex:none` / 唯一被 `ResizeObserver` 测量的元素），**圆角与边框只保留外层一次**；② `WIDTH_SLACK = 2` 语义明确为「2 × 外层边框宽度」，窗口宽 = 内层实测宽 + 2，右端缝隙消失；③ 材质换档 `HudWindow`(13) → **`UnderWindowBackground`(21)** —— 前者本身偏灰、暗色遮罩重，浅色壁纸上呈「灰板」而非玻璃；④ 新增 `native_blur: bool` 做**配色分档**：原生模糊可用（Liquid / Vibrancy）时压低 CSS 背景不透明度、对比度交给系统材质，不可用（Acrylic / None）时由 CSS 全权承担（沿用 v1.2.2 结论：Windows 不调系统材质）；⑤ `translucency` 随 `FloatGlassSupport` 下发（Liquid 0.85 / Vibrancy 0.55 / 其余 0.0），**本版前端未消费**，留待 macOS 26 真机对比度数据到位后再接。IPC 总数 **85**（本版未增减；⚠️ 此前 `CONVENTIONS` 写的 84 是**错的**，已按 `generate_handler!` 实测校正）。**验证**：`cargo check` 零警告 / `vue-tsc --noEmit` 零错误；macOS 分支在本机（Windows）无法直接编译，另建 **`float-glass-probe` 交叉编译探针**（`cargo check --target aarch64-apple-darwin` + `#[path]` 引真实源文件）编译通过，并用两次**注入错误反向验证**确认探针确实在编译 macOS 分支而非跳过（`UnderWindowBackground`→`...XXX` 报 E0599；`Some(FLOAT_RADIUS_GLASS)`→`Some("22")` 报 E0308）。⚠️ **macOS 15 真机观感未复验**：右端灰边是否消失 / 玻璃通透度 / 13px 文字在浅色壁纸上的对比度（≥4.5:1），须在 Mac 上目视确认。**发布落点**：tag / commit `bd58503`（轻量 tag `v1.2.8`）；CI run `40266414622` 三平台全 success；GitHub Release `423843748` **6 资产 / 195.90 MiB**（AppImage 99.15 / exe 21.70 / rpm 18.92 / dmg 18.91 / deb 18.91 / app.tar.gz 18.30 MiB）；Gitee Release `1241841` **5 附件 / 96.75 MiB**（+2 自动源码包；AppImage 99.15 MiB 超 Gitee 单文件 100 MB 上限，仅 GitHub 提供）；Gitee 按「只留最新一版 + ocr-runtime」约定已删旧版 v1.2.7（id 1232618，释放 96.74 MiB），现存 `ocr-runtime` + `v1.2.8`，配额 **166.24 / 1024 MiB（16.2%）**。5 个下载链接 HEAD 复核 HTTP 200 且 `Content-Length` 与本地字节逐项相符。 |
 | **v1.2.7** | 2026-10-23 | 🐞 **累积修复版（v1.2.3 ~ v1.2.6 四版合并发布）** | **本版跳过 v1.2.3 ~ v1.2.6 四个中间版本号**（远端上一版为 v1.2.2），全部改动一次交付。**三类「静默失效」**：① **设置页初始化竞态（丢更新 + 反向数据损坏，三处同源）** —— `ref.value = await load()` 整体替换冲掉用户改动；提交时又发整个本地对象（初值全是默认值），把后端本是 `true` 的开关一并写成 `false` 并持久化（实测只点「显示网速」→ 另 4 个字段被静默关闭写库）。统一改 **「权威基线 + 用户差量」**（`baseline` + `dirty: Set<keyof T>`），覆盖状态栏（2 写入点 + 托盘推送）、截图配置（4 写入点 + 2 个 v-model 数值项）、通用设置表单、自动备份开关。② **截图遮罩窗抢前台致采集静默停止（P0）** —— `visible:false` + `focus:true` 的隐藏窗创建即成为前台且不让出，`GetForegroundWindow()` 恒返回它、采样每 tick 命中白名单跳过（修复前 6 分钟跳过 **833 次**、采集 **0 次**；修复后 40 秒跳过 **0 次**、采集 **32 次**）。修复：`focus` 改 `false` + 采集侧「前台不可见即跳过」兜底 + 收尾主动让出焦点。③ **OCR 行排序违反全序 panic** —— 成对阈值 `(a.h+b.h)/2×0.6` 致 A≈B、B≈C 却 A<C，改三段式（y 中心排 → 全局常量阈值归并行号 → 按 (行号,x) 排）。**其他修复**：液态玻璃浮窗中浅色壁纸对比度（2.69:1 → 逐像素定标压暗 0.48，四项全过 WCAG AA）；macOS 设置面板图标彩色噪点（`icp4/icp5`+PNG → `ic04/ic05`+ARGB，与 `iconutil` 字节级等价）；桌宠皮肤选择被静默改回默认（注册期误校验 `activeId`，非首张皮肤必丢）。**优化**：安装包 **23.31MB → 8.72MB（−62.6%）**（补 `[profile.release]`：lto/strip/opt-level=s/panic=abort）+ 桌宠图 PNG→WebP **5.30MB → 0.64MB（−88%，alpha MAE=0.000）**；WAL 稳态 **4.13MB → 1.05MB（−75%）**；写库失败不再静默丢弃；日志噪音治理（9376 条占 98% 的常态 WARN 降噪）；停写 `daily_summaries` 死表。**新增**：启动 15s 后自动检查更新 + 首页可关闭提示横条（24h 后端节流、失败全静默、同版本只提示一次；刻意**不做应用内自动升级** —— updater 需长期密钥托管，丢失即全体用户只能重装）。IPC 总数 **84**（本批未增减）。**验证**：`verify_v127_init_race.py` 18/18、`verify_v127_residual_race.py` 6/6、`verify_capture_no_focus.py` 4/4、`human_regression.py` 24/25（唯一失败 = QuickAssist 占前台锁的环境干扰，非产品缺陷）。**发布落点**：tag / commit `e704b2d`（轻量 tag `v1.2.7`）；CI run `39906361489` 三平台全 success；GitHub Release `421483547` **6 资产 / 195.89 MiB**（AppImage 99.15 / exe 21.69 / app.tar.gz 18.30 / deb 18.91 / dmg 18.91 / rpm 18.91 MiB）；Gitee Release `1232618` **7 附件**（exe 21.69 / dmg 18.91 / app.tar.gz 18.30 / deb 18.91 / rpm 18.91 MiB，合计 96.74 MiB + 2 自动源码包；AppImage 99.15 MiB 超 Gitee 单文件 100 MB 上限，仅 GitHub 提供）；Gitee 按「只留最新两版 + ocr-runtime」约定已删旧版 v1.2.1（id 1221109）与 v1.2.2（id 1225950），现存 ocr-runtime + v1.2.7，配额 166.23 / 1024 MiB（16.2%） |
 | **v1.2.2** | 2026-10-21 | ✨+🐞 **液态玻璃 + 五项修复 + 三项功能精简** | **悬浮窗液态玻璃（新功能）**：浮窗玻璃开关打开后从 36px/圆角18 放大为 **44px/圆角22 胶囊形** + 高透光材质。macOS 26+ 走 `NSGlassEffectView`（半透明+背景模糊+**真折射**），< 26 回落 `NSVisualEffectView`；**Windows 明确不调任何系统材质**——真机像素实测 Acrylic/DWM backdrop 对无边框窗口渲染成**不透明色块**（背景亮度 255 与 70 时浮窗恒 212，透光率 **0.001**），反而不如纯 CSS（**0.850**），故停用系统材质、视觉 100% 交给 CSS（实测玻璃 0.800 vs 普通 0.207 = 3.86 倍）。**修复四项**：① **macOS 截图遮罩缺菜单栏行 / 「全屏变画中画」（P0）**——tao 的 `always_on_top` 只映射到 `NSFloatingWindowLevel`(3)，低于菜单栏 24 级，AppKit 遂把 frame 约束进 `visibleFrame`（扣掉菜单栏那条），一条规则产生两个症状；新增 `screenshot/capture_window.rs` 把 level 提到 `NSScreenSaverWindowLevel`(1000)，`show()` 前调用、`hide` 时恢复（非 macOS 空实现）。② **Windows 液态玻璃矩形边框阴影**——浮窗窗口 `width:max-content` + 高度恰好 44px，窗口边界**紧贴胶囊**，外扩 `box-shadow` 被窗口矩形裁掉只剩四角暗块，改为只用 inset 内高光。③ **macOS 状态灯仍恒橙**——v1.2.1 的内存门槛 0.8 用 `>=` 判断，而 macOS 内存日常基线即 70~80%，门槛与常态线重合成了死阈值；改为 CPU 独立决定基础档位、内存只做高水位抬升。④ **macOS Dock 图标偏大**——`icon.icns` 图形 100% 铺满画布，Big Sur 起规范要求约 80.5%，已按规范重绘。**功能精简（用户要求）三项**：移除「重复上次截图」整链（设置页入口 + IPC `screenshot_repeat_region` + `last_region` 状态 + `screenshot_commit` 的 `region` 入参 + `save_cropped`，**截图 IPC 22→21**）、移除设置页「立即截图」按钮（触发入口保留浮窗与快捷键）、**截图投影功能整体下线**（`ScreenshotConfig.shadow` 配置键 8→7、`default_shadow`、工具栏开关、canvas 投影绘制与四周留白全删，导出图恒无投影）。**IPC 总数 82**（+`float_glass_support` −`screenshot_repeat_region`）。**验证**：`cargo check` 零警告、`vue-tsc --noEmit` 零错误、IPC 实测复核 82、i18n zh/en 各 425 键对齐。**发布落点**：tag / commit `0a0cb4d`（轻量 tag `v1.2.2`）；CI run `39574377148`（#71）三平台全 success；GitHub Release `419351846` **6 资产 / 241.6 MiB**（AppImage 107.59 / rpm 27.30 / deb 27.29 / exe 27.22 / dmg 26.56 / app.tar.gz 25.62 MiB）；Gitee Release `1225950` **5 附件 / 134.0 MiB**（+2 自动源码包，AppImage 仅 GitHub）；Gitee 已同步（按「只留最新两版」约定已删旧版 v1.2.0 / id 1214841，现存 ocr-runtime + v1.2.1 + v1.2.2） |

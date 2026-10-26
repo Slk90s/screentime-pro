@@ -399,7 +399,7 @@ pub fn run() {
             if let Err(e) = screenshot::shortcut::apply(app.handle(), &screenshot_cfg) {
                 tracing::warn!(error = %e, "启动期注册截图快捷键失败");
             }
-            // v1.2.9（2026-10-26）：**删除启动 3 秒预请求「屏幕录制」授权**
+            // v1.2.10（2026-10-26）：**删除启动 3 秒预请求「屏幕录制」授权**
             // （原 v0.9.4 Task 79 的 `schedule_startup_permission_request`）。
             //
             // 为什么删（用户反馈「每次打开都弹权限框，弹窗太多」）：

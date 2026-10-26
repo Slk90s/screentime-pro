@@ -240,7 +240,7 @@ const updateBanner = ref<AutoUpdateInfo | null>(null);
 
 /** 定时器句柄：组件卸载时要清掉，否则窗口关闭后仍会触发一次 IPC */
 let updateTimer: ReturnType<typeof setTimeout> | null = null;
-/** v1.2.9：周期复查定时器句柄（见 onMounted 内说明） */
+/** v1.2.10：周期复查定时器句柄（见 onMounted 内说明） */
 let updateInterval: ReturnType<typeof setInterval> | null = null;
 
 /**
@@ -249,7 +249,7 @@ let updateInterval: ReturnType<typeof setInterval> | null = null;
 const UPDATE_FIRST_DELAY_MS = 15_000;
 
 /**
- * v1.2.9（2026-10-26）：**周期复查间隔 = 6 小时**，与后端
+ * v1.2.10（2026-10-26）：**周期复查间隔 = 6 小时**，与后端
  * `UPDATE_CHECK_INTERVAL_SECS` 保持一致（后端 6h 节流，前端 6h 触发；
  * 前端比后端慢或等速都能命中，快于后端则会被节流挡掉，只多一次 IPC 开销）。
  *
@@ -308,7 +308,7 @@ onMounted(() => {
   loadDevices();
   loadRange();
   loadDetails();
-  // v1.2.9：首次延时 15s（等首屏画完）+ 此后每 6h 复查一次。
+  // v1.2.10：首次延时 15s（等首屏画完）+ 此后每 6h 复查一次。
   // 见 UPDATE_RECHECK_INTERVAL_MS 的注释：应用常驻托盘，单次 setTimeout
   // 会让「一次检查」变成这个进程唯一的检查时机，新版本永远不会被发现。
   updateTimer = setTimeout(checkUpdateSilently, UPDATE_FIRST_DELAY_MS);
@@ -320,7 +320,7 @@ onBeforeUnmount(() => {
     clearTimeout(updateTimer);
     updateTimer = null;
   }
-  // v1.2.9：周期定时器同样必须清，否则组件卸载后每 6h 仍会打一次 IPC
+  // v1.2.10：周期定时器同样必须清，否则组件卸载后每 6h 仍会打一次 IPC
   // （Dashboard 目前是主窗口常驻组件，但 keep-alive/条件渲染后就会泄漏）
   if (updateInterval) {
     clearInterval(updateInterval);

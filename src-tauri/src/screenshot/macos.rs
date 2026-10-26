@@ -45,7 +45,7 @@
 //!     ② 新增权限状态快照 `status_snapshot` / 主动请求 `request_permission` /
 //!     打开设置 `open_permission_settings` / 启动预请求 `schedule_startup_permission_request`，
 //!     配合前端紧凑授权弹窗（轮询 + 引导重启）与启动期预登记。
-//!   - 2026-10-26 @v1.2.9: **删除** `preflight_request_on_startup` /
+//!   - 2026-10-26 @v1.2.10: **删除** `preflight_request_on_startup` /
 //!     `schedule_startup_permission_request` / `STARTUP_HANDLE`（连同 `tauri::AppHandle`
 //!     与 `Emitter` 两个 import）。原因：用户反馈「每次打开都弹权限框」，根因是该预请求
 //!     的判据是单信号 `CGPreflightScreenCaptureAccess`（其「进程内一旦 false 就恒 false」

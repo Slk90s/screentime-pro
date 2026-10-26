@@ -31,7 +31,7 @@ impl PermissionBackend for Backend {
     fn check_permissions() -> PermissionStatus {
         PermissionStatus {
             accessibility: crate::tracker::macos::is_accessibility_trusted(),
-            // v1.2.9（2026-10-26）：**改用双信号口径**，与截图侧 `ensure_ready` /
+            // v1.2.10（2026-10-26）：**改用双信号口径**，与截图侧 `ensure_ready` /
             // `status_snapshot` 保持一致。
             //
             // 原写法直接调 `tracker::macos::is_screen_capture_trusted()`（= 单信号
