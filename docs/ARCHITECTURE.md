@@ -63,7 +63,7 @@
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-10-23（同步至 **v1.2.7**——v1.2.3 ~ v1.2.6 四版合并发布）——
+> 最后更新：2026-10-26（同步至 **v1.2.8**——macOS 15 悬浮窗玻璃右端外溢 3px + 双弧修复）——
 > **本版为跳过四个中间版本号的合并发布**（远端上一版 v1.2.2），核心是三类「静默失效」。
 > ① **设置页初始化竞态（丢更新 + 反向数据损坏）**：`Settings.vue` 原用
 > `ref.value = await load()` **整体替换**，加载晚于用户操作时冲掉改动；提交时又发**整个本地对象**
@@ -95,7 +95,7 @@
 
 跨平台应用使用时长追踪（macOS / Windows / Linux），对标 iOS「屏幕使用时间」。**数据 100% 本地（SQLite bundled），零上传，隐私优先**。
 
-栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v1.2.7**（详见 [`RELEASE.md`](RELEASE.md)）。
+栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v1.2.8**（详见 [`RELEASE.md`](RELEASE.md)）。
 
 > ⚠️ 本节版本号在 v0.7.0 → v0.7.5 期间**长期未更新**（曾停留在 v0.7.0），与 `tauri.conf.json` 脱节。
 > 版本号唯一真实来源是 **`src-tauri/tauri.conf.json` 的 `version`**，改版本时务必回来同步本节。
