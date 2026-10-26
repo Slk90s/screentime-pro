@@ -252,7 +252,7 @@ export default {
     // v0.9.4 (2026-09-20): compact permission dialog — one-line reason (per Rust reason code),
     // polling flip to "granted", collapsible details. v0.9.3's wall of diagnostic text felt
     // "too much, too ugly" per user feedback.
-    shotPermReasonNotGranted: "Screenshots need the Screen Recording permission: allow this app in System Settings, then restart the app to take effect.",
+    shotPermReasonNotGranted: "Screenshots need the Screen Recording permission: allow this app in System Settings, then restart the app to take effect. Starting with macOS 15 the system also asks \"Allow for One Month\" once a month — that is system behaviour, just choose \"Allow for One Month\".",
     shotPermReasonTranslocated: "The app is running from a temporary path (not in /Applications), so the grant cannot stick: move the app into the Applications folder first, then launch and grant from there.",
     shotPermReasonQuarantined: "The app carries a download quarantine flag that keeps triggering temporary-path runs: run xattr -dr com.apple.quarantine in Terminal, then reopen the app.",
     shotPermReasonAdhoc: "This app is not developer-signed, so every upgrade looks like a brand-new app to macOS and needs one re-grant (the \"on\" toggle you see belongs to the previous build).",
@@ -260,6 +260,23 @@ export default {
     shotPermDetailToggle: "Technical details",
     shotPermDetailSteps: "1. System Settings → Privacy & Security → Screen Recording, enable this app; 2. Fully quit and reopen the app (new grants apply only to new processes); 3. If the toggle is already on: remove the app with \"−\" and re-grant, or reset via the command below.",
     shotPermDetailAdhoc: "This app is ad-hoc signed — its signature fingerprint changes on every build, so macOS treats each new version as a brand-new app. The real fix is Developer ID signing + notarization.",
+    // v1.2.10 (2026-10-26): permission center card — collects the permission status and actions
+    // that used to be scattered across the top banner and the grant dialog. The banner becomes
+    // notification-only; all actions live here.
+    permissionCenterTitle: "Permissions",
+    permissionCenterDesc: "On macOS this app needs exactly one grant — Screen Recording. Everything else works without any permission",
+    permScreenCapture: "Screen Recording",
+    permAccessibility: "Accessibility",
+    permGranted: "Granted",
+    permNotGranted: "Not granted",
+    permGrant: "Grant",
+    permResetRestart: "Reset & Restart",
+    permOpenSettings: "Open System Settings",
+    permRefresh: "Refresh",
+    permScreenCaptureDesc: "Needed for screenshots and OCR; without it only app names are recorded — window titles are lost",
+    permAccessibilityDesc: "Used for idle detection; without it every moment counts as active, tracking still works",
+    permNotRequired: "No permission needed on this platform",
+    permRevokedHint: "If the toggle in System Settings is on but this still says not granted: the TCC entry points at a previous build's signature fingerprint. Click \"Reset & Restart\" to clear it.",
     shotShortcutReset: "Reset shortcut",
     // v0.7.6: Status bar config (master + sub-toggles; replaces v0.7.5 metricsTitle)
     // v0.7.11 (2026-09-13): unified across all three platforms — metrics are shown only on the

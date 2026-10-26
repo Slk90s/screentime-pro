@@ -29,6 +29,15 @@
 //!     `auto_check_update` / `dismiss_update` 两条命令后未同步 → 实际 83→85。
 //!     逐版本实测值：v1.1.0=96 → v1.1.1=85 → v1.2.0~v1.2.2=83 → v1.2.7 起=85。
 //!     后续再加命令请**实地数一遍** `generate_handler!`，不要凭文档递推。
+//!   - 2026-10-26 @v1.2.10: 修复 - macOS 菜单栏图标改用 template 图。
+//!     原来托盘图标取 `default_window_icon()`（= `icons/32x32.png`），那是**橙色 App 图标**
+//!     （#FF7E27、alpha=255 占 90.6%，是个不透明色块），不是菜单栏素材，且 `icon_as_template`
+//!     全仓零命中。浅色菜单栏下实测对比度 1.91:1（人眼即「脏灰」），深色栏 7.67:1
+//!     → 用户说的「状态栏在浅色下偏灰」有一半来自这里。
+//!     现在 macOS 分支嵌入 `icons/trayTemplate.png` 家族的 @2x 图 + `.icon_as_template(true)`，
+//!     系统按菜单栏明暗自动反色（浅色栏纯黑 17.6:1、深色栏自动翻纯白）。
+//!     ⚠️ 非 macOS 分支**仍然**用原 App 图标 —— template 是 macOS 专属语义，
+//!     把黑白圆环给 Windows 托盘属无谓回归。
 //!
 
 mod categorizer;
@@ -130,6 +139,34 @@ fn hardware_device_id() -> String {
         return id;
     }
     gen_device_id()
+}
+
+/// macOS 菜单栏 template 图标（v1.2.10 新增）。
+///
+/// ## 为什么不用 `tauri::image::Image::from_bytes`
+///
+/// `from_bytes` / `from_path` 都被 `#[cfg(any(feature = "image-ico", feature = "image-png"))]`
+/// 门控（tauri-2.11.5/src/image/mod.rs:74），而本项目的 tauri 特性里**没有**开
+/// `image-png`（`cargo tree -p tauri -f "{p} {f}" --depth 0` 实测：
+/// `wry,compression,common-controls-v6,custom-protocol,dbus,default,dynamic-acl,
+/// macos-private-api,tray-icon,...`，无 image-png）。直接调用会 E0599 找不到方法。
+///
+/// 而 `image` crate 本身已在依赖里（`features = ["png"]`，OCR/截图链路在用），
+/// 所以这里自己解码 PNG → RGBA → `Image::new_owned`，零新增依赖、零 feature 变更。
+///
+/// ## 为什么返回 Option 而不是直接 Result
+///
+/// 调用点已经有「图标拿不到就用 App 图标兜底」的分支（v1.2.6 的教训：图标问题
+/// 绝不能让应用起不来）。返回 Option 让那个兜底天然复用，不必在调用点再 match 两层。
+#[cfg(target_os = "macos")]
+fn macos_tray_template_icon() -> Option<tauri::image::Image<'static>> {
+    // 内嵌 @2x（44×44）。理由见调用点注释：系统会把图标高度缩到 18pt，
+    // 44px 下采样比 22px 上采样锐利；`include_bytes!` 也无法表达 1x/2x 多表示。
+    const PNG: &[u8] = include_bytes!("../icons/trayTemplate@2x.png");
+    let img = image::load_from_memory(PNG).ok()?;
+    let rgba = img.into_rgba8();
+    let (w, h) = (rgba.width(), rgba.height());
+    Some(tauri::image::Image::new_owned(rgba.into_raw(), w, h))
 }
 
 #[cfg(target_os = "macos")]
@@ -501,6 +538,40 @@ pub fn run() {
             // 平台覆盖配置没带上 icon），整个应用会在启动时 panic，用户看到的是「双击没反应」，
             // 而日志里只有一行 panic，极难定位。这里降级为「无图标托盘」继续运行：
             // 托盘仍可用（Windows 会显示系统默认图标），主功能不受影响。
+            //
+            // v1.2.10（2026-10-26）：macOS 改取 template 图，不再用 App 图标。
+            //
+            // 为什么：`default_window_icon()` 是 `icons/32x32.png` —— 橙色 App 图标
+            // （#FF7E27，alpha=255 占 90.6%），在菜单栏里是一枚不透明色块，
+            // 浅色栏对比度仅 1.91:1（「脏灰」），深色栏 7.67:1（所以深色下看着正常）。
+            // template 图是「纯黑 + alpha」的剪影，系统按菜单栏明暗自动着色
+            // （浅色栏画黑、深色栏画白、点击自动反色），浅色栏对比度直接到 17.6:1。
+            //
+            // ⚠️ 素材**不写进** `tauri.conf.json` 的 `bundle.icon`：那里的 `find_icon`
+            // 取列表里第一个 `.png` 当 Windows 默认图标，塞进来会污染 exe 图标。
+            // 这里用 `include_bytes!` 编译期内嵌，素材只服务托盘。
+            //
+            // ⚠️ 关于 `trayTemplate@2x.png`：`include_bytes!` 只能嵌单张位图，
+            // 无法把两张图作为一个 NSImage 的「1x/2x 表示」交给系统 —— tray-icon 0.24
+            // 的 macOS 实现是 `PlatformIcon::to_png()` → `NSImage::initWithData`
+            // 单张数据源（见 tray-icon/src/platform_impl/macos/icon.rs:20）。
+            // 且系统会把图标按高度缩到固定的 18pt（macos/mod.rs:296 硬编码），
+            // 缩放在 Retina 上由 NSImage 从位图重建，故这里嵌 **@2x（44×44）**：
+            // 44×44 是 18pt@2x 的最近原生尺寸，下采样比 22px 的 2 倍上采样锐利得多
+            // ——这正是报告里「32→36 上采样导致边缘发虚」的同类问题。
+            // @2x 文件仍入库，留给将来 tray-icon 支持多表示或改用 iconPath 时直接用。
+            #[cfg(target_os = "macos")]
+            let icon = match macos_tray_template_icon() {
+                Some(ic) => ic,
+                None => {
+                    // 素材损坏属构建期问题，但绝不能因此让应用起不来（同 v1.2.6 教训）
+                    tracing::warn!("托盘 template 图解码失败，回退到 App 图标");
+                    app.default_window_icon()
+                        .cloned()
+                        .unwrap_or_else(|| tauri::image::Image::new_owned(Vec::new(), 0, 0))
+                }
+            };
+            #[cfg(not(target_os = "macos"))]
             let icon = match app.default_window_icon() {
                 Some(ic) => ic.clone(),
                 None => {
@@ -510,6 +581,13 @@ pub fn run() {
             };
             let tray_icon = TrayIconBuilder::with_id("statusbar")
                 .icon(icon)
+                // v1.2.10：macOS 上把图标声明为 template，系统据此按菜单栏明暗反色。
+                // ⚠️ 该 API 无 cfg 门控（tauri/src/tray/mod.rs:295 直通
+                // tray-icon 的 with_icon_as_template），非 macOS 平台是**空操作**
+                // （只有 macos 的 platform_impl 有实现），故无需再包一层 cfg；
+                // 但为了语义清晰仍只在 macOS 置真 —— 万一将来 tray-icon 给
+                // Windows 也加上 template 语义，这里不会误伤。
+                .icon_as_template(cfg!(target_os = "macos"))
                 .menu(&tray_menu)
                 // v0.7.6：左键不再弹菜单——非 mac 左键=显示主窗口、右键=快捷菜单；
                 // macOS 左键沿用「点击切换主窗口显隐」（见下方 on_tray_icon_event）
@@ -690,6 +768,37 @@ pub fn run() {
             // → 创建并显示浮窗 =====
             // 位置由前端 FloatBar.vue 从 localStorage 恢复；透明空窗 show 不可见，无白闪
             // v1.2.2：同时取出 float_glass，材质与 44px 高度都要在 show 之前落定
+            //
+            // ===== v1.2.10（2026-10-26）：conf 几何定标与「哪个 builder 生效」=====
+            //
+            // 事实核查（读 tauri 源码 + 实测，不是推测）：`app.config().app.windows`
+            // 里的窗口由 tauri 自己在**用户 setup 闭包之前**逐个建好
+            // （tauri-2.11.5/src/app.rs:2524 `for window_config in ... .filter(|w| w.create)`），
+            // 而 `float_window::ensure_float_window` 第一行就是
+            // `if app.get_webview_window(LABEL).is_some() { return Ok(()) }`。
+            // → 对 float 窗口，**conf 才是唯一生效的构造参数**；`ensure_float_window`
+            // 里那份 `.inner_size(340, 44)` / `.min_inner_size(140, h)` 属于**死代码路径**
+            // （只有"窗口被销毁后重建"才会走到，当前没有任何路径 destroy float 窗口）。
+            //
+            // 这条事实直接决定 conf 该怎么改（报告 §2.4 方案 3 + §3.3 第一条的冲突）：
+            //   - `height: 36 → 44`：**可以且应当改**。它只影响窗口的初始高度，
+            //     即「玻璃用户冷启动时窗口已 44」，配合 FloatBar 的 `height:100%`
+            //     彻底消掉「窗口 44 / 胶囊 36 → 底部露 8px 材质」。
+            //     非玻璃用户多出来的这一帧 44 会在 FloatBar onMounted 的 fitWidth
+            //     （**在 show 之前**）里被 `resize_float_window` 压回 36，用户看不到。
+            //   - `minHeight: 36 → 44`：**绝不能改**。`resize_float_window` 在玻璃关闭时
+            //     会 `set_size(w, 36)`（float_window.rs:256 `current_height`），
+            //     而 minHeight 44 会让 OS 直接拒绝这次缩高 → 高度差 8px 永久消不掉，
+            //     且前端 1Hz 每秒重试一次 set_size/set_position → **每秒抖动**。
+            //     这正是报告 §3.3 第一条点名的那个坑，故维持 36 不动。
+            //     （即「conf 的 minHeight 必须等于**两档里较小的那个**」：
+            //      minHeight = FLOAT_HEIGHT_PLAIN = 36，height = FLOAT_HEIGHT_GLASS = 44。）
+            //   - `x/y: 24`：新增。conf 无 x/y 时 tao 会 `ns_window.center()`
+            //     → 首次残影正好压在主窗口正中央（报告 §2.2 T0）。给左上角 24px 后，
+            //     即便时序问题未修，那块灰也落在用户几乎不会注意的位置。
+            //     ⚠️ 前端 applyPosition 随后会用 localStorage 或「主屏右上角」覆盖它，
+            //     所以 x/y 只影响「show 之前那一两帧」，正是残影发生的窗口期。
+            // ⚠️ 上述三项的说明无法写进 tauri.conf.json（JSON 不支持注释），故落在本文件。
             let (float_resume, float_glass_on) = {
                 let sb = app_state
                     .status_bar_config

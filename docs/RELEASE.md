@@ -417,3 +417,150 @@ echo "   git push origin main && git push origin v$NEW"
 2. **不得自动改写 `releaseBody`**：每次发版由维护者按 §5 模板填写。
 3. **不得复用版本号**：一旦打过正式 tag，该版本号作废。
 4. **不得把 `release/`、`output/`、`scripts/`、`.env` 提交入库**（已在 .gitignore 排除）。
+
+---
+
+## 附：macOS 签名与公证改造清单（未实施）
+
+> 本节是**待采购**事项的落地清单，不是当前流程的一部分。放在文档末尾，`§1 ~ §9` 的既有流程完全不变。
+> 来源：`MACOS-UX-REVIEW-2026-10-26.md` §1.5（P2 根治项）。
+
+### A.1 现状与后果
+
+| 项 | 现值 | 位置 |
+|---|---|---|
+| `bundle.macOS` | 只有 `{"minimumSystemVersion": "12.0"}` | `src-tauri/tauri.conf.json:121-123` |
+| `signingIdentity` | **未设置** | 同上 |
+| `hardenedRuntime` | **未设置**（Tauri 默认 `false`） | 同上 |
+| `entitlements` | **无文件** | 同上 |
+| `build.yml` 的 `APPLE_*` | **零命中** | `.github/workflows/build.yml` |
+
+**签名实际状态：ad-hoc（`codesign -s -`）**。Tauri 在没有 `signingIdentity` 时对 macOS 产物做 ad-hoc 签名，只保证「二进制可执行」，不保证「身份稳定」。
+
+**这一条是所有「权限反复」问题的物理成因**：
+
+1. ad-hoc 签名的 **cdhash 由产物字节算出**，每次构建字节都不同 → cdhash 每次都变；
+2. macOS 的 TCC（授权数据库）按「bundle 路径 + 签名指纹」记账，**指纹变了系统就当成了一个新应用**；
+3. 于是升级后：系统设置里那两条开关**仍然显示为「开」**（那是上一个版本的记录），但新进程实际拿不到授权；
+4. 用户看到的是「升级完就要重新授权一次」，而且重新勾选开关也常常无效（旧记录还在，清不掉），只能靠 `tccutil reset`。
+
+→ 短期只能靠「重置并重启」按钮（v0.9.3 起）+ 权限中心卡片（v1.2.10 起）让用户自救；**根治必须换稳定签名**。
+
+### A.2 需要采购什么
+
+| 项 | 说明 | 费用 |
+|---|---|---|
+| **Apple Developer Program**（个人 / 组织） | 提供 **Developer ID Application** 证书，用于对 `.app` / `.dmg` 做稳定的发行版签名 | **US$99 / 年** |
+
+拿到证书后需在构建机上建立 `Developer ID Application: <姓名或公司> (<TEAMID>)` 身份，并导出为 `.p12`（CI 用）。
+
+### A.3 需要改的文件与字段
+
+#### ① `src-tauri/tauri.conf.json` → `bundle.macOS`
+
+```jsonc
+"macOS": {
+  "minimumSystemVersion": "12.0",
+  // 证书的 Common Name（不含 "Developer ID Application:" 前缀也可，
+  // 但写全名更稳 —— 构建机上可能同时装着多个身份）
+  "signingIdentity": "Developer ID Application: Your Name (TEAMID)",
+  // 公证流程的硬性前提：开启加固运行时。Tauri 默认 false，必须显式打开。
+  "hardenedRuntime": true
+  // 不写 entitlements = 不注入 entitlements 文件，走 hardened runtime 默认基线。
+  // 当前 A.4 结论是「一项都不需要」，所以这里**保持不写**。
+  // 只有当 A.4 的例外条款被触发（将来引入 CGEventTap）时，才补：
+  //   "entitlements": "entitlements.plist"
+  // 注意：写 "entitlements": null 与「不写这个键」语义等价，但前者容易让人
+  // 以为「必须配一个文件、只是暂时置空」，实践中已多次被误读 → 一律不写。
+}
+```
+
+#### ② `.github/workflows/build.yml`
+
+在 macOS 的构建步骤前注入环境变量（Tauri CLI 会自动读取，无需改命令）：
+
+| 变量 | 内容 |
+|---|---|
+| `APPLE_CERTIFICATE` | `.p12` 的 **base64**（`base64 -i cert.p12 \| pbcopy`），存进 GitHub Secrets |
+| `APPLE_CERTIFICATE_PASSWORD` | 导出 `.p12` 时设的密码 |
+| `APPLE_SIGNING_IDENTITY` | 与 ① 的 `signingIdentity` 同值（`Developer ID Application: ...`） |
+| `APPLE_ID` | Apple ID 邮箱（公证提交账号） |
+| `APPLE_PASSWORD` | **App 专用密码**（appleid.apple.com 生成，不是账号登录密码） |
+| `APPLE_TEAM_ID` | 10 位 Team ID（developer.apple.com → Membership 可见） |
+
+> ⚠️ 这 6 个值**全部走 GitHub Secrets**，不得写进仓库。`build.yml` 里只写 `${{ secrets.XXX }}`。
+> ⚠️ 三份 `releaseBody`（§3.1）与本改造无关，**不要**顺手改。
+
+### A.4 entitlements 需要哪些
+
+**结论：当前代码一行 entitlement 都不需要。**
+
+| 功能 | 是否需要 entitlement | 依据 |
+|---|---|---|
+| 屏幕录制（截图 / 窗口标题） | **不需要** | TCC 授权由系统弹框授予，与 entitlements 无关 |
+| 辅助功能（空闲判断） | **不需要** | 全仓 `AXUIElement` / `AXObserver` / `CGEventTapCreate` **零命中**；空闲检测用 `CGEventSourceSecondsSinceLastEventType`，该 API 不受 TCC 管 |
+| 网络（检查更新） | 不需要 | 非沙盒应用无网络 entitlement |
+| 读写用户目录 | 不需要 | 非沙盒应用 |
+
+**唯一的例外（未来）**：若将来要做全局鼠标/键盘监听（`CGEventTapCreate`），则需要
+`com.apple.security.accessibility`。当前**没有**这条代码路径，不要提前加 —— 加了会让用户在
+系统设置里看到并不需要的权限项。
+
+→ 因此 `tauri.conf.json` 的 `bundle.macOS` **不写 `entitlements` 键**（不写 = 不注入），
+只靠 `hardenedRuntime: true` 的默认基线。若日后触发上面的例外，再新建 `entitlements.plist`
+并把键指向它 —— 届时也必须同步更新本节的结论表。
+
+### A.5 验证方法
+
+签名完成后，在**构建产物所在的 Mac 上**依次执行：
+
+```bash
+# ① 签名链完整且是 Developer ID（输出里应有 "Authority: Developer ID Application: ..."）
+codesign -dv --verbose=4 "ScreenTime Pro.app"
+
+# ② 加固运行时已开（输出里应有 "flags=0x10000(runtime)"）
+codesign -d --verbose=2 "ScreenTime Pro.app" 2>&1 | grep flags
+
+# ③ 公证票据已 stapled（spctl 应返回 "accepted / source=Notarized Developer ID"）
+spctl -a -vv "ScreenTime Pro.app"
+
+# ④ 票据能被 stapler 找到（输出 "The validate action worked!"）
+xcrun stapler validate "ScreenTime Pro.app"
+
+# ⑤ DMG 也要单独验（用户双击的是 DMG；文件名按实际产物替换）
+spctl -a -vv -t open --context context:primary-signature "ScreenTime.Pro_<version>_aarch64.dmg"
+```
+
+**CI 里公证提交的形态**（Tauri 在检测到 `APPLE_ID` + `APPLE_PASSWORD` + `APPLE_TEAM_ID` 时会自动调用 `notarytool`）：
+
+```bash
+xcrun notarytool submit "ScreenTime Pro.dmg" \
+  --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+  --wait          # 人工核对时去掉 --wait 拿 submission id 后查
+xcrun notarytool log <submission-id> --apple-id ... # 失败时看具体拒绝原因
+```
+
+**最终验收标准（用户视角）**：
+
+1. 双击 DMG 里的 `.app`，**不再**出现「Apple 无法验证此 App 是否包含恶意软件」；
+2. 升级 v1.2.10 → v1.2.11 后，系统设置里的屏幕录制开关**保持有效**（不需要重新授权）；
+3. `README.md` 里那段「必须执行 `修复门禁.command` / `xattr -dr com.apple.quarantine`」可以删除（连同 DMG 里的脚本，但脚本删除属于发版物料改动，另开一项）。
+
+### A.6 风险与回滚
+
+| 风险 | 影响 | 处置 |
+|---|---|---|
+| 证书泄露 | 他人可冒名签名本应用 | 证书只存 GitHub Secrets；`.p12` 不落本地仓库；泄露后立即在 developer.apple.com **Revoke** 并换新证书重发一版 |
+| 公证超时 / 卡在 `In Progress` | CI 卡住不发版 | `notarytool` 单次通常数分钟；CI 里给公证步骤加 30 分钟超时，超时判失败并**不发版**（不要发未公证的包） |
+| 加固运行时导致运行时崩溃 | 某些 JIT / 动态库加载被拦 | 本项目无 JIT；若真崩溃，先把 `hardenedRuntime: false` **临时**回滚（代价是公证失效、退回 ad-hoc 现状），并在日志里定位被拦的库 |
+| 首次公证后在**旧 macOS（12.0）** 上行为差异 | 老系统对 hardened runtime 更严格 | `minimumSystemVersion` 已是 12.0；发版前在 12.x 真机跑一次截图 + 取字 + 权限流 |
+| 用户仍从**旧版本**升级 | 旧 ad-hoc 版本的 TCC 脏记录还在 | 首次带签名的版本仍需一次「重置并重启」（`tccutil reset ScreenCapture com.screentime.pro`），之后不再复发 —— Release 正文要写明「本版是最后一次需要重新授权」 |
+
+**回滚**：把 `tauri.conf.json` 的 `signingIdentity` / `hardenedRuntime` 两行删掉、`build.yml` 的 6 个 `APPLE_*` 环境变量注释掉，即回到当前 ad-hoc 状态。无需改任何业务代码 —— 签名是纯构建期配置。
+
+### A.7 改造后的发版流程增量
+
+在 §4「发布步骤」之外，只多两步（其余不变）：
+
+1. **发版前**：确认 `APPLE_*` 六个 Secrets 都在（`gh secret list`）；
+2. **CI 通过后**：额外核对 A.5 的 ①③④ 三条输出，任一不满足则**视为构建失败**，按 §8 回滚（删 tag + Release，升 patch 重发）。

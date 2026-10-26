@@ -884,54 +884,205 @@ pub struct UpdateInfo {
     pub notes: String,
 }
 
+/// REST API 非 2xx 响应正文写进日志时的截断长度（**字符**数，非字节）。
+///
+/// 只用于 `tracing::warn!` 的错误摘要 —— GitHub 的 403 正文可能带整页 HTML
+/// （限流页约 1.2 KB），原样打进日志会刷屏。
+/// ⚠️ 按**字符**截断（`chars().take`）而不是字节：正文可能是中文或含代理对，
+/// 按字节切会从 UTF-8 序列中间断开，产出非法字符串。
+/// （Rust 的 `String::truncate` 正是按字节切且非 char 边界会 **panic**，不能用。）
+const API_ERROR_BODY_CHARS: usize = 200;
+
 /// 抓取远端最新版本，返回 `(latest, url, notes)`。
 ///
-/// 双通道：GitHub releases.atom（不走 API 限额）优先，失败回落到 REST API。
+/// 三通道，全部失败才算失败：
+///   ① GitHub releases.atom（不走 API 限额）→ ② GitHub REST API → ③ Gitee 镜像。
+///
 /// 抽成独立函数是为了让 `check_for_update`（手动）与 `auto_check_update`（自动）
 /// 共用同一份逻辑——两份拷贝迟早会漂移（比如只给其中一处加 Rustls 代理）。
+///
+/// v1.2.10（2026-10-26）：加 ③ 与 `connect_timeout`。GitHub 在国内是**连不上**
+/// （TCP 阶段就被丢包），而 ①② 都指向 GitHub —— v1.2.7 → v1.2.8 那次「没检测到
+/// 更新」的事故里，两条通道同时不可达是并列主因。Gitee 是本项目既有的发布落点
+/// （OCR 运行库的下载源也在这里），可达性有保障。
+/// 镜像只是**回落**：GitHub 任一条成功就不碰它，避免多一次跨境请求的延迟。
 async fn fetch_latest_release() -> Result<(String, String, String), String> {
-    let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(10)).user_agent("ScreenTime-Pro-Update-Checker").build().map_err(|e| format!("构建 HTTP 客户端失败: {}", e))?;
-    let mut latest_info: Option<(String, String, String)> = None;
-    let mut last_err: Option<String> = None;
-    match client.get("https://github.com/Slk90s/screentime-pro/releases.atom").send().await {
-        Ok(resp) if resp.status().is_success() => {
-            match resp.text().await {
-                Ok(xml) => {
-                    if let Some(info) = parse_atom_latest_release(&xml) { latest_info = Some(info); }
-                    else { last_err = Some("Atom feed 解析失败（未找到 release 条目）".to_string()); }
-                }
-                Err(e) => last_err = Some(format!("Atom feed 读取失败: {}", e)),
-            }
-        }
-        Ok(resp) => last_err = Some(format!("Atom feed 返回 HTTP {}", resp.status().as_u16())),
-        Err(e) => last_err = Some(format!("Atom feed 请求失败: {}", e)),
-    }
-    if latest_info.is_none() {
+    // 为什么单独设 connect_timeout：只有整体 timeout 时，GitHub 被墙要**干等满 10 秒**
+    // 才开始试下一条通道，三条串起来就是 30 秒的黑屏等待。连接阶段 5 秒就放弃，
+    // 把时间留给真正可能成功的通道；读写阶段仍由整体 10 秒兜底。
+    let client = reqwest::Client::builder()
+        .connect_timeout(StdDuration::from_secs(5))
+        .timeout(StdDuration::from_secs(10))
+        .user_agent("ScreenTime-Pro-Update-Checker")
+        .build()
+        .map_err(|e| format!("构建 HTTP 客户端失败: {}", e))?;
+
+    // ===== ① GitHub releases.atom =====
+    // 每个通道用「match 求出 Option<错误>」而不是往同一个 mut 变量里赋值 ——
+    // 后者会被编译器判为「初值从未被读」，也更容易漏掉分支。
+    let atom_err: Option<String> =
+        match client.get("https://github.com/Slk90s/screentime-pro/releases.atom").send().await {
+            Ok(resp) if resp.status().is_success() => match resp.text().await {
+                Ok(xml) => match parse_atom_latest_release(&xml) {
+                    Some(info) => {
+                        // 来源必须留痕：用户报「检测不到更新」时，日志一行就能区分
+                        // 「走的哪条通道」—— 走 Atom 说明网络通、问题在版本比较；
+                        // 走镜像说明 GitHub 不可达、问题在网络。两者处置完全不同。
+                        tracing::info!(version = %info.0, "更新来源：GitHub Atom");
+                        return Ok(info);
+                    }
+                    None => Some("Atom feed 解析失败（未找到合法版本条目）".to_string()),
+                },
+                Err(e) => Some(format!("Atom feed 读取失败: {}", e)),
+            },
+            Ok(resp) => Some(format!("Atom feed 返回 HTTP {}", resp.status().as_u16())),
+            Err(e) => Some(format!("Atom feed 请求失败: {}", e)),
+        };
+    // v1.2.10：必须 warn 才能落盘（release 默认级别 info）。用户反馈「没检测到更新」时，
+    // 这条日志是第一现场 —— 原来整条链路失败是静默的，根本无法判断请求发没发出去。
+    tracing::warn!(error = atom_err.as_deref().unwrap_or("未知"), "检查更新：GitHub atom 通道失败，改试 GitHub API");
+
+    // ===== ② GitHub REST API =====
+    let api_err: Option<String> =
         match client.get("https://api.github.com/repos/Slk90s/screentime-pro/releases/latest").header("Accept", "application/vnd.github+json").send().await {
             Ok(resp) if resp.status().is_success() => {
                 #[derive(serde::Deserialize)] struct GhRelease { tag_name: String, html_url: String, body: Option<String> }
                 match resp.json::<GhRelease>().await {
                     Ok(gh) => {
-                        let latest = gh.tag_name.trim_start_matches('v').to_string();
-                        latest_info = Some((latest, gh.html_url, gh.body.unwrap_or_default()));
+                        // v1.2.10：与 atom 同口径校验。API 的 /releases/latest 会跳过 prerelease，
+                        // 但「没标 prerelease 的资源型 release」仍会漏过来 —— 一旦漏过来前端就弹
+                        // 「发现新版本 ocr-runtime」的死链。校验不过就当本通道失败，继续走镜像。
+                        if is_version_tag(&gh.tag_name) {
+                            let latest = gh.tag_name.trim().trim_start_matches(['v', 'V']).to_string();
+                            tracing::info!(
+                                version = %latest,
+                                atom_error = atom_err.as_deref().unwrap_or("未知"),
+                                "更新来源：GitHub API（Atom 通道已失败，原因见 atom_error）"
+                            );
+                            return Ok((latest, gh.html_url, gh.body.unwrap_or_default()));
+                        }
+                        Some(format!("REST API 返回的 tag 不是版本号：{}", gh.tag_name))
                     }
-                    Err(e) => last_err = Some(format!("REST API 解析失败: {}", e)),
+                    Err(e) => Some(format!("REST API 解析失败: {}", e)),
                 }
             }
             Ok(resp) => {
                 let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
-                let body_short: String = body.chars().take(200).collect();
-                let body_short = if body.len() > body_short.len() { format!("{}…", body_short) } else { body };
-                last_err = Some(format!("REST API 返回 HTTP {}：{}", status.as_u16(), body_short));
+                // 先按字符截断再判是否真的截过 —— 判定用 `body.len() > body_short.len()`
+                // 是安全的：截断后字节数必 ≤ 原字节数，等号只在「未截断」时成立。
+                let body_short: String = body.chars().take(API_ERROR_BODY_CHARS).collect();
+                let api_body =
+                    if body.len() > body_short.len() { format!("{body_short}…") } else { body };
+                Some(format!("REST API 返回 HTTP {}：{}", status.as_u16(), api_body))
             }
-            Err(e) => last_err = Some(format!("REST API 请求失败: {}", e)),
+            Err(e) => Some(format!("REST API 请求失败: {}", e)),
+        };
+    tracing::warn!(error = api_err.as_deref().unwrap_or("未知"), "检查更新：GitHub API 通道失败，改试 Gitee 镜像");
+
+    // ===== ③ Gitee 镜像 =====
+    match fetch_gitee_latest(&client).await {
+        Ok(v) => {
+            // 用 warn 而不是 info：这条路径意味着「本应走 GitHub，实际没走成」，
+            // 是网络异常的现场证据，排查时需要一眼看到。
+            tracing::warn!(
+                version = %v.0,
+                url = %v.1,
+                atom_error = atom_err.as_deref().unwrap_or("未知"),
+                api_error = api_err.as_deref().unwrap_or("未知"),
+                "GitHub 更新源不可达，已回落 Gitee 镜像"
+            );
+            Ok(v)
+        }
+        Err(e) => {
+            tracing::warn!(
+                atom_error = atom_err.as_deref().unwrap_or("未知"),
+                api_error = api_err.as_deref().unwrap_or("未知"),
+                gitee_error = %e,
+                "检查更新：GitHub 与 Gitee 三个通道全部失败，本次无结果"
+            );
+            Err(format!(
+                "GitHub atom 失败：{}；GitHub API 失败：{}；Gitee 镜像失败：{}",
+                atom_err.as_deref().unwrap_or("未知"),
+                api_err.as_deref().unwrap_or("未知"),
+                e
+            ))
         }
     }
-    match latest_info {
-        Some(v) => Ok(v),
-        None => Err(last_err.unwrap_or_else(|| "未知错误：所有检查更新策略均失败".to_string())),
+}
+
+/// Gitee 镜像的 release 列表接口（公开仓库，无需 token）。
+const GITEE_RELEASES_API: &str =
+    "https://gitee.com/api/v5/repos/create100/screentime-pro/releases?page=1&per_page=20";
+
+/// 从 Gitee 镜像取最新**应用**版本。
+///
+/// ⚠️ 这里有个必须防的坑：本仓库 Gitee 侧的第一个 release 是 **`ocr-runtime`**
+/// （`prerelease: true`）—— 它是 OCR 运行库的下载源，不是应用版本。不过滤的话镜像
+/// 会把 `ocr-runtime` 当成最新版，前端弹出「发现新版本 ocr-runtime」的死链。
+/// 双重过滤：`prerelease == true` 直接跳过；`tag_name` 必须过 `is_version_tag`。
+async fn fetch_gitee_latest(client: &reqwest::Client) -> Result<(String, String, String), String> {
+    #[derive(serde::Deserialize)]
+    struct GiteeRelease {
+        #[serde(default)]
+        tag_name: String,
+        #[serde(default)]
+        body: Option<String>,
+        #[serde(default)]
+        prerelease: bool,
     }
+
+    let resp = client
+        .get(GITEE_RELEASES_API)
+        .send()
+        .await
+        .map_err(|e| format!("镜像请求失败: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!("镜像返回 HTTP {}", resp.status().as_u16()));
+    }
+    let list: Vec<GiteeRelease> = resp
+        .json()
+        .await
+        .map_err(|e| format!("镜像 JSON 解析失败: {}", e))?;
+
+    for r in &list {
+        if r.prerelease {
+            // 资源型 release（ocr-runtime）走这条 —— 记 info 便于事后核对跳过是否符合预期
+            tracing::info!(tag = %r.tag_name, "检查更新：镜像条目为预发布/资源包，跳过");
+            continue;
+        }
+        if !is_version_tag(&r.tag_name) {
+            tracing::info!(tag = %r.tag_name, "检查更新：镜像 tag 不是版本号，跳过");
+            continue;
+        }
+        let tag = r.tag_name.trim();
+        let version = tag.trim_start_matches(['v', 'V']).to_string();
+        // 用 release 详情页而不是 `/download/<tag>/<file>`：后者要拼平台资产名
+        // （dmg / exe / deb / rpm 各不相同），拼不出来；详情页由用户在浏览器里选平台。
+        // 排查提示：该地址对 curl 默认 UA 会收到 302（Gitee 对非浏览器 UA 降级），
+        // 用浏览器 UA 请求才是 200 text/html —— 本 URL 只交给系统默认浏览器打开，不受影响。
+        let url = format!("https://gitee.com/create100/screentime-pro/releases/tag/{tag}");
+        return Ok((version, url, r.body.clone().unwrap_or_default()));
+    }
+    Err(format!("镜像 {} 条 release 中没有一个合法版本号", list.len()))
+}
+
+/// 校验 release tag 是否是版本号：可选 `v`/`V` 前缀，2~3 段数字，可带 `-beta` / `+build` 后缀。
+///
+/// 为什么要独立成一个函数：atom 解析与 Gitee 镜像都要用同一把尺子。两份拷贝
+/// 迟早漂移（本项目已经栽过三次「同一判断写了两处」的跟头）。
+fn is_version_tag(tag: &str) -> bool {
+    let t = tag.trim();
+    let core = t.strip_prefix('v').or_else(|| t.strip_prefix('V')).unwrap_or(t);
+    // 预发布后缀与构建元数据不参与判定：`1.3.0-beta` 是合法 tag，主版本仍是 1.3.0
+    let core = core.split('-').next().unwrap_or("");
+    let core = core.split('+').next().unwrap_or("");
+    let parts: Vec<&str> = core.split('.').collect();
+    // 2~3 段：接受 `1.3`（缺位补 0 由 semver_gt 负责），拒绝 `1.2.8.1` 这类四段 tag
+    if parts.len() < 2 || parts.len() > 3 {
+        return false;
+    }
+    parts.iter().all(|p| p.parse::<u32>().is_ok())
 }
 
 #[tauri::command]
@@ -950,6 +1101,12 @@ fn parse_atom_latest_release(xml: &str) -> Option<(String, String, String)> {
     let title_re = Regex::new(r"<title[^>]*>([\s\S]*?)</title>").ok()?;
     let raw_title = title_re.captures(block)?.get(1)?.as_str().trim().to_string();
     let tag = raw_title.trim_start_matches("ScreenTime Pro ").trim_start_matches("Release ").trim_start_matches("release ").trim().trim_start_matches('v').to_string();
+    // v1.2.10：tag 必须过版本号校验，否则返回 None 让上层回落到 API / 镜像。
+    // 为什么不能只 trim 前缀就往上走：本项目确有「非版本型 release」的用法
+    // （`ocr-runtime` 就是 OCR 运行库的下载源）。一旦它被发到 GitHub 且发生在
+    // 最新位置，atom feed 第一条就是它 —— 不校验的话前端会弹
+    // 「发现新版本 ocr-runtime」的死链。返回 None 比返回脏 tag 安全。
+    if !is_version_tag(&tag) { return None; }
     let link_re = Regex::new(r#"<link[^>]*href="([^"]+)""#).ok()?;
     let url = link_re.captures(block)?.get(1)?.as_str().to_string();
     let sum_re = Regex::new(r"<summary[^>]*>([\s\S]*?)</summary>").ok()?;
@@ -958,10 +1115,38 @@ fn parse_atom_latest_release(xml: &str) -> Option<(String, String, String)> {
     Some((tag, url, notes))
 }
 
+/// 严格版本比较：`latest` 是否严格大于 `current`。
+///
+/// v1.2.10（2026-10-26）：重写。旧实现用 `filter_map` **逐段丢弃**非法片段：
+///
+/// ```ignore
+/// s.split('.').filter_map(|p| p.split('-').next()?.parse::<u32>().ok())
+/// ```
+///
+/// 于是 `"v1.2.8"` → 第一段 `"v1"` 解析失败被丢 → 变成 `[2, 8]` → 被当成 2.8.0，
+/// 和 `1.2.8` 比出来是「有新版本」。而 `tag_name` 带 `v` 前缀是本项目的常态
+/// （GitHub 上的 tag 全是 `vX.Y.Z`），这个 bug 一旦被非 GitHub 通道的原始 tag
+/// 触发，就会弹出并不存在的更新。
+///
+/// 现在的规则：
+///   ① 先剥 `v` / `V` 前缀；
+///   ② **整体**校验 —— 任一段解析失败就返回 `false`（保守：不认为有新版本。
+///      宁可漏报一次，也不要弹一个点开是 404 的死链）；
+///   ③ 缺位补 0（`1.3` == `1.3.0`）；只比前三段（`1.2.8.1` 视作 1.2.8）；
+///   ④ 预发布后缀不参与比较（`1.3.0-beta` == `1.3.0`）。
+///
+/// ⚠️ 本函数被三处共用：`check_for_update`（手动）、`auto_check_update`（自动）、
+/// 以及后者里的 dismissed 自愈判断。改它等于同时改三处行为 ——
+/// 所以下面有覆盖这三类场景的单元测试。
 fn semver_gt(latest: &str, current: &str) -> bool {
-    let parse = |s: &str| -> Vec<u32> { s.split('.').filter_map(|p| p.split('-').next().unwrap_or("").parse::<u32>().ok()).collect() };
-    let l = parse(latest);
-    let c = parse(current);
+    let l = parse_version(latest);
+    let c = parse_version(current);
+    let (l, c) = match (l, c) {
+        (Some(l), Some(c)) => (l, c),
+        // 任一侧不是合法版本号 → 保守返回 false。典型输入：`ocr-runtime`（资源包名）、
+        // 空串、`v`（只有一个前缀）。返回 true 会让前端弹出无对应下载的更新。
+        _ => return false,
+    };
     for i in 0..3 {
         let lv = l.get(i).copied().unwrap_or(0);
         let cv = c.get(i).copied().unwrap_or(0);
@@ -969,6 +1154,27 @@ fn semver_gt(latest: &str, current: &str) -> bool {
         if lv < cv { return false; }
     }
     false
+}
+
+/// 解析版本号为三段数字（缺位不补，交给比较侧 `unwrap_or(0)` 统一补）。
+///
+/// 任一段不是数字 → 整体 `None`。**不做**「跳过非法段继续解析」——那正是旧实现
+/// 把 `v1.2.8` 读成 `2.8.0` 的根因。
+fn parse_version(s: &str) -> Option<Vec<u32>> {
+    let t = s.trim();
+    let core = t.strip_prefix('v').or_else(|| t.strip_prefix('V')).unwrap_or(t);
+    // 预发布后缀与构建元数据不参与比较（`1.3.0-beta` 的主版本就是 1.3.0）
+    let core = core.split('-').next().unwrap_or("");
+    let core = core.split('+').next().unwrap_or("");
+    if core.is_empty() {
+        return None;
+    }
+    let mut out = Vec::new();
+    for p in core.split('.') {
+        // 空段（`1..3` / `1.2.`）同样视为非法，不能当 0
+        out.push(p.parse::<u32>().ok()?);
+    }
+    if out.is_empty() { None } else { Some(out) }
 }
 
 // ===== v1.2.4（2026-10-22）：自动检查更新 =====
@@ -1351,5 +1557,159 @@ pub fn get_system_metrics(state: tauri::State<'_, Arc<AppState>>) -> MetricsOut 
         disk_total_bytes: snap.disk_total_bytes,
         net_rx_bps: snap.net_rx_bps,
         net_tx_bps: snap.net_tx_bps,
+    }
+}
+
+// ===== v1.2.10（2026-10-26）：更新检测的版本比较 / tag 校验单测 =====
+//
+// 为什么这些必须有测试：`semver_gt` 同时被三条路径使用 —— `check_for_update`（手动）、
+// `auto_check_update`（自动）、以及后者的 dismissed 自愈判断。改它等于同时改三处行为，
+// 而任何一处的错判对用户的表现都是「弹出一个点开是 404 的更新」或「永远收不到提示」，
+// 两者都不会报错、不会留日志，只能靠单测锁住。
+#[cfg(test)]
+mod tests {
+    use super::{is_version_tag, parse_atom_latest_release, semver_gt};
+
+    #[test]
+    fn semver_gt_basic_ordering() {
+        assert!(semver_gt("1.2.8", "1.2.7"));
+        assert!(!semver_gt("1.2.8", "1.2.8"));
+        assert!(!semver_gt("1.2.7", "1.2.8"));
+        assert!(semver_gt("2.0.0", "1.999.999"));
+        assert!(!semver_gt("1.999.999", "2.0.0"));
+    }
+
+    #[test]
+    fn semver_gt_strips_v_prefix() {
+        // 旧实现在这里会把 "v1.2.9" 解析成 [2,9] = 2.9.0，进而和 1.2.8 比出 true。
+        // 结论碰巧也是 true，但那是巧合 —— 换成 "v1.1.0" vs "1.2.8" 就会误报。
+        assert!(semver_gt("v1.2.9", "1.2.8"));
+        assert!(semver_gt("V1.2.9", "1.2.8"));
+        assert!(!semver_gt("v1.1.0", "1.2.8"), "v 前缀不能让低版本被判成新版本");
+        assert!(!semver_gt("v1.2.8", "1.2.8"));
+    }
+
+    #[test]
+    fn semver_gt_pads_missing_segments() {
+        // 缺位补 0：1.3 应等于 1.3.0，大于 1.2.9
+        assert!(semver_gt("1.3", "1.2.9"));
+        assert!(!semver_gt("1.2", "1.2.0"));
+        assert!(!semver_gt("1.3.0", "1.3"));
+    }
+
+    #[test]
+    fn semver_gt_ignores_prerelease_suffix() {
+        // 1.3.0-beta 的主版本是 1.3.0，仍高于 1.2.8
+        assert!(semver_gt("1.3.0-beta", "1.2.8"));
+        assert!(!semver_gt("1.2.8-beta", "1.2.8"));
+    }
+
+    #[test]
+    fn semver_gt_rejects_garbage_conservatively() {
+        // 脏数据必须整体判 false。旧实现会逐段丢弃，把 "abc" 解析成 []，
+        // 再被「缺位补 0」当成 0.0.0 —— 对 "1.2.8" 恰好也是 false，但
+        // "abc.9" 会被读成 [9] = 9.0.0 从而误报。这里把这类输入全部钉死。
+        assert!(!semver_gt("abc", "1.2.8"));
+        assert!(!semver_gt("abc.9", "1.2.8"), "不能跳过非法段继续解析");
+        assert!(!semver_gt("ocr-runtime", "1.2.8"), "资源包名不是版本号");
+        assert!(!semver_gt("", "1.2.8"));
+        assert!(!semver_gt("1..3", "1.2.8"), "空段不能当 0");
+        assert!(!semver_gt("1.2.8", "abc"), "current 脏也不能判成有新版本");
+    }
+
+    #[test]
+    fn semver_gt_only_compares_first_three_segments() {
+        // 只比前三段：第四段多出来不影响结论（1.2.8.1 视作 1.2.8）
+        assert!(!semver_gt("1.2.8", "1.2.8.1"));
+        assert!(!semver_gt("1.2.8.1", "1.2.8"));
+        assert!(semver_gt("1.2.9.1", "1.2.8"));
+    }
+
+    #[test]
+    fn semver_gt_dismissed_self_heal_case() {
+        // ⚠️ 这条是 dismissed 自愈逻辑的守门人，跨批次交互的命门。
+        //
+        // `auto_check_update` 里的自愈写的是：
+        //     } else if !semver_gt(&dismissed, &current) {   // dismissed <= current
+        //         let _ = state.db.set_setting("update_dismissed_version", "");
+        //     }
+        // 即「用户已经升到（或越过）当初忽略的那个版本 → 这条记录没意义了 → 清空」。
+        //
+        // 触发条件是 `!semver_gt(...)` 为 true。若 `dismissed == current` 时 semver_gt
+        // 返回 true（例如为了「加固」把相等也当新版本），自愈**静默失效**：
+        // 「重切同名 tag」的用户永远收不到提示，而且没有任何 UI 能撤销
+        // （横幅本身已经不显示了）—— 这正是第一批 v1.2.9 刚修掉的问题会复发。
+        // 它不会报错、不会留日志，只有这条测试能拦住。
+        assert!(!semver_gt("1.2.8", "1.2.8"), "相等必须返回 false，否则自愈不触发");
+        // v 前缀不能让「同一个版本」被当成两个不同版本：
+        // GitHub tag 带 v 前缀，而数据库里存的是裸版本号，两边经常不同写法。
+        assert!(!semver_gt("v1.2.8", "1.2.8"), "dismissed 带 v、current 不带");
+        assert!(!semver_gt("1.2.8", "v1.2.8"), "current 带 v、dismissed 不带");
+        assert!(!semver_gt("V1.2.8", "v1.2.8"), "大写 V 与小写 v 视为同一版本");
+        // 段数不同但数值相等（缺位补 0 后相等）同样必须返回 false
+        assert!(!semver_gt("1.2", "1.2.0"));
+        assert!(!semver_gt("1.2.0", "1.2"));
+        // 反向：dismissed 确实更高 → 自愈不触发（这条记录还有意义，不能清）
+        assert!(semver_gt("1.2.9", "1.2.8"));
+        // 正向：dismissed 更低 → 自愈应触发（用户已越过它）
+        assert!(!semver_gt("1.2.7", "1.2.8"));
+    }
+
+    #[test]
+    fn missing_segments_are_legal_but_garbage_is_not() {
+        // 这两件事必须分开：「段数不足」是合法版本号（补 0），「有非数字段」才非法。
+        // 若把 `1.2` 也当非法整体返回 false，就会漏掉真实的升级
+        // （远端 tag 写 `1.3` 时用户永远收不到提示）。
+        assert!(semver_gt("1.2.8", "1.2"), "缺位的 current 补 0 后 1.2.0 < 1.2.8");
+        assert!(semver_gt("1.3", "1.2.8"), "缺位的 latest 补 0 后 1.3.0 > 1.2.8");
+        assert!(semver_gt("2", "1.999.999"), "单段版本号合法");
+        assert!(!semver_gt("1", "1.0.0"), "1 与 1.0.0 数值相等");
+        // 对照：带非数字段的才整体判非法
+        assert!(!semver_gt("1.2.x", "1.2.8"));
+        assert!(!semver_gt("1.2.8", "1.2.x"));
+    }
+
+    #[test]
+    fn version_tag_validation() {
+        assert!(is_version_tag("v1.2.8"));
+        assert!(is_version_tag("V1.2.8"));
+        assert!(is_version_tag("1.2.8"));
+        assert!(is_version_tag("1.3"));
+        assert!(is_version_tag("  v1.2.8  "), "首尾空白应容忍");
+        assert!(is_version_tag("1.3.0-beta"));
+        assert!(is_version_tag("1.3.0+build.5"));
+        // 非法：资源包名、四段、空、只有前缀
+        assert!(!is_version_tag("ocr-runtime"));
+        assert!(!is_version_tag("1.2.8.1"));
+        assert!(!is_version_tag(""));
+        assert!(!is_version_tag("v"));
+        assert!(!is_version_tag("abc"));
+        assert!(!is_version_tag("release-notes"));
+        assert!(!is_version_tag("1..3"));
+    }
+
+    #[test]
+    fn atom_parser_rejects_non_version_release() {
+        // F9：将来若把 `ocr-runtime` 这类资源型 release 发到 GitHub 且排在最前，
+        // atom feed 第一条就是它。必须返回 None 让上层回落到 API / 镜像，
+        // 而不是带着脏 tag 往上走弹死链。
+        let xml = r#"<feed><entry>
+            <title>ocr-runtime</title>
+            <link href="https://github.com/x/y/releases/tag/ocr-runtime"/>
+            <summary>ONNX runtime</summary>
+        </entry></feed>"#;
+        assert!(parse_atom_latest_release(xml).is_none());
+    }
+
+    #[test]
+    fn atom_parser_accepts_release_style_titles() {
+        let xml = r#"<feed><entry>
+            <title>ScreenTime Pro v1.2.8</title>
+            <link href="https://github.com/x/y/releases/tag/v1.2.8"/>
+            <summary>notes</summary>
+        </entry></feed>"#;
+        let got = parse_atom_latest_release(xml).expect("合法版本 tag 应能解析");
+        assert_eq!(got.0, "1.2.8", "返回的版本号不带 v 前缀");
+        assert_eq!(got.1, "https://github.com/x/y/releases/tag/v1.2.8");
     }
 }

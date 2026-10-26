@@ -235,7 +235,7 @@ export default {
     shotPermFix: "重置权限并重启",
     // v0.9.4（2026-09-20）：紧凑授权弹窗 —— 一句话原因（按 Rust 原因码分档）+
     // 轮询翻转 + 详情折叠。用户反馈 v0.9.3 大段诊断文字「太多太丑」。
-    shotPermReasonNotGranted: "截图需要「屏幕录制」权限：请在系统设置中允许本应用，然后重启应用生效。",
+    shotPermReasonNotGranted: "截图需要「屏幕录制」权限：请在系统设置中允许本应用，然后重启应用生效。macOS 15 起系统会每月询问一次「允许一个月」，属系统行为，选「允许一个月」即可。",
     shotPermReasonTranslocated: "应用正从临时路径运行（未拖入「应用程序」文件夹），授权无法生效：请先把应用拖入「应用程序」文件夹，再从那里启动并授权。",
     shotPermReasonQuarantined: "应用带下载隔离标记，会反复触发临时路径运行：请在终端执行 xattr -dr com.apple.quarantine 后重新打开应用。",
     shotPermReasonAdhoc: "本应用未做开发者签名，每次升级后系统都视为新应用，需要重新授权一次（设置里显示的「开」是旧版本的记录）。",
@@ -243,6 +243,22 @@ export default {
     shotPermDetailToggle: "技术详情",
     shotPermDetailSteps: "① 系统设置 → 隐私与安全性 → 屏幕录制，勾选本应用；② 完全退出并重新打开应用（新授权只对新进程生效）；③ 若开关本就是开的：先「−」移除本应用再重新授权，或用下方命令重置。",
     shotPermDetailAdhoc: "本应用为 ad-hoc 签名，每次构建的签名指纹都会变化 —— 系统把每个新版本都当作全新应用。根治需 Developer ID 签名 + 公证。",
+    // v1.2.10（2026-10-26）：权限中心卡片 —— 把散落在顶部横幅 / 授权弹窗里的
+    // 权限状态与操作收口到设置页，横幅此后只承担「通知」，操作统一进这里。
+    permissionCenterTitle: "权限中心",
+    permissionCenterDesc: "本应用在 macOS 上实际只需要「屏幕录制」一项授权，其余功能不依赖任何权限",
+    permScreenCapture: "屏幕录制",
+    permAccessibility: "辅助功能",
+    permGranted: "已授权",
+    permNotGranted: "未授权",
+    permGrant: "去授权",
+    permResetRestart: "重置并重启",
+    permOpenSettings: "去系统设置",
+    permRefresh: "刷新状态",
+    permScreenCaptureDesc: "用于截图取字；不授权则只能统计 App 名，无法记录窗口标题",
+    permAccessibilityDesc: "用于判断是否空闲；不授权时按「不空闲」处理，统计仍然可用",
+    permNotRequired: "本平台无需授权",
+    permRevokedHint: "若系统设置里开关是开的、这里仍显示未授权：授权记录指向了旧版本的签名指纹，点「重置并重启」清掉重来。",
     shotShortcutReset: "恢复默认快捷键",
     // v0.7.6：状态栏配置（总开关 + 子项；取代 v0.7.5 单字段 metricsTitle）
     // v0.7.11（2026-09-13）：三端统一——指标只由「悬浮指标条」显示，托盘恒为品牌图标。

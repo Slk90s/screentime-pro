@@ -442,6 +442,91 @@
       </div>
     </div>
 
+    <!-- ============ v1.2.10：权限中心 ============
+         为什么放在截图卡片之后：本应用在 macOS 上真正需要的唯一授权就是「屏幕录制」，
+         且它只服务截图取字与窗口标题 —— 与截图功能语义相邻，用户排查截图问题时
+         视线不用跳。
+         为什么只读展示 + 手动刷新、不做自动轮询：Rust 的 check_permissions 在未放行时
+         会跑 codesign / xattr 两个子进程做诊断（见 commands/platform/macos.rs 的警告），
+         接进轮询等于每 2 秒 fork 两个进程。用户在系统设置里改完授权后点一下「刷新」即可。 -->
+    <div class="setting-card">
+      <div class="card-head">
+        <div class="head-icon icon-green">
+          <AppIcon name="lock" :size="20" />
+        </div>
+        <div class="head-text">
+          <h3>{{ t("settings.permissionCenterTitle") }}</h3>
+          <p>{{ t("settings.permissionCenterDesc") }}</p>
+        </div>
+        <button v-if="IS_MAC" class="ghost-btn perm-refresh" @click="loadPermissions">
+          <AppIcon name="refresh" :size="14" />
+          {{ t("settings.permRefresh") }}
+        </button>
+      </div>
+      <div class="card-body">
+        <!-- 非 macOS 抓屏不需要 TCC 授权，卡片只留一句结论，不摆永远显示「已授权」的假开关 -->
+        <p v-if="!IS_MAC" class="field-hint perm-hint-nomac">{{ t("settings.permNotRequired") }}</p>
+        <template v-else>
+        <!-- 屏幕录制 -->
+        <div class="perm-row">
+          <div class="perm-main">
+            <span class="perm-label">{{ t("settings.permScreenCapture") }}</span>
+            <span
+              v-if="permissions"
+              class="perm-badge"
+              :class="permissions.screen_capture ? 'ok' : 'bad'"
+            >
+              <i class="perm-dot" />{{
+                permissions.screen_capture ? t("settings.permGranted") : t("settings.permNotGranted")
+              }}
+            </span>
+            <span v-else class="perm-badge pending">…</span>
+            <div class="perm-actions">
+              <button
+                v-if="!permissions || !permissions.screen_capture"
+                class="ghost-btn"
+                @click="onPermGrantScreen"
+              >
+                {{ t("settings.permGrant") }}
+              </button>
+              <button class="ghost-btn" @click="onPermResetRestart">
+                {{ t("settings.permResetRestart") }}
+              </button>
+            </div>
+          </div>
+          <p class="field-hint">{{ t("settings.permScreenCaptureDesc") }}</p>
+        </div>
+        <!-- 辅助功能 -->
+        <div class="perm-row">
+          <div class="perm-main">
+            <span class="perm-label">{{ t("settings.permAccessibility") }}</span>
+            <span
+              v-if="permissions"
+              class="perm-badge"
+              :class="permissions.accessibility ? 'ok' : 'bad'"
+            >
+              <i class="perm-dot" />{{
+                permissions.accessibility ? t("settings.permGranted") : t("settings.permNotGranted")
+              }}
+            </span>
+            <span v-else class="perm-badge pending">…</span>
+            <div class="perm-actions">
+              <button class="ghost-btn" @click="onPermOpenAccessibility">
+                {{ t("settings.permOpenSettings") }}
+              </button>
+            </div>
+          </div>
+          <p class="field-hint">{{ t("settings.permAccessibilityDesc") }}</p>
+        </div>
+        <!-- 系统设置里开关开着、这里仍显示未授权 —— 这是 ad-hoc 签名的典型症状，
+             不解释用户只会反复点「去授权」而不理解为什么没用。 -->
+        <p v-if="permissions && !permissions.screen_capture" class="field-hint perm-hint-warn">
+          {{ t("settings.permRevokedHint") }}
+        </p>
+        </template>
+      </div>
+    </div>
+
     <!-- ============ 设备 ID ============ -->
     <div class="setting-card">
       <div class="card-head">
@@ -879,6 +964,14 @@
 //   5. 危险区改为独立卡片，警示色
 //
 // ── 修改历史 ────────────────────────────────────────────────
+// 2026-10-26 @v1.2.10：新增「权限中心」卡片（截图卡片之后、设备 ID 之前）。
+//   · 背景：设置页 grep checkPermissions 零命中 —— 用户想主动确认「到底授权了没有」
+//     在界面上无路可走，只能靠顶部横幅出现/消失猜；横幅还同时承担通知与操作两个职责。
+//   · 本版把「状态展示 + 全部操作按钮」收口到这张卡，横幅此后只承担通知。
+//   · 为什么只 onMounted 查一次 + 手动刷新，不做轮询：后端 check_permissions 在未放行时
+//     会跑 codesign / xattr 两个子进程做诊断（commands/platform/macos.rs 有明确警告），
+//     接进轮询等于每 2 秒 fork 两个进程。用户改完系统设置点「刷新状态」即可。
+//   · 非 macOS：抓屏不需要 TCC 授权，卡片只留一句「本平台无需授权」，不摆假开关。
 // 2026-10-23 @v1.2.7：修「进设置页立刻点开关，改动会被晚到的加载覆盖」
 //   · 症状：进设置页后马上点「显示网速」，光标闪一下就弹回原值，用户以为点不动。
 //   · 真机复现（CDP + debug 构建，进入页面 25–46ms 内点击）：
@@ -916,6 +1009,7 @@ import type {
   SettingsOut,
   StatusBarConfig,
   UpdateInfo,
+  PermissionStatus,
   ScreenshotConfig,
   ScreenshotOut,
   OcrEngineInfo,
@@ -1005,6 +1099,8 @@ onMounted(async () => {
   void initScreenshot();
   void initSettings();
   void refreshLogSize();
+  // v1.2.10：权限状态只查这一次（+ 卡片上的手动刷新），不轮询 —— 见 loadPermissions 说明
+  void loadPermissions();
 });
 onBeforeUnmount(() => {
   if (unlistenSkin) unlistenSkin();
@@ -1659,6 +1755,74 @@ const hotkeyBtnEl = ref<HTMLButtonElement | null>(null);
 const IS_MAC =
   typeof navigator !== "undefined" &&
   /mac/i.test(`${navigator.platform} ${navigator.userAgent}`);
+
+// ===== v1.2.10（2026-10-26）：权限中心 =====
+//
+// 为什么要有这块：v1.2.9 之前权限状态只存在于顶部横幅和截图授权弹窗里，设置页
+// 「checkPermissions」零命中 —— 用户想主动确认「我到底授权了没有」在界面上无路可走，
+// 只能靠横幅出现/消失猜。横幅此后只承担「通知」，操作统一收进这张卡片。
+//
+// 为什么 onMounted 查一次 + 手动刷新，不做定时轮询：Rust 的 `check_permissions`
+// 在未放行时会跑 `codesign` / `xattr` 两个子进程做诊断，接进 1Hz/2Hz 轮询等于
+// 每 2 秒 fork 两个进程（见 `commands/platform/macos.rs` 的明确警告）。
+// 用户从系统设置改完授权后点一下「刷新状态」重查即可，成本只落在他主动操作时。
+/** null = 还没查到第一次（渲染成占位符，避免闪一下「未授权」） */
+const permissions = ref<PermissionStatus | null>(null);
+
+async function loadPermissions() {
+  if (!IS_MAC) return;
+  try {
+    permissions.value = await tracker.checkPermissions();
+  } catch (err) {
+    log.warn("[Settings] 读取权限状态失败", err);
+  }
+}
+
+/** 「去授权」：主动弹系统授权框（非 macOS 恒 true）。失败不提示 —— 用户能看到状态没变。 */
+async function onPermGrantScreen() {
+  try {
+    await screenshot.requestPermission();
+  } catch (err) {
+    log.warn("[shot] 请求屏幕录制授权失败", err);
+  }
+  // 系统框是异步的，紧接着查通常还是旧值；仍查一次，让「已授权」的情况立刻刷新。
+  await loadPermissions();
+}
+
+/**
+ * 「重置并重启」：tccutil 清掉指向旧版本签名指纹的脏记录，再重启进程。
+ * 两步缺一不可 —— 只清不重启，新授权对当前进程无效；只重启，脏记录还在。
+ * 成功后进程直接退出，下面的 await 不会返回。
+ */
+async function onPermResetRestart() {
+  try {
+    await tracker.resetScreenCapturePermission();
+  } catch (err) {
+    // 重置失败不阻断重启：tccutil 在个别系统上要 sudo，至少让「重启」这条路还能走
+    log.warn("[shot] 重置屏幕录制授权失败", err);
+  }
+  try {
+    await tracker.restartApp();
+  } catch (err) {
+    showAlert("warn", t("settings.shotTitle"), err instanceof Error ? err.message : String(err));
+  }
+}
+
+/**
+ * 辅助功能「去系统设置」。
+ *
+ * 为什么直接跳转而不先弹授权框：本仓库全程没有 AXUIElement / CGEventTap 调用，
+ * 空闲检测走的是 `CGEventSourceSecondsSinceLastEventType`（不需要辅助功能）。
+ * 这里的开关只影响空闲判据精度，缺失时按「不空闲」处理，统计照常可用 ——
+ * 不值得为它再弹一个用户看不懂的系统框。跳到列表页让用户自己决定即可。
+ */
+async function onPermOpenAccessibility() {
+  try {
+    await tracker.openPrivacySettings("accessibility");
+  } catch (err) {
+    log.warn("[Settings] 打开辅助功能设置失败", err);
+  }
+}
 
 /** 把存储语法（CmdOrCtrl+Shift+A）渲染成用户看得懂的按键标签 */
 function formatHotkey(s: string): string {
@@ -2873,6 +3037,75 @@ async function onCheckUpdate() {
   font-size: 12px;
   font-weight: 600;
   color: var(--muted);
+}
+
+/* ============ v1.2.10：权限中心卡片 ============ */
+/* 刷新按钮推到卡片头右端 —— 它是「查询」不是「操作」，不和下面的授权按钮抢视觉位。 */
+.perm-refresh {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+.perm-row + .perm-row {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed rgba(0, 0, 0, 0.08);
+}
+.perm-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.perm-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+.perm-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+/* 颜色走 style.css 的语义变量，深浅色模式自动跟随（不硬编码绿/红） */
+.perm-badge.ok {
+  color: var(--success);
+  background: rgba(52, 199, 89, 0.1);
+}
+.perm-badge.bad {
+  color: var(--danger);
+  background: rgba(255, 59, 48, 0.09);
+}
+.perm-badge.pending {
+  color: var(--text-dim, #86868b);
+  background: rgba(0, 0, 0, 0.04);
+}
+.perm-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+.perm-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.perm-hint-warn {
+  color: var(--danger);
+  opacity: 0.85;
+  margin-top: 10px;
+}
+.perm-hint-nomac {
+  margin-top: 0;
 }
 .dir-row {
   display: flex;
