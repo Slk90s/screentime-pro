@@ -46,6 +46,25 @@
     同批合并进重切版：mac / Linux 取字**三重不可用**修复（运行库落盘路径曾返回目录而非文件名
     → 运行库永远落不了盘；下载超时过短；平台感知默认引擎 + 存量配置自愈）。
     **本版为同名 tag 重切**：v0.9.0 首发版对 macOS / Linux 的取字链路不可用，故修复后重切发布。
+  - 2026-10-27 @v1.2.11: 新增 - 「应用内自动升级」子系统。新模块 `src-tauri/src/app_update.rs`
+    （与 `commands::check_for_update` **并存不替代**：后者只告知新版本并跳浏览器，前者真的下装）；
+    前端 `src/api/appUpdate.ts` + 设置页 `nativeUpdate` 分支；IPC 85→**88**
+    （`app_update_supported` / `check_app_update` / `install_app_update`）。平台门控
+    `install_supported()`：Windows nsis/msi、Linux 仅 AppImage、macOS 主动关闭。
+    §3.1 / §5 / §11 计数同步为 88；§5 新增「应用内升级」行。
+  - 2026-10-27 @v1.2.11: 修复 - macOS「辅助功能已授权却报未授权」（P0，三层叠加）。
+    设置页提示条件写反；「重置并重启」只清 `ScreenCapture` 不清 `Accessibility`（`tccutil reset`
+    的**服务名按服务不同且大小写敏感**）→ 按服务分流并给辅助功能行补独立重置入口；
+    真因是 TCC 按进程快照 + ad-hoc 签名 cdhash 每次 CI 都变（记录按「路径 + cdhash」绑定）。
+    同时确认辅助功能**非功能必需**（空闲检测走 `CGEventSourceSecondsSinceLastEventType`），
+    未授权不影响计时准确性。
+  - 2026-10-27 @v1.2.11: 构建 - updater 依赖钉死 `=2.12.0`（实测 2.13.0+ 要 Rust 1.90 +
+    edition 2024，裸写 `"2"` 会解析到 2.14.x 直接编不过）；`tauri.conf.json` 增
+    `bundle.createUpdaterArtifacts` 与 `plugins.updater`（pubkey 是**公钥内容**不是路径）。
+    CI：三个 `tauri-action` 一律 `includeUpdaterJson: false`（`uploadUpdaterJson` **不是真实
+    输入名**，会被静默忽略导致三平台互相覆盖），改由独立 `updater-json` job 汇总；
+    新增 `.github/scripts/gen_latest_json.py`；`pub_date` 严格 RFC3339（解析错误变 `DeError`
+    会中断整个检查）。`.gitignore` 的 `scripts/` 改为 `/scripts/`（会吞掉 `.github/scripts/`）。
   - 2026-10-26 @v1.2.10: 修复 - macOS 交互体验专项（六修复 + 一新增，Windows / Linux 零功能改动）。
     a) 浮窗浅色外观反色（白字 1.36:1 → 全过 AA），只挂 `.has-blur` 即仅 macOS；
     b) 浮窗高度/圆角归一到单一源（Rust `set_size`），修「底部露 8px 材质 + 纵向双弧」；
@@ -73,69 +92,53 @@
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-10-26（同步至 **v1.2.10**——macOS 交互体验专项修复；Windows / Linux 零功能改动）——
-> 六项修复 + 一项新增，全部落在 macOS 观感与授权体验。**总纲：凡「同一件事有两个源」或
-> 「一档配色无条件套用到两个平台」的地方，都会在某个时刻露馅。**
-> ① **浮窗浅色外观下白字看不清（P0）**：字号/颜色/压暗量全按深色背景定标，**没跟随
-> `prefers-color-scheme`**（浅色壁纸的玻璃底上白字仅 **1.36:1**，AA 正文线 4.5:1）。
-> **降 alpha 治不了** —— 压暗到 0.48 仍只有 3.40:1、加到 0.80 也才 3.9 上下，数学上过不了 4.5，
-> **唯一出路是反色**。新增 `@media (prefers-color-scheme: light)` 档：白遮罩 + 近黑字 `#1c1c1e`
-> （NSColor.labelColor 浅色值）。⚠️ **反色只挂 `.has-blur`（仅 macOS），Windows 明确不参与**：
-> ① Windows 无系统材质跟随 appearance（DWM 透光率 0.001，已刻意停用），CSS 是唯一视觉来源；
-> ② 反色在深壁纸上**大幅变差** —— Win11 Bloom `rgb(46,32,78)` 上现状 16.78:1，照搬本档只剩
-> **6.32:1**（净亏 10.5），且胶囊会变成 srgb(161,155,175) 的灰白板；③ 与关玻璃时的深色胶囊
-> `rgba(28,30,38,.86)` 割裂。配色定标：材质后底下界由 v1.2.8 深色真机实测**反推**
-> （压暗 0.48 后观测 L≈95/71 ÷ 0.52 → 183/137），按 137 保守取值扫全程 130~255 取最差：
-> 主数字 10.38 / 标签 5.16 / 网速↓ 4.74 / 网速↑ 4.82 / 截图 5.49，**全过 AA**。
-> ② **浮窗高度/圆角有两个源**：Rust `set_size` 下发 36 或 44，CSS 又硬编码 `height:36px` /
-> `.is-glass{height:44px}`，两条时间线不同源 → 冷启动与开关翻转时胶囊底部露出 8px 系统材质、
-> 材质 radius 22 vs CSS 18 呈纵向双弧。改 `.float-bar` 为 `height:100%` + `border-radius:999px`
-> 并删掉 `.is-glass` 里的 44px/22px，**高度只剩一处定义**（与 v1.2.8 对宽度的改造完全同构：
-> 该文件「宽度」那次也是把 `width` 从定义改成跟随）。
-> ③ **菜单栏图标浅色栏显脏灰**：托盘取彩色 App 图标（alpha=255 占 90.6%），浅色栏上仅
-> **1.91:1**（就是一块糊在栏上的色块）。改用 **template 剪影图**（纯黑 + alpha 的圆环 + 圆心），
-> 系统按菜单栏明暗自动染色。新增 `icons/trayTemplate.png`(22²)/`@2x`(44²)，4x 超采样后 LANCZOS
-> 缩小，有效覆盖率 **25.0% / 25.1%**（理论 24.8%，误差 <0.3%）。macOS 分支内嵌 **@2x** ——
-> `tray-icon 0.24.2` 的 macOS 实现是单张 `NSImage::initWithData`（`platform_impl/macos/icon.rs:20`），
-> 无法表达 1x/2x 多表示；且系统把图标压到固定 18pt（`macos/mod.rs:296`），44px 下采样更锐利。
-> `.icon_as_template(cfg!(target_os="macos"))` —— 该 API 无 cfg 门控，非 macOS 是空操作，
-> 但仍按平台置真，避免将来 tray-icon 给 Windows 加 template 语义时误伤。
-> ⚠️ 素材**不写进** `tauri.conf.json` 的 `bundle.icon`（那里 `find_icon` 取不到会 panic）。
-> ④ **检测不到版本更新（三个独立成因全处理）**：**(a)** 前端只有一个 `setTimeout`，常驻托盘
-> 应用等于「进程一生只查一次」→ 改 6 小时 `setInterval`；**(b)** 时间戳在「抓取成功」后就写、
-> **包括「已是最新」**，导致接下来 24h 不再检查 → 改为「确认远端状态」之后才写、节流 24h→6h；
-> **(c)** `reqwest` 用 `default-features = false` **连带丢了 `system-proxy`**
-> （`reqwest-0.12.28/Cargo.toml:101-106`），只认 `HTTP_PROXY` 环境变量、**不读系统代理** ——
-> Clash/Surge 这类 GUI 客户端默认改的正是系统代理，用户以为「开着代理」而进程实际直连出境，
-> 三条通道全灭后前端报「已是最新」→ 补回该 feature。另：三通道抓取（GitHub atom → GitHub REST
-> → **Gitee 镜像**）全失败才算失败；每条通道加 `is_version_tag` 校验（`ocr-runtime` 这类资源型
-> Release 会让前端弹「发现新版本 ocr-runtime」死链）；`semver_gt` 修正 dismissed 自愈（依赖
-> 「相等返回 false」，否则忽略过的版本永久不再提示）；错误正文按**字符**截断
-> （`String::truncate` 按字节切且非 char 边界会 panic，不能用）。
-> ⑤ **权限弹窗反复弹**：删掉启动 3 秒的预请求（判据是单信号 `CGPreflight`，已授权用户也会被
-> 再弹一次），改首次截图时由 `ensure_ready` 按需请求、启动阶段只静默查询；
-> `check_permissions` 的屏幕录制改**双信号口径**（与截图侧一致），修正「升级后失效」被误判成
-> 「从未授权」的文案错误；权限横幅点 × 后 dismiss 标记落盘 localStorage、focus 回调由
-> 「accessibility 为真就清标记」改**边沿触发**（false→true 才算恢复）。
-> ⑥ **浮窗材质层只增不减**：`window-vibrancy 0.8.1` 的 `apply` **不去重**（每次新建
-> `NSVisualEffectView` 并 `addSubview`）而 `clear` 走 `viewWithTag:` **一次只摘一层** →
-> apply N 次 = N 层叠加，关玻璃后剩余层永久留下（「浮窗上有一块擦不掉的灰板」）。改为 apply 前
-> 循环清到干净、`!glass` 分支同样循环清，循环以 `Ok(false)` 收尾（**有界**）。
-> ⑦ **新增：设置页「权限中心」（仅 macOS）** —— 截图卡片后新增只读卡片：屏幕录制 / 辅助功能
-> 真实状态 + 手动刷新 + 「授予」（跳系统设置）/「重置并重启」。刻意**不轮询**：
-> `check_permissions` 在未放行时会 fork `codesign`/`xattr`，1Hz 代价过高。含 ad-hoc 签名专项
-> 提示（升级后授权失效的物理成因是 cdhash 每次构建都变）。
-> ⑧ **`tauri.conf.json` 给 float 窗口补 `x/y: 24`**：`tao-0.35.3` 无 position 时兜底
-> `ns_window.center()`（`platform_impl/macos/window.rs:331`），而 float 340px / main 1040px
-> 且 main 自身 center → 首开残影**正好压在主窗口正中**。`height`/`minHeight` **刻意维持 36**：
-> `set_float_visible` 里的 `window.show()`（lib.rs:835）早于 webview `onMounted → fitWidth()`
-> （FloatBar.vue:545），conf 写 44 会让非玻璃用户看见一帧 44px 胶囊；而玻璃档的 44 已由 setup
-> 里的 `set_size(cur_w, 44)` 在 show **之前**落定，conf 再写一遍纯属重复。
-> **验证**：`cargo check` 零警告 / `cargo test --lib` **35 passed / 0 failed / 4 ignored**
-> （本版新增 11 个单测）/ `vue-tsc --noEmit` 零错误；macOS 代码经 `aarch64-apple-darwin`
-> 交叉探针 + 双向反证（`new_owned`→`new_owned_XXX` E0599、`into_raw()`→`as_raw()` E0308）；
-> CSS 特异性矩阵脚本核验 light 块 **9 条规则全挂 `.has-blur`**（Windows 零波及）且每条都赢过
-> 暗色档（含 2 条同特异性靠源码顺序取胜的）。IPC 总数 **85**（本版未增减）。
+> 最后更新：2026-10-27（同步至 **v1.2.11**——应用内自动升级（Windows / Linux AppImage）+ macOS 授权误报三修复）——
+> 本版主题是「发现新版本」终于能在应用内升完，外加 macOS「辅助功能已授权却报未授权」的连环修复。
+> **总纲：凡是「只在某个时刻才成立」的状态，都必须留一个能重新求值的信号，不能只信一次快照。**
+> ① **应用内自动升级（新模块 `app_update.rs`，与既有 `commands::check_for_update` 并存不替代）**：
+> 后者是「查版本 + 给网页链接」，前者是「查 + 下 + 验签 + 装」。三平台分支**互不相同**：
+> **Windows**（NSIS / MSI）拉起安装包后**进程立即退出** —— `install_inner` 在 `ShellExecuteW`
+> 之后直接 `std::process::exit(0)`（updater.rs:876），`install()` **永不返回**，前端那条
+> 「安装完成」的 toast 在 Windows 上永远走不到（故刻意不写）；这不是崩溃，是安装器接管。
+> **Linux 仅 AppImage**：原地覆盖自身并重启（`app.restart()`）。**deb / rpm 明确不参与** ——
+> 它们走 `pkexec dpkg -i` / `rpm -U`，每次升级都要过一次系统授权框，本就该由包管理器接手；
+> 用 `bundle_type()`（`__TAURI_BUNDLE_TYPE` 二进制补丁的静态值，dev 下返回 `None`）识别自身包型，
+> deb/rpm 用户点「检查更新」仍只看到「前往下载」。**macOS 主动关闭**，两个独立理由：
+> (a) ad-hoc 签名让「升级后授权失效」每次都复发，自动升级等于把这个坑自动化；
+> (b) `latest.json` 缺 macOS 条目时 updater 返的是 `Err(TargetsNotFound)` 而非「无更新」，
+> 会让用户每次启动都刷一条错误日志。并发用 **RAII 闸门**（`BUSY.compare_exchange` +
+> `Drop` 复位），下载进度走 `tauri::ipc::Channel<DownloadProgress>`。IPC 85→**88**。
+> ② **「辅助功能已授权却报未授权」（P0）三层叠加**：**(a)** 设置页提示条件写反；
+> **(b)** 「重置并重启」只清 `ScreenCapture`、不清 `Accessibility`（`tccutil reset` 的**服务名
+> 按服务不同且大小写敏感**），文案与实际动作不符，用户白忙 → 按服务分流 + 辅助功能行补独立入口；
+> **(c)** 真因是 **TCC 授权按进程快照**（勾选时进程已在跑，拿不到新授权，必须重启进程）
+> **× ad-hoc 签名 cdhash 每次 CI 都变**（记录按「路径 + cdhash」绑定，升级后旧记录失效，
+> 而系统设置界面仍显示为开）。顺带确认**辅助功能对本应用并非功能必需** —— 空闲检测走
+> `CGEventSourceSecondsSinceLastEventType`，**不需要**该权限，未授权不影响计时准确性；
+> 它只用于设置页状态显示。这条写进文案，避免用户为「修好显示」去折腾权限。
+> ③ **updater 依赖钉死 `=2.12.0`**：实测版本边界 —— ≤2.12.0 只要 tauri 2.10 / Rust 1.77.2 /
+> edition 2021，2.13.0+ 要 **Rust 1.90 + edition 2024**。裸写 `"2"` 会解析到 2.14.x 直接编不过，
+> 故显式 `=` 锁定（升级此依赖前先确认工具链）。
+> ④ **CI 出 `latest.json`**：三个 `tauri-action` 步骤一律 `includeUpdaterJson: false` ——
+> 该输入名**真实存在**（`action.yml`），而上一轮拟用的 `uploadUpdaterJson` **根本不存在**，
+> Actions 对未知输入只 warning 不报错，会导致三平台各自生成、互相覆盖；改由独立 `updater-json`
+> job（`needs: [windows, linux]`）汇总产物统一生成。`pub_date` 必须**严格 RFC3339**：
+> `OffsetDateTime::parse(..., Rfc3339)` 的解析错误会变成 `DeError` **中断整个检查**，故用
+> `date -u +%Y-%m-%dT%H:%M:%SZ` 生成 + 正则守卫 + 空值直接省略（`github.event.repository.updated_at`
+> 不是严格 RFC3339，用它会让所有客户端检查更新全灭）。`.github/scripts/gen_latest_json.py` 里
+> `pick_one()` 对 0 匹配 / 多匹配都报错，缺 `.sig` 直接 `::error::` + exit 1。
+> ⑤ **`.gitignore` 的 `scripts/` 会匹配任意层级**，把 `.github/scripts/` 一起吞掉 ——
+> 本地 `ls` 一切正常、CI 才报「文件不存在」，已锚定为 **`/scripts/`**；另加 `*.key` /
+> `*.key.pub` / `.tauri/` 保护私钥（`~/.tauri/screentime-pro.key` 丢了 = 已安装用户永久收不到更新）。
+> **验证**：`cargo check --lib` 零警告（本机 + 显式 `--target x86_64-pc-windows-msvc`）/
+> `cargo test --lib` **35 passed / 0 failed / 4 ignored** / `vue-tsc --noEmit` 零错误 /
+> `vite build` 通过；**IPC 精确对账 88 = 88**（注册 / 定义 / 去重后各 88，无缺无多）。
+> Linux 分支无法直接 `cargo check --target`（缺 pkg-config 会得到**假失败**），改走独立交叉探针
+> （`#[path]` 引真实代码 + 等宽 shim + **三次反证**：注入 `BundleType::AppImageXXX` 得 E0599、
+> 类型错得 E0308）；`latest.json` 用**真实** `RemoteRelease` 反序列化验证，并做三组反证
+> （坏 `pub_date` 被拒、缺平台被拦、`v` 前缀被 `parse_version` 正确 trim）。
+> 上一版 v1.2.10：macOS 交互体验专项（浮窗浅色反色 / 高度单一源 / 托盘 template 图 /
+> 更新检测三成因 / 权限弹窗 / 材质层泄漏 + 权限中心 + conf 补 x/y），Windows / Linux 零功能改动。
 
 ---
 
@@ -143,7 +146,7 @@
 
 跨平台应用使用时长追踪（macOS / Windows / Linux），对标 iOS「屏幕使用时间」。**数据 100% 本地（SQLite bundled），零上传，隐私优先**。
 
-栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v1.2.10**（详见 [`RELEASE.md`](RELEASE.md)）。
+栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v1.2.11**（详见 [`RELEASE.md`](RELEASE.md)）。
 
 > ⚠️ 本节版本号在 v0.7.0 → v0.7.5 期间**长期未更新**（曾停留在 v0.7.0），与 `tauri.conf.json` 脱节。
 > 版本号唯一真实来源是 **`src-tauri/tauri.conf.json` 的 `version`**，改版本时务必回来同步本节。
@@ -184,7 +187,7 @@
 ### 3.1 Rust 后端（src-tauri/src/）
 | 模块 | 职责 | 改我会影响 |
 |------|------|------------|
-| `commands.rs` (~1148 行) | 主 IPC 命令路由（50 个 `#[tauri::command]`；桌宠窗口/菜单命令 9 + 命中 3 个在 `pet/`，截图 14 个在 `screenshot/`，悬浮窗 5 个在 `float_window.rs`，合计 **81** 个已注册） | 前端 `api/*` 必须对齐字段名 |
+| `commands.rs` (~1148 行) | 主 IPC 命令路由（48 个 `#[tauri::command]` 在本文件）；`lib.rs` 的 `generate_handler!` 合计注册 **88** 个 = 本文件 48 + `screenshot/` 21 + `pet/` 12（窗口/菜单 9 + 命中 3）+ `float_window.rs` 3 + `app_update.rs` 3 + `float_glass.rs` 1 | 前端 `api/*` 必须对齐字段名 |
 | `lib.rs` (~700 行) | Tauri Builder、插件注册（含 `tauri-plugin-global-shortcut`）、`generate_handler!` 命令注册、系统托盘（含「截图」菜单项） | **新命令必须在此注册**，否则 invoke 报不存在 |
 | `tracker/{macos,windows,linux}.rs` | 平台采样器（10s tick） | 跨平台数据一致性 |
 | `tracker/mod.rs` | trait 抽象 + 后台循环 | — |
@@ -322,7 +325,7 @@ PetSkinRenderer.watchEffect → skinTick++
 
 ---
 
-## 5. IPC 契约（当前 81 个命令）
+## 5. IPC 契约（当前 88 个命令）
 
 Rust 端在 `commands.rs` / `pet/` 定义，**在 `lib.rs` 的 `generate_handler!` 注册**；前端通过 `src/api/*` 调用。**改 IPC 必须同时改两端，并记得注册。**
 
@@ -345,7 +348,8 @@ Rust 端在 `commands.rs` / `pet/` 定义，**在 `lib.rs` 的 `generate_handler
 | 悬浮指标条（`float_window::`） | `create_float_window` / `show_float_window` / `hide_float_window` / `move_float_window` / `resize_float_window` | 悬浮窗生命周期与位置尺寸（共 5 个） |
 | 权限 | `check_permissions` / `open_privacy_settings` | macOS 辅助功能 + 屏幕录制。`check_permissions` 返回 `{ accessibility, screen_capture }`（`db/models.rs:107`），**v1.2.10 起屏幕录制改双信号口径**（`CGPreflight` ∨ 窗口标题探针）与截图侧一致 —— 单信号会把「升级后授权失效」误判成「从未授权」。设置页**权限中心**（仅 macOS）复用它，刻意不轮询（未放行时会 fork `codesign`/`xattr`，1Hz 代价过高） |
 | 环境 | `check_webview2` / `open_webview2_download` / `reveal_path` | Windows WebView2 检测等 |
-| 元 | `check_for_update` / `open_url` / `export_logs` / `get_log_size` / `get_log_dir` | 升级、日志导出 |
+| 元 | `check_for_update` / `open_url` / `export_logs` / `get_log_size` / `get_log_dir` | 版本告知、日志导出 |
+| 应用内升级（`app_update::`，**v1.2.11**） | `app_update_supported` / `check_app_update` / `install_app_update` | Tauri 官方 updater（ed25519 验签）。**与上面的 `check_for_update` 是两套并存的东西，别混用**：`check_for_update` 只「告知」有新版本并跳浏览器（macOS / deb / rpm 只能走这条）；`app_update::*` 才真正下载并安装（仅 Windows nsis / Linux AppImage）。<br>平台门控在 `install_supported()`：`bundle_type()` 是打包时 patch 进二进制的静态变量，**开发态为 `None`**，所以 `cargo run` 下判为不支持 —— 这是保守且正确的行为，不是 bug。<br>⚠️ **Windows 装完进程立即退出**（upstream `install_inner` 在 `ShellExecuteW` 后直接 `process::exit(0)`），`install_app_update` 的 Promise 永不 resolve，前端不得写「安装成功」提示；Linux 则由 Rust 侧装完调 `app.restart()`。 |
 
 完整列表（权威）：`src-tauri/src/lib.rs` 的 `.invoke_handler(tauri::generate_handler![...])`。
 
@@ -529,7 +533,7 @@ src-tauri/
 └── src/
     ├── main.rs          ← App 入口（仅转调 lib）
     ├── lib.rs           ← Tauri Builder / 插件（含 global-shortcut）/ generate_handler! 命令注册 / 托盘
-    ├── commands.rs      ← 主 IPC 命令路由（50 个）+ float_window（5）+ pet/（12：窗口/菜单 9 + hit_mask 3）+ screenshot/（14）= 81
+    ├── commands.rs      ← 主 IPC 命令路由（48 个）+ float_window（3）+ pet/（12：窗口/菜单 9 + hit_mask 3）+ screenshot/（21）+ app_update（3）+ float_glass（1）= 88
     ├── pet/             ← 桌宠 Rust 端（window / menu_window / hit_mask）
     ├── screenshot/      ← v0.8.0 截图 Rust 端（mod：捕获 / 下发整屏帧 / 解码落库 / 快捷键；合成在前端 canvas）
     ├── tracker/         ← 平台采样（mod / platform / macos / windows / linux）

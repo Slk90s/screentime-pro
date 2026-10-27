@@ -108,12 +108,23 @@ export const tracker = {
    */
   restartApp: () => call<void>("restart_app"),
   /**
-   * 重置本应用的「屏幕录制」授权记录（仅 macOS）。
+   * 重置本应用指定 TCC 服务的授权记录（仅 macOS）。
    *
    * 解「系统设置里开关开着、应用还说没权限」的死循环：授权记录一旦指向旧版本的
    * 代码签名指纹（未签名的包每次升级都会这样），系统设置界面清不掉，只能用
-   * `tccutil reset ScreenCapture` 清。重置后必须重启进程（新授权只对新启动的进程生效），
+   * `tccutil reset <service>` 清。重置后必须重启进程（新授权只对新启动的进程生效），
    * 所以界面把「重置授权 + 重启应用」串成一个动作。
+   *
+   * v1.2.11：加 `pane` 参数。原来只清 `ScreenCapture`，而「辅助功能未授权」的提示
+   * 也劝用户点同一个按钮 —— 清的是另一个服务，等于没修。现在两行各清各的：
+   * `"screen_capture"` → `ScreenCapture`；`"accessibility"` → `Accessibility`。
+   * 缺省按屏幕录制（与后端 `reset_permission` 的缺省一致）。
+   */
+  resetPermission: (pane?: "accessibility" | "screen_capture") =>
+    call<string>("reset_permission", { pane: pane ?? null }),
+  /**
+   * @deprecated v1.2.11 起改用 {@link resetPermission}（可指定服务）。
+   * 保留只为兼容旧调用点；等价于 `resetPermission("screen_capture")`。
    */
   resetScreenCapturePermission: () => call<string>("reset_screen_capture_permission"),
   checkWebview2: () => call<Webview2Status>("check_webview2"),

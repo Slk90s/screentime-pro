@@ -539,31 +539,56 @@ pub fn open_permission_settings() {
     crate::logging::audit("open_screen_capture_settings", "Privacy_ScreenCapture");
 }
 
-/// 重置本应用的「屏幕录制」授权记录（`tccutil reset ScreenCapture <bundle id>`）。
+/// 重置本应用指定 TCC 服务的授权记录。
 ///
 /// 为什么需要：授权记录一旦处于「指向旧版本指纹」的脏状态，**系统设置界面是清不掉的**
 /// —— 用户把开关关了再开、把条目删了再加，记录的往往仍是旧身份。
 /// `tccutil reset` 是 Apple 官方唯一支持的清除方式，清掉后下次请求会重新弹框、
 /// 重新写入一条干净的记录。
 ///
+/// v1.2.11（2026-10-27）改造 —— 修复「辅助功能那行没有清除手段」。
+///
+/// 背景：`tccutil` 的 service 名是**区分大小写且各服务不同名**的：
+///   - 屏幕录制 → `ScreenCapture`
+///   - 辅助功能 → `Accessibility`
+/// 原实现把 `"ScreenCapture"` 硬编码在 `args` 里，所以界面上「重置并重启」按钮
+/// 只出现在屏幕录制那一行 —— 这本身是对齐的；但 v1.2.10 的 `permRevokedHint`
+/// 文案却在「辅助功能未授权」时也劝用户点「重置并重启」，那个按钮在辅助功能行
+/// **根本不存在**（本轮补上后，若仍复用旧实现则会清错服务）。现在把 service
+/// 抽成参数，界面上每个权限都能真正清自己那一条。
+///
+/// `pane` 取值与 `open_privacy_settings` 保持同一套词汇（`"screen_capture"` /
+/// `"accessibility"`），避免再引入第三套命名。缺省按屏幕录制 —— 与本模块历史行为一致，
+/// 且它是本应用真正必需的那一项（辅助功能只影响一个状态位）。
+///
+/// 返回值是**给用户看的**结果文案：成功时带上清的是哪个服务，失败时原样带回
+/// `tccutil` 的 stderr（该命令失败时通常在 stderr 说明原因）。
+///
 /// ⚠️ 只重置**本应用**的条目（传了 bundle id），不会影响其它 App。
-/// 正常情况不需要 sudo（用户级 TCC 条目）；失败时把原因原样返回给界面。
-pub fn reset_permission() -> Result<String, String> {
+/// 正常情况不需要 sudo（用户级 TCC 条目）。
+pub fn reset_permission_for(pane: Option<&str>) -> Result<String, String> {
+    let (service, label) = match pane {
+        Some("accessibility") => ("Accessibility", "辅助功能"),
+        _ => ("ScreenCapture", "屏幕录制"),
+    };
     let out = crate::proc::hidden("/usr/bin/tccutil")
-        .args(["reset", "ScreenCapture", BUNDLE_ID])
+        .args(["reset", service, BUNDLE_ID])
         .output()
         .map_err(|e| format!("无法执行 tccutil: {e}"))?;
     let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
     if out.status.success() {
-        crate::logging::audit("reset_screen_capture_permission", BUNDLE_ID);
+        crate::logging::audit(
+            "reset_permission",
+            &format!("service={service} bundle={BUNDLE_ID}"),
+        );
         Ok(if stdout.is_empty() {
-            "已清除本应用的「屏幕录制」授权记录，重新授权即可。".to_string()
+            format!("已清除本应用的「{label}」授权记录，重新授权即可。")
         } else {
             stdout
         })
     } else {
         let detail = if stderr.is_empty() { stdout } else { stderr };
-        Err(format!("重置失败：{detail}"))
+        Err(format!("重置「{label}」失败：{detail}"))
     }
 }

@@ -258,7 +258,8 @@ export default {
     permScreenCaptureDesc: "用于截图取字；不授权则只能统计 App 名，无法记录窗口标题",
     permAccessibilityDesc: "用于判断是否空闲；不授权时按「不空闲」处理，统计仍然可用",
     permNotRequired: "本平台无需授权",
-    permRevokedHint: "若系统设置里开关是开的、这里仍显示未授权：授权记录指向了旧版本的签名指纹，点「重置并重启」清掉重来。",
+    permRevokedHint: "若系统设置里「辅助功能」开关是开的、这里仍显示未授权：授权记录指向了旧版本的签名指纹。点右侧「重置并重启」清掉本应用的辅助功能记录，重启后再勾选一次即可。",
+    permScreenCaptureRevokedHint: "若系统设置里「屏幕录制」开关是开的、这里仍显示未授权：授权记录指向了旧版本的签名指纹，点右侧「重置并重启」清掉本应用的屏幕录制记录，重启后按提示重新授权即可。",
     shotShortcutReset: "恢复默认快捷键",
     // v0.7.6：状态栏配置（总开关 + 子项；取代 v0.7.5 单字段 metricsTitle）
     // v0.7.11（2026-09-13）：三端统一——指标只由「悬浮指标条」显示，托盘恒为品牌图标。
@@ -330,6 +331,15 @@ export default {
     checkUpdate: "检查更新",
     foundNew: "发现新版本",
     goDownload: "前往下载 →",
+    // v1.2.11：应用内自动升级（仅 Windows / AppImage；其余平台显示上面的 goDownload）
+    updateNow: "立即升级 →",
+    updating: "升级中…",
+    updatePreparing: "正在准备下载…",
+    updateDownloading: "正在下载 {pct}%（{mb} / {total} MB）",
+    updateDownloadingUnknown: "正在下载（已获取 {mb} MB）",
+    updateRestarting: "安装完成，正在重启…",
+    updateFailed: "升级失败",
+    updateFailedMsg: "未能完成自动升级：{err}\n请到发布页手动下载安装包。",
     upToDate: "已是最新版本（v{current}）",
     deviceId: "设备 ID",
     storage: "本地 SQLite · 零上传 · 隐私优先",

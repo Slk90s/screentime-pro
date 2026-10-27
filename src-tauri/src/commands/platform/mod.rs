@@ -29,8 +29,12 @@ pub(crate) trait PermissionBackend {
     fn check_permissions() -> PermissionStatus;
     /// 打开「隐私与安全性」指定面板（pane 见 `open_privacy_settings`）
     fn open_privacy_settings(pane: Option<String>);
-    /// 重置本应用「屏幕录制」授权记录（仅 macOS 有意义）
-    fn reset_screen_capture_permission() -> Result<String, String>;
+    /// 重置本应用指定 TCC 服务的授权记录（仅 macOS 有意义）。
+    ///
+    /// v1.2.11：加 `pane` 参数。原先只能重置屏幕录制，而界面上
+    /// 「辅助功能」那一行也被文案引导去点这个动作 —— 见
+    /// `screenshot::macos::reset_permission_for` 的说明。
+    fn reset_permission(pane: Option<String>) -> Result<String, String>;
 }
 
 /// WebView2 运行时检测（仅 Windows 有意义）

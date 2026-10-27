@@ -565,19 +565,35 @@ pub fn restart_app(app: tauri::AppHandle) {
     app.restart();
 }
 
-/// 重置本应用的「屏幕录制」授权记录（仅 macOS 有意义）。
+/// 重置本应用指定 TCC 服务的授权记录（仅 macOS 有意义）。
 ///
 /// 为什么需要：授权记录一旦指向**旧版本的代码签名指纹**（未签名的包每次升级都会这样），
 /// 系统设置界面是清不掉的 —— 用户把开关关了再开、或把条目按「−」移除再加，
 /// 系统写进去的往往仍是旧身份，于是「开关是开的、应用还说没权限」的循环解不开。
-/// `tccutil reset ScreenCapture <bundle id>` 是 Apple 官方支持的清除方式：清掉后
-/// 下一次截图会重新弹授权框、重新写入一条干净的记录。
+/// `tccutil reset <service> <bundle id>` 是 Apple 官方支持的清除方式：清掉后
+/// 下一次请求会重新弹授权框、重新写入一条干净的记录。
+///
+/// v1.2.11（2026-10-27）：加 `pane` 参数。原来只清屏幕录制（`ScreenCapture`），
+/// 但界面上「辅助功能未授权」的提示也劝用户点「重置并重启」—— 那个动作清的是
+/// 另一个服务，用户白忙。`pane` 与 `open_privacy_settings` 用同一套词汇：
+/// `"screen_capture"` → `ScreenCapture`；`"accessibility"` → `Accessibility`；
+/// 缺省按屏幕录制（保持既有调用点行为不变）。
 ///
 /// ⚠️ 只重置本应用（显式传了 bundle id），不影响其它 App；正常无需 sudo。
 /// 前端把它和「重启应用」串成一个按钮 —— 重置后必须重启进程，新授权才对运行中的进程生效。
 #[tauri::command]
+pub fn reset_permission(pane: Option<String>) -> Result<String, String> {
+    crate::commands::platform::Backend::reset_permission(pane)
+}
+
+/// 兼容旧名：等价于 `reset_permission(Some("screen_capture"))`。
+///
+/// 为什么保留：v1.2.10 及更早的前端只认这个名字。前端与后端在桌面端是**同包发布**
+/// 的，理论上不会错配；但开发期 `cargo run` 配旧 dist、或用户手工替换二进制时会，
+/// 保留一个薄别名比让按钮静默报「命令不存在」好。
+#[tauri::command]
 pub fn reset_screen_capture_permission() -> Result<String, String> {
-    crate::commands::platform::Backend::reset_screen_capture_permission()
+    reset_permission(Some("screen_capture".to_string()))
 }
 
 #[tauri::command]

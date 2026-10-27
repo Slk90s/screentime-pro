@@ -69,8 +69,8 @@ impl PermissionBackend for Backend {
             .spawn();
     }
 
-    fn reset_screen_capture_permission() -> Result<String, String> {
-        crate::screenshot::macos::reset_permission()
+    fn reset_permission(pane: Option<String>) -> Result<String, String> {
+        crate::screenshot::macos::reset_permission_for(pane.as_deref())
     }
 }
 

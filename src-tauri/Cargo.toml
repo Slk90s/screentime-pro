@@ -4,7 +4,15 @@ version = "0.1.0"
 description = "跨平台应用使用时长追踪工具"
 authors = ["Ryan"]
 edition = "2021"
-rust-version = "1.77"
+# v1.2.11：1.77 → **1.77.2**。`tauri-plugin-updater` 的 MSRV 决定了这个下界。
+# 本字段只是声明，不会阻止解析，但声明低于依赖的 MSRV 属于**事实错误** —— 后续
+# 有人想用 1.77.0 构建时，报错会出现在依赖编译阶段而不是这里，排查成本高。
+# CI 用 stable，不受影响。
+#
+# ⚠️ 这个值必须与下面 `tauri-plugin-updater` 的**锁定版本**配套看：updater 在
+# 2.13.0 把 MSRV 从 1.77.2 抬到了 **1.90**（同时 edition 2021 → 2024），所以本项目
+# 钉死 `=2.12.0`。若哪天放开版本上限，这里也要跟着抬到 1.90。
+rust-version = "1.77.2"
 
 [lib]
 name = "screentime_pro_lib"
@@ -54,6 +62,42 @@ reqwest = { version = "0.12", default-features = false, features = [
 ] }
 # 自动归类引擎的 LRU 缓存（容量 256，进程名 → 分类 ID）
 lru = "0.12"
+# ===== v1.2.11（2026-10-27）：应用内自动升级（Tauri 官方 updater）=====
+#
+# 为什么现在才引：v1.2.4 起只有「自实现的版本检查」（GitHub atom → REST → Gitee
+# 三通道 + 首页横幅 + 跳浏览器下载）。用户反馈「自动更新三个平台都没有」——
+# 查明后确认**不是坏了，是这个功能从未实现**（详见 docs/ARCHITECTURE.md 的更新章节）。
+#
+# ⚠️ 三条硬约束（决定了下游所有实现方式，改动前必读）：
+# ① **必须签名**，不可关闭。签名用 ed25519，公钥写进 tauri.conf.json 的
+#    `plugins.updater.pubkey`，私钥只在 CI 环境变量里。私钥丢失 = 已安装用户
+#    **永远无法**再收到更新（客户端只认这一把公钥）。
+# ② **Linux 三种包型行为不同，必须按 `bundle_type()` 分流**（源码
+#    updater.rs:1046 的 `install_inner`）：
+#      - AppImage → `install_appimage`：原地覆盖自身，静默，无需提权；
+#      - Deb     → `install_deb`：写临时包后 `pkexec dpkg -i`（弹图形授权），
+#                  失败退到 zenity/kdialog 取密码，再退到终端 `sudo`；
+#      - Rpm     → `install_rpm`：同上，命令为 `rpm -U`。
+#    三者都**不会**自动重启进程（只有 Windows 会，见 ③），装完必须应用自己 relaunch。
+#    ⚠️ Deb/Rpm 走 pkexec 意味着**每次升级都弹一次系统授权框**，且要求 polkit 可用
+#    （无桌面 polkit 的发行版会直接失败）。所以对 deb/rpm 用户，更稳妥的是继续用
+#    系统包管理器 / 下载新包；本项目按 `updater_supported` 只对 AppImage 开放应用内升级。
+# ③ **Windows 安装后进程立即退出**：`install_inner` 用 ShellExecuteW 拉起安装包后
+#    直接 `std::process::exit(0)`（updater.rs:876）。所以 `install()` **没有机会**
+#    返回给调用方 —— 前端不能写「安装成功后弹提示」，那句提示永远不会执行。
+# ④ **缺 target 会报错而不是静默**。若 latest.json 里没有当前平台的
+#    `{os}-{arch}[-{installer}]` 条目，`check()` 返回 `Err(TargetsNotFound)` 而非
+#    `Ok(None)`（已核对上游源码 `get_urls()`:608-638）。所以 macOS 不产出更新包时，
+#    **不能**让它去查同一个 latest.json，否则 mac 用户每次启动都刷一条错误日志。
+#
+# 版本锁定：**必须写 `=`**。2.13.0 起 edition 2024 + rust 1.90 + 依赖 tauri 2.12，
+# 而本项目是 tauri 2.11.5 / rust 1.77.2；裸写 `"2"` 会因为 semver 被解析到 2.14.x，
+# 直接拉崩 tauri 版本并抬高 MSRV。2.12.0 是最后一个「tauri 2.10 + rust 1.77.2」版本。
+tauri-plugin-updater = "=2.12.0"
+# 「安装完立即重启」需要 process 插件的 relaunch。Rust 侧其实可直接
+# app.restart()（本仓库已有 restart_app 命令），但 updater 的 JS API 在
+# downloadAndInstall 之后推荐 relaunch() —— 本项目走 Rust 侧编排，不用 JS API，
+# 因此**不引入** @tauri-apps/plugin-updater / plugin-process 前端包。
 
 # ===== 日志系统（v0.4.2 引入）=====
 # tracing 生态：结构化日志、span、采样；按级别过滤

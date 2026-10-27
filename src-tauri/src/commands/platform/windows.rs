@@ -32,8 +32,8 @@ impl PermissionBackend for Backend {
 
     fn open_privacy_settings(_pane: Option<String>) {}
 
-    fn reset_screen_capture_permission() -> Result<String, String> {
-        Err("仅 macOS 需要「屏幕录制」授权".to_string())
+    fn reset_permission(_pane: Option<String>) -> Result<String, String> {
+        Err("仅 macOS 需要 TCC 授权（屏幕录制 / 辅助功能）".to_string())
     }
 }
 

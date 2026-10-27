@@ -489,7 +489,7 @@
               >
                 {{ t("settings.permGrant") }}
               </button>
-              <button class="ghost-btn" @click="onPermResetRestart">
+              <button class="ghost-btn" @click="onPermResetRestartFor('screen_capture')">
                 {{ t("settings.permResetRestart") }}
               </button>
             </div>
@@ -514,14 +514,31 @@
               <button class="ghost-btn" @click="onPermOpenAccessibility">
                 {{ t("settings.permOpenSettings") }}
               </button>
+              <!-- v1.2.11：辅助功能此前只有「去系统设置」—— 用户在系统设置里
+                   关了又开、删了又加都无效时（TCC 记录指向旧 cdhash），界面上
+                   没有任何清除手段。现在两行各清各的服务。 -->
+              <button class="ghost-btn" @click="onPermResetRestartFor('accessibility')">
+                {{ t("settings.permResetRestart") }}
+              </button>
             </div>
           </div>
           <p class="field-hint">{{ t("settings.permAccessibilityDesc") }}</p>
         </div>
         <!-- 系统设置里开关开着、这里仍显示未授权 —— 这是 ad-hoc 签名的典型症状，
-             不解释用户只会反复点「去授权」而不理解为什么没用。 -->
-        <p v-if="permissions && !permissions.screen_capture" class="field-hint perm-hint-warn">
+             不解释用户只会反复点「去授权」而不理解为什么没用。
+
+             v1.2.11 修正：原条件是 `!permissions.screen_capture`，**漏掉了最常见的
+             「辅助功能未授权 + 录屏已授权」**（本次用户反馈的正是这种）。那段文案
+             本该解释「为什么开关开着仍报未授权」，却偏偏在这种场景下不显示。
+             反过来在「录屏未授权」时显示也不对 —— 那条的处置是「去授权」。 -->
+        <p v-if="permissions && !permissions.accessibility" class="field-hint perm-hint-warn">
           {{ t("settings.permRevokedHint") }}
+        </p>
+        <p
+          v-if="permissions && !permissions.screen_capture"
+          class="field-hint perm-hint-warn"
+        >
+          {{ t("settings.permScreenCaptureRevokedHint") }}
         </p>
         </template>
       </div>
@@ -761,13 +778,26 @@
         <p v-if="updateResult" class="field-hint" :class="{ outdated: updateResult.has_update }">
           <template v-if="updateResult.has_update">
             {{ t("settings.foundNew") }} <b>v{{ updateResult.latest }}</b>（当前 v{{ updateResult.current }}）
-            <button class="link-btn" @click="goDownload(updateResult.url)">
+            <!--
+              v1.2.11：能应用内升级时给「一键升级」，否则退回「去下载」。
+              两个按钮**互斥**而不是并列：对可升级用户，「去下载」是多余的绕路；
+              对不可升级用户（macOS / deb / rpm），「一键升级」根本不该出现 ——
+              显示了再报错是多余的一次失败交互。
+            -->
+            <button v-if="nativeUpdate" class="link-btn" :disabled="installing" @click="onInstallUpdate">
+              {{ installing ? t("settings.updating") : t("settings.updateNow") }}
+            </button>
+            <button v-else class="link-btn" @click="goDownload(updateResult.url)">
               {{ t("settings.goDownload") }}
             </button>
           </template>
           <template v-else>
             {{ t("settings.upToDate", { current: updateResult.current }) }}
           </template>
+        </p>
+        <!-- 下载/安装进度。仅应用内升级路径会出现；Windows 装完进程即退出，进度条是最后的画面。 -->
+        <p v-if="installing" class="field-hint">
+          {{ progressText }}
         </p>
       </div>
     </div>
@@ -1001,6 +1031,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import Modal from "../components/Modal.vue";
 import AppIcon from "../components/AppIcon.vue";
 import { tracker } from "../api/tracker";
+// v1.2.11：应用内自动升级（Windows / AppImage 启用；macOS / deb / rpm 由后端判为不支持）
+import * as appUpdate from "../api/appUpdate";
 import { screenshot, DEFAULT_SCREENSHOT_CONFIG } from "../api/screenshot";
 import { i18n, setLocale, type Locale } from "../i18n";
 import type {
@@ -1065,6 +1097,14 @@ let unlistenShotDone: (() => void) | null = null;
 // ③ 版本 + 通用设置 + 备份配置 + 状态栏配置
 // ④ 日志大小
 onMounted(async () => {
+  // v1.2.11：先问后端本平台能否应用内升级，决定「发现新版本」时给「一键升级」还是「去下载」。
+  // 故意**不**在失败时抛错：这只是决定 UI 形态，拿不到就当不支持（退回浏览器下载）。
+  try {
+    nativeUpdate.value = await appUpdate.isSupported();
+  } catch (e) {
+    log.error("[Settings] 查询应用内升级支持情况失败", e);
+    nativeUpdate.value = false;
+  }
   try {
     unlistenSkin = await listen("pet-skin-changed", () => {
       skinRegistry.reloadActive();
@@ -1175,6 +1215,18 @@ const settings = ref<SettingsOut>({
 const version = ref("");
 const checking = ref(false);
 const updateResult = ref<UpdateInfo | null>(null);
+
+// ===== v1.2.11：应用内自动升级（仅 Windows / AppImage）=====
+//
+// 与上面的 updateResult 并存但**不等价**：updateResult 来自旧的「版本告知」通道
+// （三源抓 tag，给出下载页链接），macOS 用户只能靠它。「能否应用内升级」由后端
+// install_supported() 判断（bundle_type 在二进制里，前端算不出来）。
+//
+// nativeUpdate: 本平台能否一键升级；false 时 UI 只显示「去下载」。
+// installing:   下载/安装进行中（禁用按钮 + 显示进度）。
+const nativeUpdate = ref(false);
+const installing = ref(false);
+const progressText = ref("");
 
 const deviceName = ref("");
 const idleMin = ref(5);
@@ -1793,13 +1845,17 @@ async function onPermGrantScreen() {
  * 「重置并重启」：tccutil 清掉指向旧版本签名指纹的脏记录，再重启进程。
  * 两步缺一不可 —— 只清不重启，新授权对当前进程无效；只重启，脏记录还在。
  * 成功后进程直接退出，下面的 await 不会返回。
+ *
+ * v1.2.11：加 `pane` 参数。原来硬编码清 `ScreenCapture`，而辅助功能那一行的提示
+ * 也让用户点这个动作 —— 清的是另一个服务，用户点完毫无变化。现在两行各传各的：
+ * `"screen_capture"` / `"accessibility"`。
  */
-async function onPermResetRestart() {
+async function onPermResetRestartFor(pane: "accessibility" | "screen_capture") {
   try {
-    await tracker.resetScreenCapturePermission();
+    await tracker.resetPermission(pane);
   } catch (err) {
     // 重置失败不阻断重启：tccutil 在个别系统上要 sudo，至少让「重启」这条路还能走
-    log.warn("[shot] 重置屏幕录制授权失败", err);
+    log.warn(`[perm] 重置授权失败（${pane}）`, err);
   }
   try {
     await tracker.restartApp();
@@ -2425,17 +2481,91 @@ async function onCheckUpdate() {
   checking.value = true;
   updateResult.value = null;
   try {
-    updateResult.value = await tracker.checkUpdate();
-    if (updateResult.value.has_update) {
-      showAlert("info", t("settings.foundNew"), t("settings.newVersionMsg", { current: updateResult.value.current, latest: updateResult.value.latest }));
+    // v1.2.11：若本平台支持应用内升级，**先**问官方 updater。
+    // 为什么先问它：它读的是 latest.json 的 version 字段，且带签名校验，
+    // 与「真正会被安装的东西」严格一致；旧的 checkUpdate 读的是 GitHub tag，
+    // 两者在「tag 已推、包还没传完」的窗口期会不一致 —— 那时旧通道说「有新版」
+    // 但点一键升级会拿到 TargetsNotFound。所以能走 udpater 就只信它。
+    if (nativeUpdate.value) {
+      const appUpd = await appUpdate.check();
+      if (appUpd) {
+        // 复用 UpdateInfo 的形状，让下面这段模板不必再分两套。
+        // url 留空：应用内升级不需要下载页链接。但 notes 可能为空，
+        // 前端只显示版本号，不需要为它做特殊分支。
+        updateResult.value = {
+          current: appUpd.current,
+          latest: appUpd.version,
+          has_update: true,
+          url: "",
+          notes: appUpd.notes,
+        };
+        showAlert("info", t("settings.foundNew"), t("settings.newVersionMsg", {
+          current: appUpd.current,
+          latest: appUpd.version,
+        }));
+        return;
+      }
+      // appUpd === null：已是最新。**不要**再落到旧通道 —— 见上一条注释，
+      // 旧通道可能因为「tag 先推、包后传」而误报有新版。
+      showAlert("info", t("settings.upToDate", { current: version.value }), t("settings.upToDateMsg", { current: version.value }));
+      return;
+    }
+
+    const res = await tracker.checkUpdate();
+    updateResult.value = res;
+    if (res.has_update) {
+      showAlert("info", t("settings.foundNew"), t("settings.newVersionMsg", { current: res.current, latest: res.latest }));
     } else {
-      showAlert("info", t("settings.upToDate", { current: updateResult.value.current }), t("settings.upToDateMsg", { current: updateResult.value.current }));
+      showAlert("info", t("settings.upToDate", { current: res.current }), t("settings.upToDateMsg", { current: res.current }));
     }
   } catch (e: any) {
     log.error("检查更新失败", e);
     showAlert("warn", t("settings.checkUpdateFailed"), t("settings.checkUpdateFailedMsg", { err: e?.message || e }));
   } finally {
     checking.value = false;
+  }
+}
+
+/**
+ * 应用内升级：下载 → 验签 → 交给平台安装器。
+ *
+ * ⚠️ **不要在这里写「安装成功」**：Windows 上 Rust 侧 `install_inner` 拉起
+ * setup.exe 后立刻 `process::exit(0)`，`install()` 的 Promise 永远不会 resolve，
+ * 所以 `await` 之后的成功分支在 Windows 上**执行不到**。用户看到的最后画面是
+ * 进度条满格 → 应用消失 → 安装器接管。Linux 上 Promise 会 resolve，但 Rust 侧
+ * 紧接着调 `app.restart()`，进程立刻重启，也不需要成功提示。
+ *
+ * 因此这里只处理「失败」分支 —— 成功时进程要么没了、要么在重启，没有可展示的界面。
+ */
+async function onInstallUpdate() {
+  if (installing.value) return;
+  installing.value = true;
+  progressText.value = t("settings.updatePreparing");
+  try {
+    await appUpdate.install((p) => {
+      if (p.total && p.total > 0) {
+        const pct = Math.min(100, Math.round((p.downloaded / p.total) * 100));
+        progressText.value = t("settings.updateDownloading", {
+          pct,
+          mb: (p.downloaded / 1048576).toFixed(1),
+          total: (p.total / 1048576).toFixed(1),
+        });
+      } else {
+        // 服务端没给 Content-Length（分块传输）→ 只能显示已下载量，不编造百分比。
+        progressText.value = t("settings.updateDownloadingUnknown", {
+          mb: (p.downloaded / 1048576).toFixed(1),
+        });
+      }
+    });
+    // 走到这里只有两种情况：① Linux 装完（随后进程重启）② Windows 安装器拉起失败。
+    // 后者在 Rust 侧已转成 Err，正常不会到这里；若真到了，说明安装器静默失败，
+    // 给用户一句「重启后生效」比什么都不说安全。
+    progressText.value = t("settings.updateRestarting");
+  } catch (e: any) {
+    log.error("应用内升级失败", e);
+    installing.value = false;
+    progressText.value = "";
+    showAlert("warn", t("settings.updateFailed"), t("settings.updateFailedMsg", { err: e?.message || e }));
   }
 }
 </script>

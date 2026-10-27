@@ -57,6 +57,13 @@
 //!        （com.apple.quarantine）/ 代码签名状态（ad-hoc 或未签名 = 授权反复失效的根因）。
 //!     ③ 新增 IPC `reset_screen_capture_permission`（`tccutil reset ScreenCapture <bundle id>`，
 //!        只清本应用条目），配合界面「重置权限并重启」一键清掉指向旧指纹的脏授权记录。
+//!   - 2026-10-27 @v1.2.11: 修复 - `reset_permission` 支持指定 TCC 服务。
+//!     新增 `macos::reset_permission_for(pane)`：`"accessibility"` → `tccutil reset
+//!     Accessibility`，其余 → `ScreenCapture`。原实现把服务名硬编码，导致权限中心
+//!     「辅助功能」那一行既没有重置按钮、提示文案却劝用户点「重置并重启」—— 动作与
+//!     文案错配。旧的无参函数已删除（无调用者，留着只会产出死代码警告）。
+//!     IPC 层新增 `reset_permission(pane)`，旧的 `reset_screen_capture_permission`
+//!     保留为别名（全项目 IPC **84 → 85**）。
 //!   - 2026-09-20 @v0.9.4: 改造 - 授权 UX 重做（用户反馈弹窗「太多太丑」）：
 //!     ① `ensure_ready` 失败文案精简为一句话 + 结构化原因码（`__PERM__:<reason>`），
 //!        完整证据只进日志；② 新增权限 IPC 四件套 `screenshot_permission_status` /

@@ -6,7 +6,14 @@
 //!
 //! 关键 API：
 //! - `NSWorkspace.frontmostApplication()` —— 当前前台应用（无需特殊权限即可拿到 App 名称/包名）
-//! - `CGEventSourceSecondsSinceLastEventType()` —— 空闲检测，依赖「辅助功能」权限
+//! - `CGEventSourceSecondsSinceLastEventType()` —— 空闲检测。⚠️ **不需要「辅助功能」权限**：
+//!   它读的是 HID 层「距上次任意输入事件的秒数」，属于 CoreGraphics 的公开查询接口，
+//!   不像 `CGEventTapCreate` 那样需要事件监听授权。
+//!   （v1.2.11 更正：本行原先写「依赖辅助功能权限」，与 `Settings.vue` 里
+//!   「空闲检测走 CGEventSource…，不需要辅助功能」的说法**自相矛盾**，且后者才是
+//!   事实 —— `is_accessibility_trusted()` 在整个仓库里唯一的调用点是
+//!   `commands/platform/macos.rs` 的 `check_permissions`，只用于**上报状态位**，
+//!   不参与任何采集逻辑。留着错注释会让人误以为「不给辅助功能就没法统计时长」。）
 //! - 窗口标题需要「屏幕录制」权限（后续扩展用）
 //! - **截图**依赖同一张「屏幕录制」TCC 授权。v0.9.1 起截图侧把它做成了**强制闸门**，
 //!   v0.9.3 起闸门整体迁到 `crate::screenshot::macos`（含授权失效根因诊断），
@@ -193,18 +200,25 @@ unsafe fn dict_i64_of(dict: core_foundation_sys::dictionary::CFDictionaryRef, ke
 
 /// 辅助功能（Accessibility）权限是否已授予
 ///
-/// 空闲检测依赖此权限。未授予时 `CGEventSource...` 会返回异常值，
-/// 需要在系统设置中手动开启：隐私与安全性 → 辅助功能。
+/// ⚠️ v1.2.11 更正：本函数**只用于上报状态位**，不影响任何采集逻辑。
+/// 原注释写「空闲检测依赖此权限，未授予时 `CGEventSource...` 会返回异常值」——
+/// 这句是错的：`CGEventSourceSecondsSinceLastEventType` 不需要辅助功能授权，
+/// 本函数在全仓库唯一的调用点是 `commands/platform/macos.rs::check_permissions`。
+/// 留着错注释会让排查者（和用户）误以为「不给辅助功能就没法统计时长」，
+/// 而真正需要的只有「屏幕录制」一项。
 ///
-/// v0.4.1 修复：用 `AXIsProcessTrustedWithOptions` + `kAXTrustedCheckOptionPrompt=false`
-/// 比旧的 `AXIsProcessTrusted()` 在以下场景更可靠：
-/// - ad-hoc 签名应用：identifier 会随 binary 变，`AXIsProcessTrusted()` 有缓存；
-///   `WithOptions` 不缓存，每次都查 TCC
-/// - 应用从其他位置移动到 /Applications 后：旧 API 仍返回旧路径的授权状态，
-///   新 API 重新校验当前位置
+/// 系统设置位置：隐私与安全性 → 辅助功能。
 ///
-/// ⚠️ 关键：传 `kAXTrustedCheckOptionPrompt: kCFBooleanFalse`，否则会触发系统弹窗
+/// v0.4.1：用 `AXIsProcessTrustedWithOptions` + `kAXTrustedCheckOptionPrompt=false`
+/// 比旧的 `AXIsProcessTrusted()` 更可靠：
+/// - ad-hoc 签名应用：identifier 会随 binary 变，`AXIsProcessTrusted()` 有缓存
+/// - 应用从其他位置移动到 /Applications 后：旧 API 仍返回旧路径的授权状态
+///
+/// ⚠️ 传 `kAXTrustedCheckOptionPrompt: kCFBooleanFalse`，否则会触发系统弹窗
 /// （用户首次启动不希望立刻被打扰）。让用户通过 banner 主动点「前往系统设置」后再开。
+///
+/// ⚠️ 已知局限：即便用了 `WithOptions`，同一次 `tccd` 会话内仍可能读到旧值。
+/// 用户从系统设置授权回来后，**重启应用**是最可靠的刷新方式（TCC 按进程快照）。
 pub fn is_accessibility_trusted() -> bool {
     use core_foundation::base::TCFType;
     use core_foundation::boolean::CFBoolean;

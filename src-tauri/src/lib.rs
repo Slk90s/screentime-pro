@@ -38,11 +38,23 @@
 //!     系统按菜单栏明暗自动反色（浅色栏纯黑 17.6:1、深色栏自动翻纯白）。
 //!     ⚠️ 非 macOS 分支**仍然**用原 App 图标 —— template 是 macOS 专属语义，
 //!     把黑白圆环给 Windows 托盘属无谓回归。
+//!   - 2026-10-27 @v1.2.11: 修复 - 权限中心「重置并重启」只能清屏幕录制。
+//!     新增 IPC `reset_permission(pane)`（`Settings.vue` 用它），旧的
+//!     `reset_screen_capture_permission` 保留为薄别名（内部转发到
+//!     `reset_permission(Some("screen_capture"))`），因此 `generate_handler!`
+//!     里**是两条**。
+//!     ⚠️ 计数（本次实测，用 `generate_handler!` 注册项数与 `#[tauri::command]`
+//!     函数数双向比对，两者相等才算数）：**84 → 85**（净 +1）。
+//!     注：上方 v1.2.8 条目写的「85」实为把闭合行 `])` 也数了进去，当时真实值是 **84**。
+//!     本次已按实测更正，不要再引用旧值。后续改命令请同样实地数，不要凭文档递推。
 //!
 
 mod categorizer;
 mod classifier;
 mod commands;
+// v1.2.11（2026-10-27）：应用内自动升级（Windows / AppImage 启用，macOS / deb / rpm 关闭）。
+// 与 commands.rs 里的「版本告知」是两套并存的东西，别把旧的删了 —— 详见模块头注释。
+mod app_update;
 mod db;
 mod error;
 // v1.2.2（2026-10-21）：悬浮窗液态玻璃材质层（仅服务 float 窗口）
@@ -258,6 +270,14 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_dialog::init())
+        // v1.2.11：应用内升级。pubkey / endpoints 走 tauri.conf.json 的 plugins.updater，
+        // 这里只做默认初始化 —— 不覆盖配置，配置文件是唯一真源。
+        //
+        // ⚠️ 即使当前平台不支持升级（macOS / deb / rpm），也必须注册：
+        // 命令层 `install_supported()` 会先拦掉，注册本身不做任何网络或文件动作。
+        // 反之若不注册，`app.updater()` 会因缺少 state 而报错，错误信息与「平台不支持」
+        // 混在一起，排查时难以区分。
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // v0.8.0：全局快捷键（截图触发）。handler 只认「按下」态，
         // 避免 macOS/Windows 一次按键派发 down+up 导致重复截图。
         .plugin(
@@ -876,6 +896,7 @@ pub fn run() {
             commands::check_permissions,
             commands::open_privacy_settings,
             commands::restart_app,
+            commands::reset_permission,
             commands::reset_screen_capture_permission,
             commands::get_rules,
             commands::add_rule,
@@ -955,6 +976,10 @@ pub fn run() {
             float_window::resize_float_window,
             // v1.2.2（2026-10-21）：液态玻璃能力探测（设置页开关可用性依据），IPC 82→83
             float_glass::float_glass_support,
+            // v1.2.11（2026-10-27）：应用内自动升级，IPC 85→88
+            app_update::app_update_supported,
+            app_update::check_app_update,
+            app_update::install_app_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

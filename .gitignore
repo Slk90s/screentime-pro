@@ -36,7 +36,11 @@ output/
 generated-images/
 
 # 本地专用脚本（仅本地，不入库）
-scripts/
+# ⚠️ 必须锚定根目录：写 `scripts/` 会匹配**任意层级**的同名目录，
+#    包括 `.github/scripts/` —— 那是 CI 要用的脚本（gen_latest_json.py），
+#    被忽略的后果是 CI 检出后找不到文件、`python3 .github/scripts/...` 直接失败，
+#    而本地因为文件还在，完全看不出来。用前导 `/` 只忽略仓库根的 scripts/。
+/scripts/
 
 # 本地 AI 生图原始稿 / 未引用素材（不入库，仅本地参考）
 src/pet/skins/spiderman/assets/Cute_chibi_style_superhero_*.png
@@ -96,3 +100,14 @@ LIQUIDGLASS-*.md
 
 # 代码审查报告（内部审查文档，不随仓库开源）
 CODE_REVIEW-*.md
+
+# ===== 更新签名私钥（v1.2.11）=====
+# 🔴 这是整个仓库里**最不能提交**的东西。ed25519 私钥一旦入库（哪怕随后删除，
+#    Git 历史里仍在），任何拿到仓库的人都能签出「官方安装包」，且客户端只认
+#    公钥、无法撤销 —— 必须重新发版并轮换公钥，等于让所有已安装用户永久失联。
+# 正常的私钥位置是 CI Secret（TAURI_SIGNING_PRIVATE_KEY），本地副本应在 ~/.tauri/，
+# 不放在仓库内。这里加规则是**兜底**：防止有人图省事生成在项目目录里。
+*.key
+*.key.pub
+# Tauri 默认的密钥目录（若有人把 HOME 指到仓库内会落在这里）
+.tauri/

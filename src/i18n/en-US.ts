@@ -276,7 +276,8 @@ export default {
     permScreenCaptureDesc: "Needed for screenshots and OCR; without it only app names are recorded — window titles are lost",
     permAccessibilityDesc: "Used for idle detection; without it every moment counts as active, tracking still works",
     permNotRequired: "No permission needed on this platform",
-    permRevokedHint: "If the toggle in System Settings is on but this still says not granted: the TCC entry points at a previous build's signature fingerprint. Click \"Reset & Restart\" to clear it.",
+    permRevokedHint: "If the Accessibility toggle in System Settings is on but this still says not granted: the TCC entry points at a previous build's signature fingerprint. Click \"Reset & Restart\" on the right to clear this app's Accessibility entry, then enable it again after the restart.",
+    permScreenCaptureRevokedHint: "If the Screen Recording toggle in System Settings is on but this still says not granted: the TCC entry points at a previous build's signature fingerprint. Click \"Reset & Restart\" on the right to clear this app's Screen Recording entry, then grant it again after the restart.",
     shotShortcutReset: "Reset shortcut",
     // v0.7.6: Status bar config (master + sub-toggles; replaces v0.7.5 metricsTitle)
     // v0.7.11 (2026-09-13): unified across all three platforms — metrics are shown only on the
@@ -349,6 +350,15 @@ export default {
     checkUpdate: "Check for updates",
     foundNew: "New version available",
     goDownload: "Go to download →",
+    // v1.2.11: in-app auto-update (Windows / AppImage only; other platforms keep goDownload above)
+    updateNow: "Update now →",
+    updating: "Updating…",
+    updatePreparing: "Preparing download…",
+    updateDownloading: "Downloading {pct}% ({mb} / {total} MB)",
+    updateDownloadingUnknown: "Downloading ({mb} MB fetched)",
+    updateRestarting: "Installed, restarting…",
+    updateFailed: "Update failed",
+    updateFailedMsg: "Automatic update failed: {err}\nPlease download the installer from the release page.",
     upToDate: "Up to date (v{current})",
     deviceId: "Device ID",
     storage: "Local SQLite · No upload · Privacy-first",
