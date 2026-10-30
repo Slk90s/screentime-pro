@@ -88,11 +88,44 @@ pub fn is_ready(models_dir: &Path) -> bool {
 
 /// 初始化 onnxruntime 环境（幂等）。`lib` 为 None 时回落到 ort 的默认搜索
 /// （环境变量 `ORT_DYLIB_PATH` → PATH），供开发/探针使用。
+///
+/// 🔴 2026-10-29 @v1.2.11（P0）：**入库前先验库，且验不过不留「已就绪」标记**。
+///
+/// 旧实现有两个叠加缺陷，导致「运行库已损坏」时进程必死：
+/// 1. `ort::init_from()` 只 dlopen + 查 `OrtGetApiBase` 符号 + 比对版本号，
+///    **不检查 GetApi 是否返回 null**（那一步在 `Session::builder()` 内部
+///    首次调用 `ort::api()` 时才发生，且写的是 `expect("Failed to initialize ORT API")`）；
+/// 2. 更糟的是 `commit()` 完全不碰 api（它只是 `G_ENV_OPTIONS.try_insert_with`），
+///    所以 `init_from` 成功 + `commit` 成功 = `ENV_READY` 被置 `Some(())`，
+///    而真正的 abort 被推迟到**后续任意一次** `Session::builder()`。
+///    于是「校验已就绪 → 放心调用」这条链路本身就是个陷阱。
+///
+/// 现在：`init_from` 之后立刻 `probe` 一次 API（借 [`crate::screenshot::ocr_engine`]
+/// 的同一套自检），任何不合格都返回 `Err` 且**不写 ENV_READY**，
+/// 让调用方走「运行库不可用 → 提示稍后重试 / 切标准引擎」的正常路径。
 pub fn ensure_env(lib: Option<&Path>) -> Result<(), String> {
     {
         let g = ENV_READY.lock().unwrap_or_else(|e| e.into_inner());
         if g.is_some() {
             return Ok(());
+        }
+    }
+    // 入库前验库：把 ort 内部两处 `expect(...)` 的 abort 提前变成可返回的 Err。
+    //
+    // ⚠️ 只拦「文件本身不合格」（整改 0.6）。旧写法拦的是一个布尔判定，
+    // 而它把「本机缺 VC++ 运行库 → dlopen 失败」也算成不合格，
+    // 于是这句**唯一有用的提示**（下面 `init_from` 分支里的「请安装 VC++ 运行库」）
+    // 永远走不到，用户只会看到一句误导的「文件可能下载不完整，稍后重试」——
+    // 而 Windows 的运行库是随包的，根本没有「下载不完整」这回事。
+    // 环境阻塞的库交给 `ort::init_from`：它会原样带回系统错误码，落进下面那句提示。
+    if let Some(p) = lib {
+        if let super::ocr_engine::OrtProbe::Unusable(reason) = super::ocr_engine::probe_ort_lib(p) {
+            return Err(format!(
+                "onnxruntime 运行库不可用（{}）：{reason}\n\
+                 该文件可能下载不完整，已标记为需要重新获取；请稍后重试，\
+                 或在设置里把「取字引擎」切回「标准」。",
+                p.display()
+            ));
         }
     }
     let builder = match lib {
@@ -106,7 +139,6 @@ pub fn ensure_env(lib: Option<&Path>) -> Result<(), String> {
         None => ort::init(),
     };
     // commit() 返回 bool：true = 本次提交成功，false = 进程内已有环境（重复提交，非错误）。
-    // 真正的加载失败在上面的 `init_from` 就已返回 Err（load-dynamic 在 init_from 阶段载库）。
     if !builder.commit() {
         tracing::debug!("onnxruntime 环境此前已配置，本次跳过");
     }
@@ -118,10 +150,11 @@ pub fn ensure_env(lib: Option<&Path>) -> Result<(), String> {
 /// 预热：把会话加载到常驻缓存（不推理）。遮罩窗打开时后台调用，
 /// 用户点「取字」时就不用等 2.5s 的模型加载。
 pub fn warmup(models_dir: &Path, lib: Option<&Path>) -> Result<(), String> {
-    ensure_env(lib)?;
-    let mut g = ENGINE.lock().unwrap_or_else(|e| e.into_inner());
-    ensure_loaded(&mut g, models_dir)?;
-    Ok(())
+    guard_ort_panic("预热", || {
+        ensure_env(lib)?;
+        let mut g = ENGINE.lock().unwrap_or_else(|e| e.into_inner());
+        ensure_loaded(&mut g, models_dir)
+    })
 }
 
 /// 带缓存的识别：首次调用加载模型，之后复用。
@@ -130,13 +163,65 @@ pub fn recognize_cached(
     lib: Option<&Path>,
     img: &RgbaImage,
 ) -> Result<Vec<OcrLine>, String> {
-    ensure_env(lib)?;
-    let mut g = ENGINE.lock().unwrap_or_else(|e| e.into_inner());
-    ensure_loaded(&mut g, models_dir)?;
-    // 上面 ensure_loaded 保证 Some；用 match 而非 unwrap，避免万一 panic 掉整个应用
-    match g.as_mut() {
-        Some((_, eng)) => eng.recognize(img),
-        None => Err("增强引擎未就绪".into()),
+    guard_ort_panic("识别", || {
+        ensure_env(lib)?;
+        let mut g = ENGINE.lock().unwrap_or_else(|e| e.into_inner());
+        ensure_loaded(&mut g, models_dir)?;
+        // 上面 ensure_loaded 保证 Some；用 match 而非 unwrap，避免万一 panic 掉整个应用
+        match g.as_mut() {
+            Some((_, eng)) => eng.recognize(img),
+            None => Err("增强引擎未就绪".into()),
+        }
+    })
+}
+
+/// 把 ort 内部的 panic 拦成可读的 `Err`，**绝不让它杀掉进程**。
+///
+/// 🔴 为什么必须有这层（2026-10-29，v1.2.11 P0）：
+///
+/// 真机日志（macOS）显示「截完图进程直接消失」，栈顶是
+/// `panicked at .../ort-2.0.0-rc.13/...`。那条 panic 来自 ort 内部的
+/// `expect("Failed to initialize ORT API")` —— **不在我们的代码里**，
+/// 无法改成 `Result` 返回。历史上 release 还配了 `panic = "abort"`，
+/// 于是第三方库一次内部断言失败 = 整个应用 abort。
+///
+/// 两道防线现在是配套的，缺一不可：
+/// 1. `Cargo.toml` 把 `panic` 改回 `"unwind"` —— 没有它，`catch_unwind` 捕获不到，
+///    panic 仍然直接 abort；
+/// 2. 本函数在**所有 ort 调用入口**做 `catch_unwind` —— 没有它，unwind 会一路
+///    展开到线程顶端，仍被 `async_runtime` 当作致命错误处理。
+///
+/// ⚠️ `AssertUnwindSafe` 在这里是**已知且可接受**的：ort 若在内部 panic，
+/// 它自己的全局状态可能处于不一致（这正是我们不缓存失败、下次重试的原因）；
+/// 而我们外层的 `ENV_READY` / `ENGINE` 都是 `Mutex`，panic 后是 poisoned，
+/// 代码里一律用 `unwrap_or_else(|e| e.into_inner())` 取回，不会因 poisoning 二次崩溃。
+fn guard_ort_panic<T>(what: &str, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(r) => r,
+        Err(payload) => {
+            let msg = panic_payload_str(&payload);
+            // 用 error 级：这类崩溃必须能在日志里被一眼看到。
+            tracing::error!(
+                stage = what,
+                detail = %msg,
+                "onnxruntime 内部 panic 已被拦截（进程继续运行）"
+            );
+            Err(format!(
+                "增强引擎在「{what}」阶段内部异常（已拦截，应用未退出）：{msg}\n\
+                 请在设置里把「取字引擎」切回「标准」后重试，或稍后重启应用。"
+            ))
+        }
+    }
+}
+
+/// 从 `catch_unwind` 的 payload 里尽量取出可读文本。
+fn panic_payload_str(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "<非字符串 payload>".to_string()
     }
 }
 
@@ -226,7 +311,11 @@ fn det_input_size(w0: f32, h0: f32) -> (u32, u32, f32) {
 /// 阶段耗时打点开关（`SD_OCR_TIME=1`）。用 OnceLock 缓存，避免每次识别都读一次环境变量。
 fn time_probe() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("SD_OCR_TIME").map(|v| v == "1").unwrap_or(false))
+    *ON.get_or_init(|| {
+        std::env::var("SD_OCR_TIME")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+    })
 }
 
 /// 推理线程数：默认 4，可用 `SD_OCR_THREADS` 覆盖（调优/探针用）。
@@ -330,10 +419,8 @@ fn sort_lines_reading_order(lines: &mut [OcrLine]) {
     }
 
     // 4) 按 (行号, x) 排序。两者都是整数、比较器是纯字段比较 → 全序成立。
-    let mut indexed: Vec<(usize, OcrLine)> = row_ids
-        .into_iter()
-        .zip(lines.iter().cloned())
-        .collect();
+    let mut indexed: Vec<(usize, OcrLine)> =
+        row_ids.into_iter().zip(lines.iter().cloned()).collect();
     indexed.sort_by(|(ra, a), (rb, b)| ra.cmp(rb).then_with(|| a.x.cmp(&b.x)));
     for (slot, (_, line)) in lines.iter_mut().zip(indexed) {
         *slot = line;
@@ -388,17 +475,16 @@ impl OnnxOcr {
         // ---------- 1. det：短边放大到 736 → 归一化 → DB 概率图 ----------
         let rgb = DynamicImage::ImageRgba8(img.clone()).to_rgb8();
         let (rw, rh, ratio) = det_input_size(img.width() as f32, img.height() as f32);
-        let resized = image::imageops::resize(
-            &rgb,
-            rw,
-            rh,
-            image::imageops::FilterType::Triangle,
-        );
+        let resized = image::imageops::resize(&rgb, rw, rh, image::imageops::FilterType::Triangle);
         // 探针对照：dump det 输入图与 Python 版逐像素 diff（SD_OCR_DUMP=path.png）
         #[cfg(test)]
         if let Ok(p) = std::env::var("SD_OCR_DUMP") {
             let _ = resized.save(&p);
-            println!("[dump] det 输入已存 {p} ({}x{})", resized.width(), resized.height());
+            println!(
+                "[dump] det 输入已存 {p} ({}x{})",
+                resized.width(),
+                resized.height()
+            );
         }
         let t_pre = std::time::Instant::now();
         let det_in = normalize_nchw(&resized, &DET_MEAN, &DET_STD);
@@ -472,16 +558,13 @@ impl OnnxOcr {
 
     /// det 推理：输入 [1,3,H,W]，输出 [1,1,H,W] 概率图（展平为 Vec + 尺寸）
     fn run_det(&mut self, input: Array4<f32>) -> Result<(Vec<f32>, usize, usize), String> {
-        let tensor = ort::value::Tensor::from_array(input)
-            .map_err(|e| format!("det 输入构造失败：{e}"))?;
+        let tensor =
+            ort::value::Tensor::from_array(input).map_err(|e| format!("det 输入构造失败：{e}"))?;
         let outputs = self
             .det
             .run(ort::inputs![tensor])
             .map_err(|e| format!("det 推理失败：{e}"))?;
-        let (name, value) = outputs
-            .iter()
-            .next()
-            .ok_or("det 无输出")?;
+        let (name, value) = outputs.iter().next().ok_or("det 无输出")?;
         let _ = name;
         // ort 2.0.0-rc.13：try_extract_tensor 返回 (&Shape, &[f32])；Shape Deref 到 [i64]
         let (shape, data) = value
@@ -502,18 +585,16 @@ impl OnnxOcr {
         let scale = REC_H as f32 / rgb.height() as f32;
         let mut rw = (rgb.width() as f32 * scale).round() as u32;
         rw = rw.clamp(8, REC_MAX_W);
-        let resized = image::imageops::resize(rgb, rw, REC_H, image::imageops::FilterType::Triangle);
+        let resized =
+            image::imageops::resize(rgb, rw, REC_H, image::imageops::FilterType::Triangle);
         let input = normalize_nchw_05(&resized, rw as usize, REC_H as usize);
-        let tensor = ort::value::Tensor::from_array(input)
-            .map_err(|e| format!("rec 输入构造失败：{e}"))?;
+        let tensor =
+            ort::value::Tensor::from_array(input).map_err(|e| format!("rec 输入构造失败：{e}"))?;
         let outputs = self
             .rec
             .run(ort::inputs![tensor])
             .map_err(|e| format!("rec 推理失败：{e}"))?;
-        let (_, value) = outputs
-            .iter()
-            .next()
-            .ok_or("rec 无输出")?;
+        let (_, value) = outputs.iter().next().ok_or("rec 无输出")?;
         // [1, T, C]：T = 时间步，C = 类别数（6625）
         let (shape, data) = value
             .try_extract_tensor::<f32>()
@@ -551,7 +632,10 @@ fn normalize_nchw_05(img: &image::RgbImage, w: usize, h: usize) -> Array4<f32> {
     let px = img.as_raw();
     for y in 0..h {
         for x in 0..w {
-            let (xi, yi) = (x.min(img.width() as usize - 1), y.min(img.height() as usize - 1));
+            let (xi, yi) = (
+                x.min(img.width() as usize - 1),
+                y.min(img.height() as usize - 1),
+            );
             let i = (yi * img.width() as usize + xi) * 3;
             for c in 0..3 {
                 out[[0, c, y, x]] = px[i + c] as f32 / 255.0 - 0.5;
@@ -562,7 +646,12 @@ fn normalize_nchw_05(img: &image::RgbImage, w: usize, h: usize) -> Array4<f32> {
 }
 
 /// CTC 解码：argmax → 去 blank → 去相邻重复。data 为 [T, C] 展平。
-fn ctc_decode(data: &[f32], t_len: usize, c_len: usize, charset: &[String]) -> Result<String, String> {
+fn ctc_decode(
+    data: &[f32],
+    t_len: usize,
+    c_len: usize,
+    charset: &[String],
+) -> Result<String, String> {
     let mut text = String::new();
     let mut last = 0usize;
     for t in 0..t_len {
@@ -607,12 +696,7 @@ fn build_charset() -> Vec<String> {
 
 /// DB 后处理：概率图 → 连通域 → 水平框（含 unclip 外扩）→ 映射回原图坐标。
 /// 返回 (x, y, w, h, score) 列表，原图坐标系。
-fn db_boxes(
-    data: &[f32],
-    oh: usize,
-    ow: usize,
-    ratio: f32,
-) -> Vec<(i32, i32, i32, i32, f32)> {
+fn db_boxes(data: &[f32], oh: usize, ow: usize, ratio: f32) -> Vec<(i32, i32, i32, i32, f32)> {
     // 二值化
     let mask: Vec<bool> = data.iter().map(|&p| p > DET_THRESH).collect();
     let (w, h) = (ow, oh);
@@ -698,6 +782,47 @@ fn db_boxes(
 mod tests {
     use super::*;
 
+    /// 🐞 回归（P0，2026-10-29 @v1.2.11）：**ort 内部 panic 必须被拦成 Err，不能杀掉进程**。
+    ///
+    /// 这是 `panic = "abort"` → `"unwind"` 改动的配套验证：
+    /// 若有人把 Cargo.toml 的 panic 改回 abort，本测试会因为进程直接终止而
+    /// **整个 test binary 崩溃**（不是 FAILED，是硬崩）—— 这本身就是最强的信号。
+    #[test]
+    fn ort_panic_is_caught_instead_of_aborting() {
+        // 模拟 ort 内部 `expect("Failed to initialize ORT API")`
+        let r: Result<(), String> = guard_ort_panic("测试", || {
+            panic!("Failed to initialize ORT API");
+        });
+        let err = r.expect_err("panic 必须被转成 Err");
+        assert!(
+            err.contains("Failed to initialize ORT API"),
+            "错误信息应保留 panic 正文，实际 = {err}"
+        );
+        assert!(
+            err.contains("已拦截"),
+            "错误信息应明确告知用户应用未退出，实际 = {err}"
+        );
+
+        // 正常路径不受影响
+        let ok: Result<i32, String> = guard_ort_panic("测试", || Ok(42));
+        assert_eq!(ok.unwrap(), 42);
+
+        // 业务 Err 原样透传（不能被误当成 panic）
+        let biz: Result<i32, String> = guard_ort_panic("测试", || Err("模型缺失".into()));
+        assert_eq!(biz.unwrap_err(), "模型缺失");
+    }
+
+    /// panic payload 的两种常见形态（`&str` / `String`）都要能取到文本。
+    #[test]
+    fn panic_payload_text_is_extracted() {
+        let a: Box<dyn std::any::Any + Send> = Box::new("static str");
+        assert_eq!(panic_payload_str(&a), "static str");
+        let b: Box<dyn std::any::Any + Send> = Box::new(String::from("owned"));
+        assert_eq!(panic_payload_str(&b), "owned");
+        let c: Box<dyn std::any::Any + Send> = Box::new(42i32);
+        assert_eq!(panic_payload_str(&c), "<非字符串 payload>");
+    }
+
     #[test]
     #[ignore]
     fn probe_ocr_onnx() {
@@ -707,10 +832,13 @@ mod tests {
             _ => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models"),
         };
         let lib = std::env::var("ORT_DYLIB_PATH").ok().map(PathBuf::from);
-        let png = std::env::var("SD_OCR_PNG").unwrap_or_else(|_| {
-            format!("{}/../scripts/ocr_probe.png", env!("CARGO_MANIFEST_DIR"))
-        });
-        println!("模型目录 {}（齐备={}）", models.display(), is_ready(&models));
+        let png = std::env::var("SD_OCR_PNG")
+            .unwrap_or_else(|_| format!("{}/../scripts/ocr_probe.png", env!("CARGO_MANIFEST_DIR")));
+        println!(
+            "模型目录 {}（齐备={}）",
+            models.display(),
+            is_ready(&models)
+        );
 
         // 冷启动：环境初始化 + 模型加载 + 首次推理
         if let Err(e) = ensure_env(lib.as_deref()) {
@@ -726,7 +854,10 @@ mod tests {
         let lines = eng.recognize(&img).expect("识别");
         println!("冷启动首次识别 {:?}，{} 行：", t1.elapsed(), lines.len());
         for l in &lines {
-            println!("  [{:>4},{:>4} {:>3}×{:>3} score={:.2}] {}", l.x, l.y, l.w, l.h, l.score, l.text);
+            println!(
+                "  [{:>4},{:>4} {:>3}×{:>3} score={:.2}] {}",
+                l.x, l.y, l.w, l.h, l.score, l.text
+            );
         }
         // 会话复用：常驻缓存后的二次识别（v0.9.0 性能验收口径）
         let t2 = std::time::Instant::now();
@@ -739,7 +870,11 @@ mod tests {
         let small = image::imageops::crop_imm(&img, 18, 222, 682, 44).to_image();
         let t3 = std::time::Instant::now();
         let slines = eng.recognize(&small).expect("小选区识别");
-        let sall: String = slines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join(" | ");
+        let sall: String = slines
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" | ");
         println!("小选区(682×44) {:?}：{}", t3.elapsed(), sall);
         assert!(
             sall.contains("PaddleOCR"),
@@ -747,7 +882,11 @@ mod tests {
         );
 
         // 自洽断言：大标题与小字行至少各命中一行（内容会变，断言不写死全文）
-        let all: String = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
+        let all: String = lines
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(!lines.is_empty(), "一行都没识别出来");
         assert!(all.chars().any(|c| c >= '\u{4e00}'), "未识别出任何中文字符");
     }
@@ -757,13 +896,25 @@ mod tests {
     fn det_input_size_policy() {
         // ① 全图级选区（900×520）：短边 520 < 736 会放大 1.415 倍，
         //    但 1.415 < 上限 4，所以与 v0.8.1 探针基线**逐像素一致**（1280×736）
-        assert_eq!((det_input_size(900.0, 520.0).0, det_input_size(900.0, 520.0).1), (1280, 736));
+        assert_eq!(
+            (
+                det_input_size(900.0, 520.0).0,
+                det_input_size(900.0, 520.0).1
+            ),
+            (1280, 736)
+        );
         // ② 小选区（682×44）：不加上限时要放大 16.7 倍 → 11392×736（实测 det 要 7 秒）；
         //    加 4 倍上限后是 2720×192（实测 det 479ms、识别结果一样准）
-        assert_eq!((det_input_size(682.0, 44.0).0, det_input_size(682.0, 44.0).1), (2720, 192));
+        assert_eq!(
+            (det_input_size(682.0, 44.0).0, det_input_size(682.0, 44.0).1),
+            (2720, 192)
+        );
         // ③ 大选区（1920×1080）：短边 > 736 不放大，面积 2.09MP < 2.64MP 上限 → 原样
         assert_eq!(
-            (det_input_size(1920.0, 1080.0).0, det_input_size(1920.0, 1080.0).1),
+            (
+                det_input_size(1920.0, 1080.0).0,
+                det_input_size(1920.0, 1080.0).1
+            ),
             (1920, 1088)
         );
         // ④ 4K 整屏（3840×2160）：面积 8.29MP 超上限 → 缩回约 2.64MP（比例 0.564）
@@ -774,7 +925,12 @@ mod tests {
             "4K 整屏 det 输入面积仍超上限：{w}×{h}"
         );
         // ⑤ 32 对齐：任何输入都必须是 32 的整数倍（DBNet 要求）
-        for (w0, h0) in [(900.0, 520.0), (682.0, 44.0), (37.0, 11.0), (1920.0, 1080.0)] {
+        for (w0, h0) in [
+            (900.0, 520.0),
+            (682.0, 44.0),
+            (37.0, 11.0),
+            (1920.0, 1080.0),
+        ] {
             let (w, h, _) = det_input_size(w0, h0);
             assert_eq!(w % 32, 0, "{w0}×{h0} → 宽 {w} 未 32 对齐");
             assert_eq!(h % 32, 0, "{w0}×{h0} → 高 {h} 未 32 对齐");

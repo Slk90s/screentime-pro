@@ -136,6 +136,13 @@ const isPetMenuWindow = currentLabel === "pet-menu";
 const isFloatWindow = currentLabel === "float";
 // v0.8.0 截图遮罩窗口检测：label 是 'capture' 时只渲染 CaptureOverlay
 const isCaptureWindow = currentLabel === "capture";
+// v1.2.11（整改 0.10）：五个窗口共用同一份 index.html，`App.vue` 对每个 webview
+// 都会挂载一次。下面 onMounted 那一整套（权限查询 / WebView2 检测 / 8 个事件监听 /
+// 自启检查 / start / 2s 轮询）**只有主窗需要**，其余四个窗口跑了既没人读结果，
+// 又会各自留下一个永不停歇的 2 秒定时器。
+// ⚠️ 非 Tauri（浏览器预览）时 currentLabel = ""，这里判定为主窗，行为不变。
+const isMainWindow =
+  !isPetWindow && !isPetMenuWindow && !isFloatWindow && !isCaptureWindow;
 
 // 仅在桌宠窗口引入 PetWindow 组件，避免主窗口打包
 import PetWindow from "./pet/PetWindow.vue";
@@ -345,6 +352,11 @@ async function ensureAutostart() {
 }
 
 onMounted(async () => {
+  // v1.2.11（整改 0.10）：桌宠 / 菜单 / 悬浮条 / 遮罩这四个窗口跑来这里只做一件事——
+  // 白跑一遍再各留一个 2s 定时器。它们的结果没有任何消费者（模板按 label 分支，
+  // 这些窗口只渲染各自的子组件），`perm`/`live`/`shotToast` 全是死值。
+  // 遮罩窗最吃亏：每次截图都会 `set_focus`，把权限查询与整套 IPC 再触发一遍。
+  if (!isMainWindow) return;
   // 首次加载：查询权限 + 拉取实时状态，并启动轮询
   try {
     perm.value = await tracker.checkPermissions();

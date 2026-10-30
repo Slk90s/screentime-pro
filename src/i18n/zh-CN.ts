@@ -9,6 +9,10 @@ export default {
     copy: "复制",
     copyPath: "复制路径",
     revealInFM: "在文件管理器中显示",
+    // v1.2.11：这两个 key 一直在被调用（Settings 的告警弹窗标题、DatePicker 的
+    // 加载占位），但两侧词表都没建 → 界面直接渲染出 `common.error` 字面量。
+    error: "错误",
+    loading: "加载中…",
   },
   nav: {
     stats: "统计概览",

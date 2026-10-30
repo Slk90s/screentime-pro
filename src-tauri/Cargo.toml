@@ -125,6 +125,19 @@ tauri-plugin-global-shortcut = "2"
 # 曾导致 v1.1.0 三平台 CI 全挂（E0599 commit 不存在 / E0061 builder 缺参）。
 # 升级 rc.14+ 时须同步改 ocr_onnx.rs 的 ensure_env / Session::builder 三处调用。
 ort = { version = "=2.0.0-rc.13", features = ["load-dynamic"] }
+# v1.2.11（2026-10-29）：加载前自检 onnxruntime 运行库是否可 dlopen + 可取 ORT API。
+#
+# 为什么必须自带：`ort` 在 `setup_api()` 里对 `OrtGetApiBase` 缺失 / `GetApi` 返回 null
+# 这两处用的是 `expect(...)` 内建 panic。v1.2.10 及以前 release 配的是 `panic = "abort"`
+# （见本文件 [profile.release]），于是**载入一份残缺 dylib = 进程被直接 abort**，
+# 没有任何 Err 出口可捕获 —— 真机日志（macOS 2026-10-28）里的「截完图就崩溃」即此。
+# ⚠️ 本版已把 panic 改回 "unwind"，配合 `ocr_onnx::guard_ort_panic` 的 catch_unwind，
+# 那条 abort 路径不再是致命的；但自检**仍然要留**，理由已经换了：
+# ① panic 之后 ort 的全局状态可能不一致，能不调它就别调它；
+# ② 「文件坏了」与「本机缺 VC++ 运行库」要靠这次 dlopen 才能分辨，
+#    分不出的后果是把随包的完好 dll 当坏文件删掉（Windows 没有下载通道补回来）。
+# 版本与 ort 内部依赖的 libloading 同源（0.8.x），不会引入第二份实现。
+libloading = "0.8"
 ndarray = "0.17.2"
 # v1.2.2（2026-10-21）：悬浮窗液态玻璃的系统材质。
 # ⚠️ 必须显式声明 0.8.1：tauri 2.11.5 内部锁 window-vibrancy "0.6"（只有 NSVisualEffectMaterial，
@@ -238,17 +251,24 @@ custom-protocol = ["tauri/custom-protocol"]
 # - lto = true：跨 crate 内联与死代码消除，对依赖树重（tauri / rusqlite / ort / xcap）的项目收益最明显。
 # - opt-level = "s"：优先体积。官方说想要速度用 3；本项目是常驻托盘的小工具，
 #   热点只有 1Hz 采样与 IPC，`"s"` 的体积收益大于性能损失。
-# - panic = "abort"：去掉 unwind 表。
-#   ⚠️ 前置条件：代码中不得依赖 catch_unwind 捕获 panic。已全仓核查
-#   `grep -rn catch_unwind src-tauri/src` → 0 处，安全。
+# - panic = "unwind"（v1.2.11 从 "abort" 改回）：
+#   🔴 2026-10-29 真机崩溃（macOS，截完图进程消失）的直接放大器就是 "abort"。
+#   `ort` 在 `setup_api()` 里对两处失败用的是内建 `expect(...)`：
+#     - `OrtGetApiBase` must be present in ONNX Runtime dylib
+#     - Failed to initialize ORT API
+#   这些 panic 是**第三方库内部**的，我们无法改成 Result；"abort" 之下
+#   panic 会绕过 unwind 直接 `std::process::abort()` —— 没有栈展开、没有
+#   日志钩子之后的任何机会、用户只看到「闪退」。
+#   改成 "unwind" 后，OCR 入口的 `catch_unwind` 才能把「取字失败」降级成
+#   「本次取字报错」，进程继续存活 —— 这是「基础功能必须稳定」的底线。
+#   代价：多约 15% 体积（unwind 表），实测在百 MB 级安装包上可忽略。
 # - strip = true：移除符号表。
-#   ⚠️ 前置条件核查：现有 exe 已无 .debug 节（PE 节表仅 .text/.rdata/.data/.pdata/.rsrc/.reloc），
-#   且 bundle 不打包 .pdb → 本项收益小，但零风险，按官方推荐保留。
-#
-# ⚠️ 若将来需要线上调试崩溃，临时改回 `panic = "unwind"` + `strip = false` 再构建。
+#   ⚠️ 与 unwrap 配合注意：strip 不删 panic 消息字符串（那些在 .rodata），
+#   所以日志里的 panic 正文依然可读，只是没有行号符号 → 保留 `strip = "debuginfo"`
+#   以留住行号信息，便于线上定位（体积差异对 Tauri 安装包可忽略）。
 [profile.release]
 codegen-units = 1
 lto = true
 opt-level = "s"
-panic = "abort"
-strip = true
+panic = "unwind"
+strip = "debuginfo"

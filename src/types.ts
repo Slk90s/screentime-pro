@@ -326,6 +326,13 @@ export interface ShortcutApplyResult {
 
 /** 遮罩窗收到「本次截图就绪」时的元信息（整屏图另由 screenshot_frame 拉取） */
 export interface CaptureReadyPayload {
+  /**
+   * 本轮截图序号（自 1 起严格递增）。
+   * 相同 = 同一帧的重复投递（事件 + 主动拉取）→ 丢弃；
+   * 更大 = 遮罩窗开着时又触发了一次新截图 → 必须重开一轮，
+   * 否则会继续显示上一轮的冻结帧，而取字/导出裁的已经是新图。
+   */
+  seq: number;
   width: number;
   height: number;
   physical_width: number;

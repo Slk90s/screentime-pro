@@ -121,7 +121,11 @@ impl<W: std::io::Write> std::io::Write for VersionWriter<W> {
 /// - 文件大小：按天滚动，无单文件 size cap（单日高频日志可能超过 5MB）
 /// - 文件数量：保留 14 个（约 14 天，今天往前），更早自动删除
 /// - 总上限：约 14 天（每天 1 个文件，靠按天滚动自然分隔）
-pub fn init(app_log_dir: &Path, is_debug: bool, version: &str) -> std::io::Result<Option<Vec<WorkerGuard>>> {
+pub fn init(
+    app_log_dir: &Path,
+    is_debug: bool,
+    version: &str,
+) -> std::io::Result<Option<Vec<WorkerGuard>>> {
     // ===== 确保日志目录存在（关键：否则滚动 appender 在 macOS 全新机上 build 失败 → 整个日志系统失效 =====
     // tracing_appender 的 build(dir) 只 create(true) 创建「文件」，不创建「父目录」；
     // macOS 上 ~/Library/Logs/com.screentime.pro 默认不存在 → init 直接返回 Err → 没有任何日志文件（"mac 无运行日志"根因）。
@@ -145,7 +149,7 @@ pub fn init(app_log_dir: &Path, is_debug: bool, version: &str) -> std::io::Resul
         .filename_prefix("app")
         .filename_suffix("log")
         .build(app_log_dir)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
 
     // 异步写入：避免日志 IO 阻塞采样循环主线程
     let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
@@ -156,7 +160,7 @@ pub fn init(app_log_dir: &Path, is_debug: bool, version: &str) -> std::io::Resul
         .filename_prefix("audit")
         .filename_suffix("log")
         .build(app_log_dir)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
     let (audit_writer, audit_guard) = tracing_appender::non_blocking(audit_appender);
 
     // 版本戳：每行前缀 `vX.Y.Z `，方便按版本定位问题（用户要求）
@@ -167,7 +171,8 @@ pub fn init(app_log_dir: &Path, is_debug: bool, version: &str) -> std::io::Resul
     // 所以无需为 dev/release 维护不同的 fmt::Layer 类型——永远同时挂两个 writer。
     // 用 `MakeWriterExt::and()` 把文件 writer 和 stderr 合成一个 Tee writer。
     // 注意：这里用全路径调用 `and`，不 `use MakeWriterExt`（其 `with_filter` 与 Layer 同名）。
-    let combined_writer = tracing_subscriber::fmt::writer::MakeWriterExt::and(file_writer, std::io::stderr);
+    let combined_writer =
+        tracing_subscriber::fmt::writer::MakeWriterExt::and(file_writer, std::io::stderr);
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_target(true)
         .with_thread_ids(false)
@@ -197,8 +202,8 @@ pub fn init(app_log_dir: &Path, is_debug: bool, version: &str) -> std::io::Resul
     // - 开发：DEBUG
     // - 允许通过 RUST_LOG 环境变量覆盖（用户/开发者调试时）
     let default_level = if is_debug { "debug" } else { "info" };
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(default_level));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
 
     // ===== 装配订阅器 =====
     tracing_subscriber::registry()

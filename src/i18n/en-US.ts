@@ -8,6 +8,9 @@ export default {
     copy: "Copy",
     copyPath: "Copy path",
     revealInFM: "Show in file manager",
+    // v1.2.11：与 zh-CN 同步补齐这两个一直在被调用的 key。
+    error: "Error",
+    loading: "Loading…",
   },
   nav: {
     stats: "Overview",

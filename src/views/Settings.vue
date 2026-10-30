@@ -1091,6 +1091,13 @@ let unlistenPetEnabled: (() => void) | null = null;
 let unlistenStatusBarCfg: (() => void) | null = null;
 // v0.9.2：截图完成 → 刷新历史列表（注销函数需保存，防监听器泄漏）
 let unlistenShotDone: (() => void) | null = null;
+// v1.2.11（整改 0.11）：`await listen(...)` 要等一个 IPC 往返才拿得到注销函数。
+// 用户在这段窗口期里切走页面时，`onBeforeUnmount` 读到的还是 null → 什么都不注销；
+// 往返回来后监听器照样注册成功，并永久挂在事件总线上（反复进出设置页就一层层叠起来，
+// 每个事件多跑一遍回调，回调里改的还是早已卸载的组件状态）。
+// 上面那句 `await appUpdate.isSupported()` 把这段窗口期拉得更长，所以更容易撞上。
+// 用 disposed 标记把「回来后才发现已经卸载」的注销函数立刻补调用掉。
+let disposed = false;
 // 单一 onMounted 汇聚全部初始化（v1.1.1 合并，原分散在 4 处）：
 // ① 跨窗口事件监听（桌宠皮肤/开关、托盘状态栏勾选）
 // ② 截图配置 + 取字引擎 + 截图历史 + screenshot-done 监听
@@ -1106,16 +1113,20 @@ onMounted(async () => {
     nativeUpdate.value = false;
   }
   try {
-    unlistenSkin = await listen("pet-skin-changed", () => {
+    const un = await listen("pet-skin-changed", () => {
       skinRegistry.reloadActive();
     });
+    if (disposed) un();
+    else unlistenSkin = un;
   } catch (e) {
     log.error("[Settings] 监听 pet-skin-changed 失败", e);
   }
   try {
-    unlistenPetEnabled = await listen("pet-enabled-changed", () => {
+    const un = await listen("pet-enabled-changed", () => {
       petStore.reload();
     });
+    if (disposed) un();
+    else unlistenPetEnabled = un;
   } catch (e) {
     log.error("[Settings] 监听 pet-enabled-changed 失败", e);
   }
@@ -1123,7 +1134,7 @@ onMounted(async () => {
   // v1.2.7：仍要保留「用户刚改、尚在提交中」的差量 —— 托盘事件可能在用户点击
   // 之后、IPC 返回之前到达，此时整体覆盖会把乐观更新的值冲掉（同上 lost update）。
   try {
-    unlistenStatusBarCfg = await listen<StatusBarConfig>(
+    const un = await listen<StatusBarConfig>(
       "status-bar-config-changed",
       (e) => {
         statusBarBaseline = e.payload;
@@ -1133,6 +1144,8 @@ onMounted(async () => {
             : e.payload;
       },
     );
+    if (disposed) un();
+    else unlistenStatusBarCfg = un;
   } catch (e) {
     log.error("[Settings] 监听 status-bar-config-changed 失败", e);
   }
@@ -1143,6 +1156,8 @@ onMounted(async () => {
   void loadPermissions();
 });
 onBeforeUnmount(() => {
+  // 先置位：此后任何还在 await 中的 listen 返回时会被立刻补注销（见 disposed 说明）
+  disposed = true;
   if (unlistenSkin) unlistenSkin();
   if (unlistenPetEnabled) unlistenPetEnabled();
   if (unlistenStatusBarCfg) unlistenStatusBarCfg();
@@ -2150,9 +2165,13 @@ async function initScreenshot() {
   await loadOcrEngineInfo();
   await loadShotHistory();
   try {
-    unlistenShotDone = await listen("screenshot-done", () => {
+    const un = await listen("screenshot-done", () => {
       void loadShotHistory();
     });
+    // 上面 3 个 await（配置 / 引擎 / 60 张缩略图）把注册推到挂载后很久，
+    // 期间切走页面 → onBeforeUnmount 已跑完，这里必须自己收尾（见 disposed 说明）
+    if (disposed) un();
+    else unlistenShotDone = un;
     // v0.9.2：截图失败提示已统一提升到主窗口 App.vue 的**全局 toast**
     // （此前只在设置页弹错 → 用户用快捷键截图、人不在设置页时失败是静默的），
     // 此处不再重复监听，避免同一次失败弹两次提示。

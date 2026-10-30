@@ -181,8 +181,15 @@ fn lookup_wikipedia(client: &reqwest::blocking::Client, query: &str) -> Option<S
     let val: serde_json::Value = resp.json().ok()?;
     let title = val.get(1)?.get(0)?.as_str()?;
     // 再用 page summary API 拿摘要
-    let url = format!("https://en.wikipedia.org/api/rest_v1/page/summary/{}", title);
-    let resp2 = client.get(&url).timeout(Duration::from_secs(5)).send().ok()?;
+    let url = format!(
+        "https://en.wikipedia.org/api/rest_v1/page/summary/{}",
+        title
+    );
+    let resp2 = client
+        .get(&url)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .ok()?;
     #[derive(serde::Deserialize)]
     struct Summary {
         extract: Option<String>,
@@ -228,10 +235,34 @@ fn lookup_wikipedia(client: &reqwest::blocking::Client, query: &str) -> Option<S
 
 /// LRU 缓存（容量 256，超出淘汰最早插入）
 /// - 用 Arc<Mutex<...>> 而不是裸 Mutex<...>，方便 spawn_blocking 时 clone 引用
+///
+/// 🔴 v1.2.11（P1，2026-10-29）：**区分「确定的分类」与「查询失败的兜底」**。
+///
+/// 旧实现把「wikipedia 查询失败 → 回落 other」的结果也 `put` 进 LRU，
+/// 于是同一条记录**永久**返回 `other`：网络恢复、VPN 断开重连之后都不会重试。
+/// 真机日志里 `OPPO 互联` / `WorkBuddy` / `Clash Verge` / `UURemote` 反复刷
+/// `wikipedia 分类失败，回落 other`，正是因为缓存里已经是 `other`
+/// （命中缓存不会走网络，但**失败条目被不断重新写入**，看起来像一直在重试）。
+///
+/// 但也不能「失败就不缓存」：采样是 2s 一次，断网时会对同一个应用每 2 秒
+/// 发起一次 8s 超时的网络请求，`spawn_blocking` 线程池会被打满。
+///
+/// 折中：失败结果进**独立的负缓存**，带短 TTL（10 分钟）。
+/// - 命中负缓存且未过期 → 直接返回 other，不打网络
+/// - 过期 → 允许重新查询（网络恢复后 10 分钟内自动纠正）
+/// - 拿到确定分类（本地字典 / wikipedia 成功）→ 写入正缓存，**并清除负缓存**
 #[derive(Clone)]
 pub struct CategoryCache {
     map: std::sync::Arc<Mutex<lru::LruCache<String, String>>>,
+    /// 失败兜底（`other`）的标记与时间戳：key → 写入时刻
+    negative: std::sync::Arc<Mutex<lru::LruCache<String, std::time::Instant>>>,
 }
+
+/// 负缓存有效期。取 10 分钟的理由：
+/// - 太短（如 1 分钟）→ 断网期间仍会频繁发起 8s 超时请求；
+/// - 太长（如 1 小时）→ 网络恢复后分类长时间停在 other，用户感知为「分类坏了」。
+/// 采样粒度是 2s，10 分钟内最多重试 1 次，代价可忽略。
+const NEGATIVE_TTL: Duration = Duration::from_secs(600);
 
 impl CategoryCache {
     pub fn new() -> Self {
@@ -239,13 +270,46 @@ impl CategoryCache {
             map: std::sync::Arc::new(Mutex::new(lru::LruCache::new(
                 NonZeroUsize::new(256).expect("capacity > 0"),
             ))),
+            negative: std::sync::Arc::new(Mutex::new(lru::LruCache::new(
+                NonZeroUsize::new(256).expect("capacity > 0"),
+            ))),
         }
     }
     pub fn get(&self, key: &str) -> Option<String> {
-        self.map.lock().unwrap_or_else(|e| e.into_inner()).get(key).cloned()
+        self.map
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(key)
+            .cloned()
     }
     pub fn put(&self, key: String, val: String) {
-        self.map.lock().unwrap_or_else(|e| e.into_inner()).put(key, val);
+        let mut g = self.map.lock().unwrap_or_else(|e| e.into_inner());
+        // 拿到确定的分类后，负缓存必须失效，否则会继续被 other 挡住。
+        self.negative
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pop(&key);
+        g.put(key, val);
+    }
+
+    /// 记录一次「查询失败，兜底 other」。
+    pub fn put_negative(&self, key: String) {
+        let mut g = self.negative.lock().unwrap_or_else(|e| e.into_inner());
+        g.put(key, std::time::Instant::now());
+    }
+
+    /// 该 key 是否仍处于「刚失败过」的冷却窗口内。
+    pub fn is_negative(&self, key: &str) -> bool {
+        let mut g = self.negative.lock().unwrap_or_else(|e| e.into_inner());
+        match g.get(key).copied() {
+            Some(t) if t.elapsed() < NEGATIVE_TTL => true,
+            Some(_) => {
+                // 过期即清掉，让下一次查询真正走网络
+                g.pop(key);
+                false
+            }
+            None => false,
+        }
     }
 }
 
@@ -293,7 +357,7 @@ pub fn lookup_category(
     cache: &CategoryCache,
 ) -> String {
     let start = std::time::Instant::now();
-    // 1. 先看缓存
+    // 1. 先看正缓存（确定分类）
     let cache_key = format!(
         "{}|{}|{}",
         process_name.to_lowercase(),
@@ -303,6 +367,13 @@ pub fn lookup_category(
     if let Some(cat) = cache.get(&cache_key) {
         tracing::trace!(source = "cache", app = %display_name, "category hit");
         return cat;
+    }
+
+    // 1'. 负缓存冷却中：刚失败过，直接兜底，不再发起 8s 网络请求。
+    // v1.2.11：没有这一层就会在断网时每 2s 打一次网络，把 spawn_blocking 池占满。
+    if cache.is_negative(&cache_key) {
+        tracing::trace!(app = %display_name, "category negative-cache hit, skip network");
+        return "other".to_string();
     }
 
     // 2. 本地字典
@@ -333,8 +404,51 @@ pub fn lookup_category(
     // 联网也失败：WARN（不是 ERROR，因为有兜底）
     tracing::warn!(app = %display_name, "wikipedia 分类失败，回落 other");
 
-    // 4. 兜底
-    let fallback = "other".to_string();
-    cache.put(cache_key, fallback.clone());
-    fallback
+    // 4. 兜底：**只进负缓存，不进正缓存**。
+    // v1.2.11（P1）：旧实现把 other 写进正缓存（`cache.put(cache_key, "other")`），
+    // 于是这条记录永久返回 other —— 网络恢复后也不会再查询。
+    // 现在写负缓存，10 分钟后自动失效重试；真断网时又不会每 2s 重打网络。
+    cache.put_negative(cache_key);
+    "other".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 🐞 回归（P1，2026-10-29 @v1.2.11）：**失败兜底不能污染正缓存**。
+    ///
+    /// 旧实现把 `other` 写进正缓存，导致一条「查询失败」的记录永久返回 other，
+    /// 网络恢复后也不会重试。现在失败只进负缓存（带 TTL），
+    /// 且正缓存写入时会清掉负缓存。
+    #[test]
+    fn negative_cache_does_not_pollute_positive_cache() {
+        let c = CategoryCache::new();
+        let key = "proc|name|path".to_string();
+
+        // 模拟一次查询失败
+        c.put_negative(key.clone());
+        assert!(c.is_negative(&key), "失败后应处于冷却窗口内");
+        assert!(
+            c.get(&key).is_none(),
+            "失败结果绝不能出现在正缓存里（否则永不重试）"
+        );
+
+        // 模拟网络恢复后查到了确定分类
+        c.put(key.clone(), "productivity".to_string());
+        assert_eq!(c.get(&key).as_deref(), Some("productivity"));
+        assert!(
+            !c.is_negative(&key),
+            "拿到确定分类后，负缓存必须失效，否则仍会被 other 挡住"
+        );
+    }
+
+    /// 负缓存只能挡住「同一个 key」，不能影响其它应用。
+    #[test]
+    fn negative_cache_is_per_key() {
+        let c = CategoryCache::new();
+        c.put_negative("a|b|c".to_string());
+        assert!(c.is_negative("a|b|c"));
+        assert!(!c.is_negative("x|y|z"));
+    }
 }

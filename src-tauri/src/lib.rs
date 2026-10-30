@@ -61,9 +61,9 @@ mod error;
 mod float_glass;
 mod float_window;
 mod logging;
-mod tracker;
 mod pet;
 mod system_load;
+mod tracker;
 // v0.8.0（2026-09-16）：屏幕截图（快捷键 → 遮罩框选 → 剪贴板/归档）
 mod screenshot;
 // v0.7.7：隐藏控制台窗口地创建子进程（修复 Windows 首次启动 reg 命令框闪烁）
@@ -208,7 +208,12 @@ fn mac_hardware_uuid() -> Option<String> {
 fn windows_machine_guid() -> Option<String> {
     // v0.7.7：必须走 proc::hidden——GUI 进程直接 spawn reg.exe 会闪一个控制台黑框
     let out = crate::proc::hidden("reg")
-        .args(["query", "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid"])
+        .args([
+            "query",
+            "HKLM\\SOFTWARE\\Microsoft\\Cryptography",
+            "/v",
+            "MachineGuid",
+        ])
         .output()
         .ok()?;
     let s = String::from_utf8_lossy(&out.stdout);
@@ -387,11 +392,11 @@ pub fn run() {
             let device_name_from_db = db
                 .get_setting("device_name")
                 .unwrap_or_else(|| device_id.clone());
-            let status_bar_config =
-                commands::StatusBarConfig::load(&db);
+            let status_bar_config = commands::StatusBarConfig::load(&db);
             // v0.7.6：sampler 跨平台始终存在
             let cpu_monitor_for_sampler = Arc::new(system_load::CpuMonitor::new());
-            let metrics_sampler = Arc::new(system_load::MetricsSampler::new(cpu_monitor_for_sampler));
+            let metrics_sampler =
+                Arc::new(system_load::MetricsSampler::new(cpu_monitor_for_sampler));
             metrics_sampler.warmup();
             metrics_sampler.init();
             let app_state = Arc::new(AppState {
@@ -493,11 +498,7 @@ pub fn run() {
                                 cool_streak = 0;
                                 if hot_streak >= SUSTAIN_OVERHEAT {
                                     is_overheating = true;
-                                    let _ = app_handle.emit_to(
-                                        "pet",
-                                        "pet-system-overload",
-                                        usage,
-                                    );
+                                    let _ = app_handle.emit_to("pet", "pet-system-overload", usage);
                                     tracing::warn!(usage, "system overheating → pet 升温");
                                 }
                             } else {
@@ -509,11 +510,7 @@ pub fn run() {
                                 hot_streak = 0;
                                 if cool_streak >= SUSTAIN_COOL {
                                     is_overheating = false;
-                                    let _ = app_handle.emit_to(
-                                        "pet",
-                                        "pet-system-cool",
-                                        usage,
-                                    );
+                                    let _ = app_handle.emit_to("pet", "pet-system-cool", usage);
                                     tracing::info!(usage, "system cooled → pet 恢复");
                                 }
                             } else {
@@ -541,8 +538,9 @@ pub fn run() {
             let show_item = MenuItemBuilder::with_id("show", "显示主窗口")
                 .enabled(true)
                 .build(app)?;
-            let quit_item =
-                MenuItemBuilder::with_id("quit", "退出").enabled(true).build(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", "退出")
+                .enabled(true)
+                .build(app)?;
             // ⚠️ with_items 要求元素统一为 &dyn IsMenuItem；CheckMenuItem /
             // PredefinedMenuItem / MenuItem 混排必须显式 Vec<&dyn ...> 注解，
             // 否则数组字面量推断出单一具体类型而编译失败
@@ -553,7 +551,9 @@ pub fn run() {
             let status_toggle = status_item.clone();
             // 设置页 → 托盘菜单方向的同步句柄：manage 后 commands 里 try_state 取用
             // （原始 item move 进 struct，菜单事件闭包用的是上面的 clone，互不影响）
-            app.manage(TrayStatusBarToggle { status_bar: status_item });
+            app.manage(TrayStatusBarToggle {
+                status_bar: status_item,
+            });
             // v1.2.6：原写法 `.unwrap()` —— 一旦 bundle 图标缺失/损坏（打包配置被改、
             // 平台覆盖配置没带上 icon），整个应用会在启动时 panic，用户看到的是「双击没反应」，
             // 而日志里只有一行 panic，极难定位。这里降级为「无图标托盘」继续运行：
@@ -651,13 +651,10 @@ pub fn run() {
                                 // 菜单勾选态不自动翻转，手动同步（勾选 = enabled）
                                 let _ = status_toggle.set_checked(cfg.enabled);
                                 // 通知前端设置页刷新（托盘 ↔ 页面双向一致）
-                                let _ =
-                                    app.emit_to("main", "status-bar-config-changed", cfg);
+                                let _ = app.emit_to("main", "status-bar-config-changed", cfg);
                                 // 同步显隐浮窗（不存在则幂等创建）
                                 let want = cfg.enabled && cfg.float_enabled;
-                                if let Err(e) =
-                                    float_window::set_float_visible(app, want)
-                                {
+                                if let Err(e) = float_window::set_float_visible(app, want) {
                                     tracing::error!(error = %e, "切换悬浮指标条失败");
                                 }
                             }
@@ -743,13 +740,11 @@ pub fn run() {
                         // 前台全屏 → 自动隐藏，退出全屏恢复
                         // （fullscreen 检测 Windows 实装，macOS/Linux 为 false stub）。
                         if cfg.enabled && cfg.float_enabled {
-                            let want_show =
-                                !system_load::fullscreen::foreground_is_fullscreen();
+                            let want_show = !system_load::fullscreen::foreground_is_fullscreen();
                             if want_show != float_shown {
                                 float_shown = want_show;
                                 let handle = tray_clone.app_handle().clone();
-                                if let Err(e) =
-                                    float_window::set_float_visible(&handle, want_show)
+                                if let Err(e) = float_window::set_float_visible(&handle, want_show)
                                 {
                                     tracing::warn!(error = %e, "悬浮指标条显隐切换失败");
                                 }
@@ -938,6 +933,7 @@ pub fn run() {
             screenshot::screenshot_cancel_countdown,
             // v1.2.2：`screenshot_repeat_region` 已移除（详见 screenshot/mod.rs 模块头）
             screenshot::screenshot_frame,
+            screenshot::take_capture_ready,
             screenshot::screenshot_commit,
             screenshot::screenshot_cancel,
             screenshot::screenshot_list,

@@ -9,14 +9,14 @@
 //!   ② `finalize_active_session` 的 `let _ = insert_session(...)` 改为记录 error 日志：
 //!      写库失败原先完全静默，用户只会发现「今天时长比实际少」却毫无线索。
 
-use crate::AppState;
 use crate::classifier::classify_app;
 use crate::db::{
     AppRankingOut, CategoryOut, CurrentForegroundOut, DailySummaryOut, DayCategoryOut, DeviceInfo,
     ExportBundle, ExportResult, HourlyBucketOut, MetricsOut, MonthSummaryOut, OverviewOut,
-    PermissionStatus, PeriodStat, RuleOut, SettingsOut, TrendsOut,
+    PeriodStat, PermissionStatus, RuleOut, SettingsOut, TrendsOut,
 };
 use crate::tracker::{platform_name, RawApp};
+use crate::AppState;
 // v1.2.6：采样循环需要区分 NoForeground（正常状态）与真实错误，故引入错误类型
 use crate::error::TrackerError;
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate};
@@ -66,18 +66,49 @@ pub fn start_tracking(state: tauri::State<'_, Arc<AppState>>) -> Result<bool, St
 pub fn stop_tracking(state: tauri::State<'_, Arc<AppState>>) -> Result<bool, String> {
     let mut r = state.tracking.lock().unwrap_or_else(|e| e.into_inner());
     *r = false;
-    if let Some(active) = state.current.lock().unwrap_or_else(|e| e.into_inner()).take() {
+    if let Some(active) = state
+        .current
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+    {
         let now = Local::now();
         finalize_active_session(&state, &active, now);
     }
     Ok(true)
 }
 
-fn finalize_active_session(
-    state: &Arc<AppState>,
-    active: &ActiveSession,
-    now: DateTime<Local>,
-) {
+/// 前台进程名是否代表「锁屏 / 登录界面等非使用状态」。
+///
+/// v1.2.11（P1，2026-10-29）新增。真机日志里 `loginwindow` 被连续统计 40+ 分钟，
+/// 因为空闲阈值（默认 300s）只能拦住「长时间无输入」，拦不住「一锁屏就一直算」。
+///
+/// 覆盖的平台现象：
+/// - macOS：`loginwindow`（锁屏 / 登录窗 / 快速用户切换），显示名常为「登录窗口」
+/// - Windows：`LockApp.exe`（锁屏界面）、`LogonUI.exe`（登录 / UAC 凭据界面）
+/// - Linux：`DisplayManager` 变体（gdm/gdm3/lightdm/sddm）与 `lock` / `xscreensaver`
+///
+/// ⚠️ 只做**精确名匹配**，不用 `contains("lock")` 之类的模糊判断：
+/// 那样会把用户真实在用的软件（如 `unlock-app`、`blockchain-wallet`）误杀，
+/// 而「漏判一个锁屏进程」的后果只是多记几分钟，远比误杀正被使用的应用轻。
+fn is_idle_screen_process(process_name: &str) -> bool {
+    const IDLE_PROCS: [&str; 10] = [
+        "loginwindow", // macOS
+        "LoginWindow", // macOS（大小写变体）
+        "LockApp",     // Windows 锁屏（进程名去掉 .exe）
+        "LockApp.exe",
+        "LogonUI", // Windows 登录 / UAC
+        "LogonUI.exe",
+        "gdm", // Linux 显示管理器
+        "gdm3",
+        "lightdm",
+        "sddm",
+    ];
+    let name = process_name.trim();
+    IDLE_PROCS.iter().any(|p| p.eq_ignore_ascii_case(name))
+}
+
+fn finalize_active_session(state: &Arc<AppState>, active: &ActiveSession, now: DateTime<Local>) {
     let start_date = active.started_at.date_naive();
     let now_date = now.date_naive();
     let splits: Vec<(DateTime<Local>, DateTime<Local>)> = if start_date == now_date {
@@ -95,7 +126,11 @@ fn finalize_active_session(
                 Some(t) => t,
                 None => break,
             };
-            let end = if next_midnight > now { now } else { next_midnight };
+            let end = if next_midnight > now {
+                now
+            } else {
+                next_midnight
+            };
             out.push((cursor_dt, end));
             if next_midnight > now {
                 break;
@@ -106,13 +141,13 @@ fn finalize_active_session(
         out
     };
     for (seg_start, seg_end) in splits {
-        let dur = (seg_end - seg_start).num_seconds().max(0) as i64;
+        let dur = (seg_end - seg_start).num_seconds().max(0);
         let last_in_seg = if active.last_input_at < seg_start {
             seg_start
         } else {
             active.last_input_at
         };
-        let idle_dur = (seg_end - last_in_seg).num_seconds().max(0) as i64;
+        let idle_dur = (seg_end - last_in_seg).num_seconds().max(0);
         let effective = (dur - idle_dur).max(0);
         if effective >= MIN_SESSION_SECS {
             let date = seg_start.format("%Y-%m-%d").to_string();
@@ -160,7 +195,11 @@ pub fn get_current_foreground(state: tauri::State<'_, Arc<AppState>>) -> Current
     };
     match state.tracker.get_foreground_app() {
         Ok(app) => {
-            let rules_clone = state.rules.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            let rules_clone = state
+                .rules
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
             let cat = classify_app(&app, &rules_clone);
             CurrentForegroundOut {
                 name: app.name,
@@ -193,7 +232,10 @@ pub fn get_overview(
     date: String,
     device: Option<String>,
 ) -> Result<OverviewOut, String> {
-    state.db.get_overview(days, &date, &device).map_err(|e| e.to_string())
+    state
+        .db
+        .get_overview(days, &date, &device)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -202,7 +244,10 @@ pub fn get_daily_summaries(
     days: u32,
     device: Option<String>,
 ) -> Result<Vec<DailySummaryOut>, String> {
-    state.db.get_daily_summaries(days, &device).map_err(|e| e.to_string())
+    state
+        .db
+        .get_daily_summaries(days, &device)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -211,7 +256,10 @@ pub fn get_daily_categories(
     days: u32,
     device: Option<String>,
 ) -> Result<Vec<DayCategoryOut>, String> {
-    state.db.get_daily_categories(days, &device).map_err(|e| e.to_string())
+    state
+        .db
+        .get_daily_categories(days, &device)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -221,7 +269,10 @@ pub fn get_month_summary(
     month: i32,
     device: Option<String>,
 ) -> Result<MonthSummaryOut, String> {
-    state.db.get_month_summary(year, month, &device).map_err(|e| e.to_string())
+    state
+        .db
+        .get_month_summary(year, month, &device)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -232,26 +283,50 @@ pub fn reveal_path(path: String) -> Result<(), String> {
 #[tauri::command]
 pub fn export_logs(app: tauri::AppHandle) -> Result<ExportResult, String> {
     use std::io::Read;
-    let log_dir = app.path().app_log_dir().map_err(|e| format!("无法定位日志目录: {}", e))?;
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| format!("无法定位日志目录: {}", e))?;
     if !log_dir.exists() {
         return Err(format!("日志目录不存在: {}", log_dir.display()));
     }
-    let desktop = app.path().desktop_dir().or_else(|_| app.path().home_dir().map(|p| p.join("Desktop"))).map_err(|e| format!("无法定位桌面目录: {}", e))?;
+    let desktop = app
+        .path()
+        .desktop_dir()
+        .or_else(|_| app.path().home_dir().map(|p| p.join("Desktop")))
+        .map_err(|e| format!("无法定位桌面目录: {}", e))?;
     std::fs::create_dir_all(&desktop).ok();
     let ts = Local::now().format("%Y%m%d_%H%M%S");
     let txt_path = desktop.join(format!("screentime-pro-logs-{}.txt", ts));
-    let mut out = std::fs::File::create(&txt_path).map_err(|e| format!("创建日志导出文件失败: {}", e))?;
+    let mut out =
+        std::fs::File::create(&txt_path).map_err(|e| format!("创建日志导出文件失败: {}", e))?;
     use std::io::Write;
-    writeln!(out, "ScreenTime Pro 日志导出\n生成时间: {}\n日志目录: {}\n\n--- 文件列表 ---\n", Local::now().format("%Y-%m-%d %H:%M:%S"), log_dir.display()).ok();
-    let mut entries: Vec<_> = std::fs::read_dir(&log_dir).map_err(|e| format!("读取日志目录失败: {}", e))?.filter_map(|e| e.ok()).filter(|e| {
-        let name = e.file_name().to_string_lossy().to_string();
-        crate::logging::is_our_log_file(&name)
-    }).collect();
+    writeln!(
+        out,
+        "ScreenTime Pro 日志导出\n生成时间: {}\n日志目录: {}\n\n--- 文件列表 ---\n",
+        Local::now().format("%Y-%m-%d %H:%M:%S"),
+        log_dir.display()
+    )
+    .ok();
+    let mut entries: Vec<_> = std::fs::read_dir(&log_dir)
+        .map_err(|e| format!("读取日志目录失败: {}", e))?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            crate::logging::is_our_log_file(&name)
+        })
+        .collect();
     entries.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
     for entry in entries {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
-        writeln!(out, "\n=== {} ({} bytes) ===\n", name, entry.metadata().map(|m| m.len()).unwrap_or(0)).ok();
+        writeln!(
+            out,
+            "\n=== {} ({} bytes) ===\n",
+            name,
+            entry.metadata().map(|m| m.len()).unwrap_or(0)
+        )
+        .ok();
         if let Ok(mut f) = std::fs::File::open(&path) {
             let mut buf = String::new();
             if f.read_to_string(&mut buf).is_ok() {
@@ -260,29 +335,52 @@ pub fn export_logs(app: tauri::AppHandle) -> Result<ExportResult, String> {
         }
     }
     tracing::info!(path = %txt_path.display(), "用户导出日志");
-    Ok(ExportResult { path: txt_path.to_string_lossy().to_string() })
+    Ok(ExportResult {
+        path: txt_path.to_string_lossy().to_string(),
+    })
 }
 
 #[tauri::command]
 pub fn get_log_size(app: tauri::AppHandle) -> Result<u64, String> {
-    let log_dir = app.path().app_log_dir().map_err(|e| format!("无法定位日志目录: {}", e))?;
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| format!("无法定位日志目录: {}", e))?;
     crate::logging::dir_size(&log_dir).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn get_log_dir(app: tauri::AppHandle) -> Result<String, String> {
-    let log_dir = app.path().app_log_dir().map_err(|e| format!("无法定位日志目录: {}", e))?;
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| format!("无法定位日志目录: {}", e))?;
     Ok(log_dir.to_string_lossy().to_string())
 }
 
 #[tauri::command]
-pub fn get_hourly_buckets(state: tauri::State<'_, Arc<AppState>>, date: String, device: Option<String>) -> Result<Vec<HourlyBucketOut>, String> {
-    state.db.get_hourly_buckets(&date, &device).map_err(|e| e.to_string())
+pub fn get_hourly_buckets(
+    state: tauri::State<'_, Arc<AppState>>,
+    date: String,
+    device: Option<String>,
+) -> Result<Vec<HourlyBucketOut>, String> {
+    state
+        .db
+        .get_hourly_buckets(&date, &device)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn get_app_ranking(state: tauri::State<'_, Arc<AppState>>, days: u32, date: String, device: Option<String>) -> Result<Vec<AppRankingOut>, String> {
-    state.db.get_app_ranking(days, &date, &device).map_err(|e| e.to_string())
+pub fn get_app_ranking(
+    state: tauri::State<'_, Arc<AppState>>,
+    days: u32,
+    date: String,
+    device: Option<String>,
+) -> Result<Vec<AppRankingOut>, String> {
+    state
+        .db
+        .get_app_ranking(days, &date, &device)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -291,12 +389,28 @@ pub fn get_categories(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<Cate
 }
 
 #[tauri::command]
-pub fn get_trends(state: tauri::State<'_, Arc<AppState>>, period: String, device: Option<String>) -> Result<TrendsOut, String> {
-    let (cur_start, cur_end, prev_start, prev_end, yoy_start, yoy_end, cur_label, prev_label) = period_ranges(&period);
-    let current = state.db.period_summary(&cur_start, &cur_end, &device, &cur_label).map_err(|e| e.to_string())?;
-    let prev = state.db.period_summary(&prev_start, &prev_end, &device, &prev_label).map_err(|e| e.to_string())?;
+pub fn get_trends(
+    state: tauri::State<'_, Arc<AppState>>,
+    period: String,
+    device: Option<String>,
+) -> Result<TrendsOut, String> {
+    let (cur_start, cur_end, prev_start, prev_end, yoy_start, yoy_end, cur_label, prev_label) =
+        period_ranges(&period);
+    let current = state
+        .db
+        .period_summary(&cur_start, &cur_end, &device, &cur_label)
+        .map_err(|e| e.to_string())?;
+    let prev = state
+        .db
+        .period_summary(&prev_start, &prev_end, &device, &prev_label)
+        .map_err(|e| e.to_string())?;
     let yoy: Option<PeriodStat> = if period == "month" {
-        Some(state.db.period_summary(&yoy_start, &yoy_end, &device, "去年同期").map_err(|e| e.to_string())?)
+        Some(
+            state
+                .db
+                .period_summary(&yoy_start, &yoy_end, &device, "去年同期")
+                .map_err(|e| e.to_string())?,
+        )
     } else {
         None
     };
@@ -305,11 +419,20 @@ pub fn get_trends(state: tauri::State<'_, Arc<AppState>>, period: String, device
     } else {
         0.0
     };
-    Ok(TrendsOut { period, current, prev, yoy, delta_total_pct })
+    Ok(TrendsOut {
+        period,
+        current,
+        prev,
+        yoy,
+        delta_total_pct,
+    })
 }
 
 #[tauri::command]
-pub fn export_all(app: tauri::AppHandle, device_id: Option<String>) -> Result<ExportResult, String> {
+pub fn export_all(
+    app: tauri::AppHandle,
+    device_id: Option<String>,
+) -> Result<ExportResult, String> {
     let bundle = state_export(&app, device_id.as_deref())?;
     let json = serde_json::to_string_pretty(&bundle).map_err(|e| e.to_string())?;
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
@@ -322,12 +445,17 @@ pub fn export_all(app: tauri::AppHandle, device_id: Option<String>) -> Result<Ex
     let file = format!("screentime_backup{}_{}.json", suffix, today_str());
     let path = exports.join(file);
     std::fs::write(&path, json).map_err(|e| e.to_string())?;
-    Ok(ExportResult { path: path.to_string_lossy().to_string() })
+    Ok(ExportResult {
+        path: path.to_string_lossy().to_string(),
+    })
 }
 
 fn state_export(app: &tauri::AppHandle, device_id: Option<&str>) -> Result<ExportBundle, String> {
     let state = app.state::<Arc<AppState>>();
-    state.db.export_all_filtered(device_id).map_err(|e| e.to_string())
+    state
+        .db
+        .export_all_filtered(device_id)
+        .map_err(|e| e.to_string())
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -337,7 +465,10 @@ pub struct BackupAndPruneResult {
 }
 
 #[tauri::command]
-pub fn backup_and_prune_device(app: tauri::AppHandle, device_id: String) -> Result<BackupAndPruneResult, String> {
+pub fn backup_and_prune_device(
+    app: tauri::AppHandle,
+    device_id: String,
+) -> Result<BackupAndPruneResult, String> {
     if device_id.trim().is_empty() {
         return Err("device_id 不能为空".to_string());
     }
@@ -347,11 +478,18 @@ pub fn backup_and_prune_device(app: tauri::AppHandle, device_id: String) -> Resu
     let exports = dir.join("exports");
     std::fs::create_dir_all(&exports).ok();
     let suffix = &device_id[..device_id.len().min(12)];
-    let file = format!("screentime_backup_{}_{}_pre_purge.json", suffix, today_str());
+    let file = format!(
+        "screentime_backup_{}_{}_pre_purge.json",
+        suffix,
+        today_str()
+    );
     let backup_path = exports.join(file);
     std::fs::write(&backup_path, &json).map_err(|e| e.to_string())?;
     let state = app.state::<Arc<AppState>>();
-    let deleted = state.db.delete_all_sessions_for_device(&device_id).map_err(|e| e.to_string())?;
+    let deleted = state
+        .db
+        .delete_all_sessions_for_device(&device_id)
+        .map_err(|e| e.to_string())?;
     crate::logging::audit(
         "device_backup_purge",
         &format!(
@@ -359,7 +497,10 @@ pub fn backup_and_prune_device(app: tauri::AppHandle, device_id: String) -> Resu
             backup_path.display()
         ),
     );
-    Ok(BackupAndPruneResult { backup_path: backup_path.to_string_lossy().to_string(), deleted_count: deleted })
+    Ok(BackupAndPruneResult {
+        backup_path: backup_path.to_string_lossy().to_string(),
+        deleted_count: deleted,
+    })
 }
 
 #[tauri::command]
@@ -390,11 +531,18 @@ pub struct BackupConfig {
 
 fn perform_backup(app: &tauri::AppHandle, path_override: Option<&str>) -> Result<String, String> {
     let state = app.state::<Arc<AppState>>();
-    let bundle = state.db.export_all_filtered(None).map_err(|e| e.to_string())?;
+    let bundle = state
+        .db
+        .export_all_filtered(None)
+        .map_err(|e| e.to_string())?;
     let json = serde_json::to_string_pretty(&bundle).map_err(|e| e.to_string())?;
     let dir = match path_override {
         Some(p) if !p.trim().is_empty() => PathBuf::from(p),
-        _ => match state.db.get_setting("backup_path").filter(|s| !s.is_empty()) {
+        _ => match state
+            .db
+            .get_setting("backup_path")
+            .filter(|s| !s.is_empty())
+        {
             Some(p) => PathBuf::from(p),
             None => {
                 let d = app.path().app_data_dir().map_err(|e| e.to_string())?;
@@ -424,7 +572,10 @@ fn recycle_previous_backup(dir: &Path, today: &str) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with("screentime_backup_") && name.ends_with(".json") {
-                let date_part = name.trim_start_matches("screentime_backup_").trim_end_matches(".json").to_string();
+                let date_part = name
+                    .trim_start_matches("screentime_backup_")
+                    .trim_end_matches(".json")
+                    .to_string();
                 if date_part.as_str() < today {
                     let newer = match &prev_date {
                         Some(pd) => date_part > *pd,
@@ -441,18 +592,26 @@ fn recycle_previous_backup(dir: &Path, today: &str) {
     if let Some(p) = prev_path {
         match trash::delete(&p) {
             Ok(()) => eprintln!("[backup] 已将上一份备份移入回收站: {}", p.display()),
-            Err(e) => eprintln!("[backup] 移入回收站失败（保留于原目录）: {} ({})", p.display(), e),
+            Err(e) => eprintln!(
+                "[backup] 移入回收站失败（保留于原目录）: {} ({})",
+                p.display(),
+                e
+            ),
         }
     }
 }
 
 fn prune_backup_files(dir: &Path, keep_days: u32) {
-    let cutoff = (Local::now() - Duration::days(keep_days as i64)).format("%Y-%m-%d").to_string();
+    let cutoff = (Local::now() - Duration::days(keep_days as i64))
+        .format("%Y-%m-%d")
+        .to_string();
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with("screentime_backup_") && name.ends_with(".json") {
-                let date_part = name.trim_start_matches("screentime_backup_").trim_end_matches(".json");
+                let date_part = name
+                    .trim_start_matches("screentime_backup_")
+                    .trim_end_matches(".json");
                 if date_part < cutoff.as_str() {
                     let _ = std::fs::remove_file(entry.path());
                 }
@@ -466,11 +625,19 @@ pub fn auto_backup_tick(app: &tauri::AppHandle) {
         Some(s) => s,
         None => return,
     };
-    let enabled = state.db.get_setting("backup_enabled").map(|v| v == "true").unwrap_or(false);
-    if !enabled { return; }
+    let enabled = state
+        .db
+        .get_setting("backup_enabled")
+        .map(|v| v == "true")
+        .unwrap_or(false);
+    if !enabled {
+        return;
+    }
     let today = today_str();
     let last = state.db.get_setting("backup_last_date").unwrap_or_default();
-    if last == today { return; }
+    if last == today {
+        return;
+    }
     if let Err(e) = perform_backup(app, None) {
         eprintln!("[auto-backup] 自动备份失败: {}", e);
     }
@@ -478,23 +645,45 @@ pub fn auto_backup_tick(app: &tauri::AppHandle) {
 
 #[tauri::command]
 pub fn get_backup_config(state: tauri::State<'_, Arc<AppState>>) -> BackupConfig {
-    let enabled = state.db.get_setting("backup_enabled").map(|v| v == "true").unwrap_or(false);
+    let enabled = state
+        .db
+        .get_setting("backup_enabled")
+        .map(|v| v == "true")
+        .unwrap_or(false);
     let path = state.db.get_setting("backup_path").unwrap_or_default();
-    let keep_days = state.db.get_setting("backup_keep_days").and_then(|v| v.parse::<u32>().ok()).unwrap_or(30);
+    let keep_days = state
+        .db
+        .get_setting("backup_keep_days")
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(30);
     let last_date = state.db.get_setting("backup_last_date").unwrap_or_default();
-    BackupConfig { enabled, path, keep_days, last_date }
+    BackupConfig {
+        enabled,
+        path,
+        keep_days,
+        last_date,
+    }
 }
 
 #[tauri::command]
-pub fn save_backup_config(state: tauri::State<'_, Arc<AppState>>, enabled: bool, path: String, keep_days: u32) -> Result<(), String> {
-    let _ = state.db.set_setting("backup_enabled", if enabled { "true" } else { "false" });
+pub fn save_backup_config(
+    state: tauri::State<'_, Arc<AppState>>,
+    enabled: bool,
+    path: String,
+    keep_days: u32,
+) -> Result<(), String> {
+    let _ = state
+        .db
+        .set_setting("backup_enabled", if enabled { "true" } else { "false" });
     if path.trim().is_empty() {
         let _ = state.db.set_setting("backup_path", "");
     } else {
         std::fs::create_dir_all(&path).map_err(|e| format!("无法创建备份目录：{}", e))?;
         let _ = state.db.set_setting("backup_path", &path);
     }
-    let _ = state.db.set_setting("backup_keep_days", &keep_days.to_string());
+    let _ = state
+        .db
+        .set_setting("backup_keep_days", &keep_days.to_string());
     Ok(())
 }
 
@@ -505,32 +694,56 @@ pub fn run_backup_now(app: tauri::AppHandle) -> Result<ExportResult, String> {
 }
 
 #[tauri::command]
-pub fn prune_data(state: tauri::State<'_, Arc<AppState>>, days: u32, device_ids: Option<Vec<String>>) -> Result<usize, String> {
+pub fn prune_data(
+    state: tauri::State<'_, Arc<AppState>>,
+    days: u32,
+    device_ids: Option<Vec<String>>,
+) -> Result<usize, String> {
     let ids = device_ids.unwrap_or_default();
     let n = if ids.is_empty() {
         state.db.prune_old(days, None).map_err(|e| e.to_string())?
     } else {
         let mut total = 0usize;
         for id in &ids {
-            total += state.db.prune_old(days, Some(id.as_str())).map_err(|e| e.to_string())?;
+            total += state
+                .db
+                .prune_old(days, Some(id.as_str()))
+                .map_err(|e| e.to_string())?;
         }
         total
     };
     if ids.is_empty() {
-        let _ = state.db.set_setting("data_retention_days", &days.to_string());
+        let _ = state
+            .db
+            .set_setting("data_retention_days", &days.to_string());
     }
     crate::logging::audit(
         "data_pruned",
-        &format!("days={days} device_scope={} deleted_rows={n}", if ids.is_empty() { "all".to_string() } else { ids.join(",") }),
+        &format!(
+            "days={days} device_scope={} deleted_rows={n}",
+            if ids.is_empty() {
+                "all".to_string()
+            } else {
+                ids.join(",")
+            }
+        ),
     );
     Ok(n)
 }
 
 #[tauri::command]
-pub fn list_devices_with_stats(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<crate::db::DeviceStats>, String> {
+pub fn list_devices_with_stats(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<crate::db::DeviceStats>, String> {
     let current_id = state.device_id.clone();
-    let current_name = state.db.get_setting("device_name").unwrap_or_else(|| current_id.clone());
-    state.db.list_devices_with_stats(&current_id, &current_name).map_err(|e| e.to_string())
+    let current_name = state
+        .db
+        .get_setting("device_name")
+        .unwrap_or_else(|| current_id.clone());
+    state
+        .db
+        .list_devices_with_stats(&current_id, &current_name)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -602,17 +815,58 @@ pub fn get_rules(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<RuleOut>,
 }
 
 #[tauri::command]
-pub fn add_rule(state: tauri::State<'_, Arc<AppState>>, field: String, match_type: String, pattern: String, category_id: String, priority: i32, enabled: bool) -> Result<i64, String> {
-    let id = state.db.insert_rule(&field, &match_type, &pattern, &category_id, priority, enabled).map_err(|e| e.to_string())?;
+pub fn add_rule(
+    state: tauri::State<'_, Arc<AppState>>,
+    field: String,
+    match_type: String,
+    pattern: String,
+    category_id: String,
+    priority: i32,
+    enabled: bool,
+) -> Result<i64, String> {
+    let id = state
+        .db
+        .insert_rule(
+            &field,
+            &match_type,
+            &pattern,
+            &category_id,
+            priority,
+            enabled,
+        )
+        .map_err(|e| e.to_string())?;
     crate::logging::audit("rule_added", &format!("field={field} match_type={match_type} pattern={pattern} category={category_id} enabled={enabled}"));
     reload_rules(&state);
     Ok(id)
 }
 
 #[tauri::command]
-pub fn update_rule(state: tauri::State<'_, Arc<AppState>>, id: i64, field: String, match_type: String, pattern: String, category_id: String, priority: i32, enabled: bool) -> Result<bool, String> {
-    state.db.update_rule(id, &field, &match_type, &pattern, &category_id, priority, enabled).map_err(|e| e.to_string())?;
-    crate::logging::audit("rule_updated", &format!("id={id} field={field} pattern={pattern}"));
+pub fn update_rule(
+    state: tauri::State<'_, Arc<AppState>>,
+    id: i64,
+    field: String,
+    match_type: String,
+    pattern: String,
+    category_id: String,
+    priority: i32,
+    enabled: bool,
+) -> Result<bool, String> {
+    state
+        .db
+        .update_rule(
+            id,
+            &field,
+            &match_type,
+            &pattern,
+            &category_id,
+            priority,
+            enabled,
+        )
+        .map_err(|e| e.to_string())?;
+    crate::logging::audit(
+        "rule_updated",
+        &format!("id={id} field={field} pattern={pattern}"),
+    );
     reload_rules(&state);
     Ok(true)
 }
@@ -638,10 +892,21 @@ fn reload_rules(state: &tauri::State<'_, Arc<AppState>>) {
 }
 
 #[tauri::command]
-pub fn set_autostart(app: tauri::AppHandle, state: tauri::State<'_, Arc<AppState>>, enabled: bool) -> Result<bool, String> {
+pub fn set_autostart(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    enabled: bool,
+) -> Result<bool, String> {
     let mgr = app.autolaunch();
-    if enabled { mgr.enable().map_err(|e| e.to_string())?; } else { mgr.disable().map_err(|e| e.to_string())?; }
-    state.db.set_setting("autostart", if enabled { "true" } else { "false" }).map_err(|e| e.to_string())?;
+    if enabled {
+        mgr.enable().map_err(|e| e.to_string())?;
+    } else {
+        mgr.disable().map_err(|e| e.to_string())?;
+    }
+    state
+        .db
+        .set_setting("autostart", if enabled { "true" } else { "false" })
+        .map_err(|e| e.to_string())?;
     Ok(true)
 }
 
@@ -683,22 +948,66 @@ pub fn get_devices(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<DeviceI
 #[tauri::command]
 pub fn get_settings(state: tauri::State<'_, Arc<AppState>>) -> Result<SettingsOut, String> {
     let device_id = state.device_id.clone();
-    let device_name = state.db.get_setting("device_name").unwrap_or_else(|| device_id.clone());
-    let idle = *state.idle_threshold.lock().unwrap_or_else(|e| e.into_inner());
-    let retention: u32 = state.db.get_setting("data_retention_days").and_then(|v| v.parse().ok()).unwrap_or(365);
-    let autostart = state.db.get_setting("autostart").map(|v| v == "true").unwrap_or(false);
-    Ok(SettingsOut { device_id, device_name, idle_threshold: idle, data_retention_days: retention, sample_interval: SAMPLE_INTERVAL, autostart })
+    let device_name = state
+        .db
+        .get_setting("device_name")
+        .unwrap_or_else(|| device_id.clone());
+    let idle = *state
+        .idle_threshold
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let retention: u32 = state
+        .db
+        .get_setting("data_retention_days")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(365);
+    let autostart = state
+        .db
+        .get_setting("autostart")
+        .map(|v| v == "true")
+        .unwrap_or(false);
+    Ok(SettingsOut {
+        device_id,
+        device_name,
+        idle_threshold: idle,
+        data_retention_days: retention,
+        sample_interval: SAMPLE_INTERVAL,
+        autostart,
+    })
 }
 
 #[tauri::command]
-pub fn save_settings(state: tauri::State<'_, Arc<AppState>>, idle_threshold: u64, device_name: String, data_retention_days: u32) -> Result<bool, String> {
-    *state.idle_threshold.lock().unwrap_or_else(|e| e.into_inner()) = idle_threshold;
+pub fn save_settings(
+    state: tauri::State<'_, Arc<AppState>>,
+    idle_threshold: u64,
+    device_name: String,
+    data_retention_days: u32,
+) -> Result<bool, String> {
+    *state
+        .idle_threshold
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = idle_threshold;
     *state.device_name.lock().unwrap_or_else(|e| e.into_inner()) = device_name.clone();
-    state.db.set_setting("idle_threshold", &idle_threshold.to_string()).map_err(|e| e.to_string())?;
-    state.db.set_setting("device_name", &device_name).map_err(|e| e.to_string())?;
-    state.db.set_setting(&format!("device_name:{}", state.device_id), &device_name).map_err(|e| e.to_string())?;
-    state.db.set_setting("data_retention_days", &data_retention_days.to_string()).map_err(|e| e.to_string())?;
-    crate::logging::audit("settings_saved", &format!("idle_threshold={idle_threshold} data_retention_days={data_retention_days}"));
+    state
+        .db
+        .set_setting("idle_threshold", &idle_threshold.to_string())
+        .map_err(|e| e.to_string())?;
+    state
+        .db
+        .set_setting("device_name", &device_name)
+        .map_err(|e| e.to_string())?;
+    state
+        .db
+        .set_setting(&format!("device_name:{}", state.device_id), &device_name)
+        .map_err(|e| e.to_string())?;
+    state
+        .db
+        .set_setting("data_retention_days", &data_retention_days.to_string())
+        .map_err(|e| e.to_string())?;
+    crate::logging::audit(
+        "settings_saved",
+        &format!("idle_threshold={idle_threshold} data_retention_days={data_retention_days}"),
+    );
     Ok(true)
 }
 
@@ -720,7 +1029,9 @@ async fn sampling_loop(state: Arc<AppState>) {
     let mut last_fg_err: Option<String> = None;
     loop {
         ticker.tick().await;
-        if !*state.tracking.lock().unwrap_or_else(|e| e.into_inner()) { break; }
+        if !*state.tracking.lock().unwrap_or_else(|e| e.into_inner()) {
+            break;
+        }
         let fg = match state.tracker.get_foreground_app() {
             Ok(a) => {
                 if let Some(prev) = last_fg_err.take() {
@@ -748,8 +1059,41 @@ async fn sampling_loop(state: Arc<AppState>) {
         };
         let idle = state.tracker.get_idle_seconds().unwrap_or(0);
         tracing::debug!(app = %fg.process_name, idle = idle, "foreground tick");
-        let threshold = *state.idle_threshold.lock().unwrap_or_else(|e| e.into_inner());
+        let threshold = *state
+            .idle_threshold
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let now = Local::now();
+
+        // 🔴 v1.2.11（P1，2026-10-29）：锁屏 / 登录窗必须**结束当前会话**，不能计入使用时长。
+        //
+        // 真机日志（macOS 2026-10-28）暴露：`loginwindow` 从 04:46 一路被记到 05:27，
+        // 连续 40+ 分钟每分钟都是 `switches=0`。用户明明在锁屏/息屏，
+        // 却被统计成「在用一个叫 loginwindow 的应用」。
+        //
+        // 为什么不能只靠 idle 阈值：`loginwindow` 出现时用户可能刚放下电脑，
+        // 距最后一次输入还没到 300s 阈值 —— 这段时间会被算进上一个应用或 loginwindow 自己。
+        // 而且 Windows 锁屏后前台是 `LockApp.exe` / `LogonUI.exe`，
+        // 桌面/登录界面也可能返回 `explorer` 之外的 shell 进程名，同属非使用状态。
+        //
+        // 处理方式与 `TrackerError::NoForeground` 一致（那里已经 `continue`）：
+        // 先把在跑的会话按「此刻」收尾，然后跳过本 tick 不新建会话。
+        if is_idle_screen_process(&fg.process_name) {
+            let finished: Option<ActiveSession> = {
+                let mut cur = state.current.lock().unwrap_or_else(|e| e.into_inner());
+                cur.take()
+            };
+            if let Some(active) = finished {
+                tracing::debug!(
+                    app = %active.app.process_name,
+                    proc = %fg.process_name,
+                    "检测到锁屏 / 登录界面，结束当前会话并暂停计时"
+                );
+                finalize_active_session(&state, &active, now);
+            }
+            continue;
+        }
+
         let current_minute = now.timestamp() / 60;
         if last_summary_minute != Some(current_minute) {
             if let Some(_m) = last_summary_minute {
@@ -760,22 +1104,36 @@ async fn sampling_loop(state: Arc<AppState>) {
             switch_in_minute = 0;
         }
         tick_in_minute += 1;
-        if !last_app_for_minute.is_empty() && last_app_for_minute != fg.process_name { switch_in_minute += 1; }
+        if !last_app_for_minute.is_empty() && last_app_for_minute != fg.process_name {
+            switch_in_minute += 1;
+        }
         last_app_for_minute = fg.process_name.clone();
         let platform = platform_name();
         let category = {
-            let user_cat = classify_app(&fg, &state.rules.lock().unwrap_or_else(|e| e.into_inner()));
+            let user_cat =
+                classify_app(&fg, &state.rules.lock().unwrap_or_else(|e| e.into_inner()));
             if user_cat != "other" {
                 user_cat
             } else {
-                if let Some(c) = crate::categorizer::lookup_local_only(&fg.process_name, fg.exe_path.as_deref(), &fg.name) {
+                if let Some(c) = crate::categorizer::lookup_local_only(
+                    &fg.process_name,
+                    fg.exe_path.as_deref(),
+                    &fg.name,
+                ) {
                     c
                 } else {
                     let pn = fg.process_name.clone();
                     let nm = fg.name.clone();
                     let ep = fg.exe_path.clone();
                     let cache = state.category_cache.clone();
-                    let other = tauri::async_runtime::spawn_blocking(move || crate::categorizer::lookup_category(&pn, ep.as_deref(), &nm, &cache)).await.unwrap_or_else(|e| { tracing::error!(error = %e, "spawn_blocking(lookup_category) 失败"); "other".to_string() });
+                    let other = tauri::async_runtime::spawn_blocking(move || {
+                        crate::categorizer::lookup_category(&pn, ep.as_deref(), &nm, &cache)
+                    })
+                    .await
+                    .unwrap_or_else(|e| {
+                        tracing::error!(error = %e, "spawn_blocking(lookup_category) 失败");
+                        "other".to_string()
+                    });
                     other
                 }
             }
@@ -785,24 +1143,54 @@ async fn sampling_loop(state: Arc<AppState>) {
             let finalize = match cur.as_ref() {
                 None => false,
                 Some(a) => {
-                    let same = a.app.process_name == fg.process_name && a.app.exe_path == fg.exe_path;
+                    let same =
+                        a.app.process_name == fg.process_name && a.app.exe_path == fg.exe_path;
                     let date_changed = a.started_at.date_naive() != now.date_naive();
                     !same || idle >= threshold || date_changed
                 }
             };
-            if finalize { cur.take() } else { if let Some(a) = cur.as_mut() { a.last_input_at = now; } None }
+            if finalize {
+                cur.take()
+            } else {
+                if let Some(a) = cur.as_mut() {
+                    a.last_input_at = now;
+                }
+                None
+            }
         };
-        if let Some(active) = to_finalize { finalize_active_session(&state, &active, now); }
+        if let Some(active) = to_finalize {
+            finalize_active_session(&state, &active, now);
+        }
         {
             let mut cur = state.current.lock().unwrap_or_else(|e| e.into_inner());
             if cur.is_none() {
                 let process_name = fg.process_name.clone();
-                let app_id = match state.db.upsert_app(&fg.name, &fg.process_name, fg.exe_path.as_deref(), &category, platform) {
+                let app_id = match state.db.upsert_app(
+                    &fg.name,
+                    &fg.process_name,
+                    fg.exe_path.as_deref(),
+                    &category,
+                    platform,
+                ) {
                     Ok(id) => id,
-                    Err(e) => { tracing::error!(error = %e, process = %fg.process_name, name = %fg.name, "upsert_app 失败，跳过本 tick"); continue; }
+                    Err(e) => {
+                        tracing::error!(error = %e, process = %fg.process_name, name = %fg.name, "upsert_app 失败，跳过本 tick");
+                        continue;
+                    }
                 };
-                *cur = Some(ActiveSession { app: fg, app_id, category_id: category.clone(), started_at: now, last_input_at: now });
-                let already_covered = state.rules.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|r| r.enabled && r.field == "process_name" && r.pattern == process_name);
+                *cur = Some(ActiveSession {
+                    app: fg,
+                    app_id,
+                    category_id: category.clone(),
+                    started_at: now,
+                    last_input_at: now,
+                });
+                let already_covered = state
+                    .rules
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .iter()
+                    .any(|r| r.enabled && r.field == "process_name" && r.pattern == process_name);
                 if !already_covered {
                     let st = Arc::clone(&state);
                     let pn = process_name.clone();
@@ -810,9 +1198,13 @@ async fn sampling_loop(state: Arc<AppState>) {
                     tauri::async_runtime::spawn(async move {
                         // v0.9.2：改用 ensure_rule（存在则跳过插入）——
                         // 既天然幂等（并发也不会重复），又不会把用户手动禁用的自动规则重新启用。
-                        if let Ok(_inserted) = st.db.ensure_rule("process_name", "equals", &pn, &cat, 0) {
+                        if let Ok(_inserted) =
+                            st.db.ensure_rule("process_name", "equals", &pn, &cat, 0)
+                        {
                             if let Ok(new_rules) = st.db.load_rules() {
-                                if let Ok(mut guard) = st.rules.lock() { *guard = new_rules; }
+                                if let Ok(mut guard) = st.rules.lock() {
+                                    *guard = new_rules;
+                                }
                             }
                         }
                     });
@@ -822,11 +1214,27 @@ async fn sampling_loop(state: Arc<AppState>) {
     }
 }
 
-fn period_ranges(period: &str) -> (String, String, String, String, String, String, String, String) {
+fn period_ranges(
+    period: &str,
+) -> (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+) {
     let now = Local::now();
     let today = now.date_naive();
-    let to_local = |d: NaiveDate, h: u32, mi: u32, s: u32| -> DateTime<Local> { d.and_hms_opt(h, mi, s).and_then(|dt| dt.and_local_timezone(Local).latest()).unwrap_or_else(|| now) };
-    let ymd = |y: i32, m: u32, d: u32| -> NaiveDate { NaiveDate::from_ymd_opt(y, m, d).unwrap_or(today) };
+    let to_local = |d: NaiveDate, h: u32, mi: u32, s: u32| -> DateTime<Local> {
+        d.and_hms_opt(h, mi, s)
+            .and_then(|dt| dt.and_local_timezone(Local).latest())
+            .unwrap_or(now)
+    };
+    let ymd =
+        |y: i32, m: u32, d: u32| -> NaiveDate { NaiveDate::from_ymd_opt(y, m, d).unwrap_or(today) };
     if period == "month" {
         let y = today.year();
         let m = today.month();
@@ -840,7 +1248,16 @@ fn period_ranges(period: &str) -> (String, String, String, String, String, Strin
         let yoy_start = to_local(ymd(yoy_y, m, 1), 0, 0, 0);
         let yoy_last = last_day_of_month(yoy_y, m);
         let yoy_end = to_local(ymd(yoy_y, m, yoy_last), 23, 59, 59);
-        (cur_start.to_rfc3339(), cur_end.to_rfc3339(), prev_start.to_rfc3339(), prev_end.to_rfc3339(), yoy_start.to_rfc3339(), yoy_end.to_rfc3339(), format!("{y}年{m}月"), format!("{py}年{pm}月"))
+        (
+            cur_start.to_rfc3339(),
+            cur_end.to_rfc3339(),
+            prev_start.to_rfc3339(),
+            prev_end.to_rfc3339(),
+            yoy_start.to_rfc3339(),
+            yoy_end.to_rfc3339(),
+            format!("{y}年{m}月"),
+            format!("{py}年{pm}月"),
+        )
     } else {
         let wd = today.weekday().num_days_from_monday() as i64;
         let this_mon = today - Duration::days(wd);
@@ -849,7 +1266,16 @@ fn period_ranges(period: &str) -> (String, String, String, String, String, Strin
         let prev_mon = this_mon - Duration::days(7);
         let prev_start = to_local(prev_mon, 0, 0, 0);
         let prev_end = to_local(this_mon, 0, 0, 0);
-        (cur_start.to_rfc3339(), cur_end.to_rfc3339(), prev_start.to_rfc3339(), prev_end.to_rfc3339(), String::new(), String::new(), "本周".to_string(), "上周".to_string())
+        (
+            cur_start.to_rfc3339(),
+            cur_end.to_rfc3339(),
+            prev_start.to_rfc3339(),
+            prev_end.to_rfc3339(),
+            String::new(),
+            String::new(),
+            "本周".to_string(),
+            "上周".to_string(),
+        )
     }
 }
 
@@ -944,65 +1370,94 @@ async fn fetch_latest_release() -> Result<(String, String, String), String> {
     // ===== ① GitHub releases.atom =====
     // 每个通道用「match 求出 Option<错误>」而不是往同一个 mut 变量里赋值 ——
     // 后者会被编译器判为「初值从未被读」，也更容易漏掉分支。
-    let atom_err: Option<String> =
-        match client.get("https://github.com/Slk90s/screentime-pro/releases.atom").send().await {
-            Ok(resp) if resp.status().is_success() => match resp.text().await {
-                Ok(xml) => match parse_atom_latest_release(&xml) {
-                    Some(info) => {
-                        // 来源必须留痕：用户报「检测不到更新」时，日志一行就能区分
-                        // 「走的哪条通道」—— 走 Atom 说明网络通、问题在版本比较；
-                        // 走镜像说明 GitHub 不可达、问题在网络。两者处置完全不同。
-                        tracing::info!(version = %info.0, "更新来源：GitHub Atom");
-                        return Ok(info);
-                    }
-                    None => Some("Atom feed 解析失败（未找到合法版本条目）".to_string()),
-                },
-                Err(e) => Some(format!("Atom feed 读取失败: {}", e)),
+    let atom_err: Option<String> = match client
+        .get("https://github.com/Slk90s/screentime-pro/releases.atom")
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => match resp.text().await {
+            Ok(xml) => match parse_atom_latest_release(&xml) {
+                Some(info) => {
+                    // 来源必须留痕：用户报「检测不到更新」时，日志一行就能区分
+                    // 「走的哪条通道」—— 走 Atom 说明网络通、问题在版本比较；
+                    // 走镜像说明 GitHub 不可达、问题在网络。两者处置完全不同。
+                    tracing::info!(version = %info.0, "更新来源：GitHub Atom");
+                    return Ok(info);
+                }
+                None => Some("Atom feed 解析失败（未找到合法版本条目）".to_string()),
             },
-            Ok(resp) => Some(format!("Atom feed 返回 HTTP {}", resp.status().as_u16())),
-            Err(e) => Some(format!("Atom feed 请求失败: {}", e)),
-        };
+            Err(e) => Some(format!("Atom feed 读取失败: {}", e)),
+        },
+        Ok(resp) => Some(format!("Atom feed 返回 HTTP {}", resp.status().as_u16())),
+        Err(e) => Some(format!("Atom feed 请求失败: {}", e)),
+    };
     // v1.2.10：必须 warn 才能落盘（release 默认级别 info）。用户反馈「没检测到更新」时，
     // 这条日志是第一现场 —— 原来整条链路失败是静默的，根本无法判断请求发没发出去。
-    tracing::warn!(error = atom_err.as_deref().unwrap_or("未知"), "检查更新：GitHub atom 通道失败，改试 GitHub API");
+    tracing::warn!(
+        error = atom_err.as_deref().unwrap_or("未知"),
+        "检查更新：GitHub atom 通道失败，改试 GitHub API"
+    );
 
     // ===== ② GitHub REST API =====
-    let api_err: Option<String> =
-        match client.get("https://api.github.com/repos/Slk90s/screentime-pro/releases/latest").header("Accept", "application/vnd.github+json").send().await {
-            Ok(resp) if resp.status().is_success() => {
-                #[derive(serde::Deserialize)] struct GhRelease { tag_name: String, html_url: String, body: Option<String> }
-                match resp.json::<GhRelease>().await {
-                    Ok(gh) => {
-                        // v1.2.10：与 atom 同口径校验。API 的 /releases/latest 会跳过 prerelease，
-                        // 但「没标 prerelease 的资源型 release」仍会漏过来 —— 一旦漏过来前端就弹
-                        // 「发现新版本 ocr-runtime」的死链。校验不过就当本通道失败，继续走镜像。
-                        if is_version_tag(&gh.tag_name) {
-                            let latest = gh.tag_name.trim().trim_start_matches(['v', 'V']).to_string();
-                            tracing::info!(
-                                version = %latest,
-                                atom_error = atom_err.as_deref().unwrap_or("未知"),
-                                "更新来源：GitHub API（Atom 通道已失败，原因见 atom_error）"
-                            );
-                            return Ok((latest, gh.html_url, gh.body.unwrap_or_default()));
-                        }
-                        Some(format!("REST API 返回的 tag 不是版本号：{}", gh.tag_name))
+    let api_err: Option<String> = match client
+        .get("https://api.github.com/repos/Slk90s/screentime-pro/releases/latest")
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            #[derive(serde::Deserialize)]
+            struct GhRelease {
+                tag_name: String,
+                html_url: String,
+                body: Option<String>,
+            }
+            match resp.json::<GhRelease>().await {
+                Ok(gh) => {
+                    // v1.2.10：与 atom 同口径校验。API 的 /releases/latest 会跳过 prerelease，
+                    // 但「没标 prerelease 的资源型 release」仍会漏过来 —— 一旦漏过来前端就弹
+                    // 「发现新版本 ocr-runtime」的死链。校验不过就当本通道失败，继续走镜像。
+                    if is_version_tag(&gh.tag_name) {
+                        let latest = gh
+                            .tag_name
+                            .trim()
+                            .trim_start_matches(['v', 'V'])
+                            .to_string();
+                        tracing::info!(
+                            version = %latest,
+                            atom_error = atom_err.as_deref().unwrap_or("未知"),
+                            "更新来源：GitHub API（Atom 通道已失败，原因见 atom_error）"
+                        );
+                        return Ok((latest, gh.html_url, gh.body.unwrap_or_default()));
                     }
-                    Err(e) => Some(format!("REST API 解析失败: {}", e)),
+                    Some(format!("REST API 返回的 tag 不是版本号：{}", gh.tag_name))
                 }
+                Err(e) => Some(format!("REST API 解析失败: {}", e)),
             }
-            Ok(resp) => {
-                let status = resp.status();
-                let body = resp.text().await.unwrap_or_default();
-                // 先按字符截断再判是否真的截过 —— 判定用 `body.len() > body_short.len()`
-                // 是安全的：截断后字节数必 ≤ 原字节数，等号只在「未截断」时成立。
-                let body_short: String = body.chars().take(API_ERROR_BODY_CHARS).collect();
-                let api_body =
-                    if body.len() > body_short.len() { format!("{body_short}…") } else { body };
-                Some(format!("REST API 返回 HTTP {}：{}", status.as_u16(), api_body))
-            }
-            Err(e) => Some(format!("REST API 请求失败: {}", e)),
-        };
-    tracing::warn!(error = api_err.as_deref().unwrap_or("未知"), "检查更新：GitHub API 通道失败，改试 Gitee 镜像");
+        }
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            // 先按字符截断再判是否真的截过 —— 判定用 `body.len() > body_short.len()`
+            // 是安全的：截断后字节数必 ≤ 原字节数，等号只在「未截断」时成立。
+            let body_short: String = body.chars().take(API_ERROR_BODY_CHARS).collect();
+            let api_body = if body.len() > body_short.len() {
+                format!("{body_short}…")
+            } else {
+                body
+            };
+            Some(format!(
+                "REST API 返回 HTTP {}：{}",
+                status.as_u16(),
+                api_body
+            ))
+        }
+        Err(e) => Some(format!("REST API 请求失败: {}", e)),
+    };
+    tracing::warn!(
+        error = api_err.as_deref().unwrap_or("未知"),
+        "检查更新：GitHub API 通道失败，改试 Gitee 镜像"
+    );
 
     // ===== ③ Gitee 镜像 =====
     match fetch_gitee_latest(&client).await {
@@ -1088,7 +1543,10 @@ async fn fetch_gitee_latest(client: &reqwest::Client) -> Result<(String, String,
         let url = format!("https://gitee.com/create100/screentime-pro/releases/tag/{tag}");
         return Ok((version, url, r.body.clone().unwrap_or_default()));
     }
-    Err(format!("镜像 {} 条 release 中没有一个合法版本号", list.len()))
+    Err(format!(
+        "镜像 {} 条 release 中没有一个合法版本号",
+        list.len()
+    ))
 }
 
 /// 校验 release tag 是否是版本号：可选 `v`/`V` 前缀，2~3 段数字，可带 `-beta` / `+build` 后缀。
@@ -1097,7 +1555,10 @@ async fn fetch_gitee_latest(client: &reqwest::Client) -> Result<(String, String,
 /// 迟早漂移（本项目已经栽过三次「同一判断写了两处」的跟头）。
 fn is_version_tag(tag: &str) -> bool {
     let t = tag.trim();
-    let core = t.strip_prefix('v').or_else(|| t.strip_prefix('V')).unwrap_or(t);
+    let core = t
+        .strip_prefix('v')
+        .or_else(|| t.strip_prefix('V'))
+        .unwrap_or(t);
     // 预发布后缀与构建元数据不参与判定：`1.3.0-beta` 是合法 tag，主版本仍是 1.3.0
     let core = core.split('-').next().unwrap_or("");
     let core = core.split('+').next().unwrap_or("");
@@ -1111,10 +1572,20 @@ fn is_version_tag(tag: &str) -> bool {
 
 #[tauri::command]
 pub async fn check_for_update(app: tauri::AppHandle) -> Result<UpdateInfo, String> {
-    let current = app.config().version.clone().unwrap_or_else(|| "0.0.0".to_string());
+    let current = app
+        .config()
+        .version
+        .clone()
+        .unwrap_or_else(|| "0.0.0".to_string());
     let (latest, url, notes) = fetch_latest_release().await?;
     let has_update = semver_gt(&latest, &current);
-    Ok(UpdateInfo { current, latest, has_update, url, notes })
+    Ok(UpdateInfo {
+        current,
+        latest,
+        has_update,
+        url,
+        notes,
+    })
 }
 
 fn parse_atom_latest_release(xml: &str) -> Option<(String, String, String)> {
@@ -1123,19 +1594,38 @@ fn parse_atom_latest_release(xml: &str) -> Option<(String, String, String)> {
     let entry = entry_re.find(xml)?;
     let block = entry.as_str();
     let title_re = Regex::new(r"<title[^>]*>([\s\S]*?)</title>").ok()?;
-    let raw_title = title_re.captures(block)?.get(1)?.as_str().trim().to_string();
-    let tag = raw_title.trim_start_matches("ScreenTime Pro ").trim_start_matches("Release ").trim_start_matches("release ").trim().trim_start_matches('v').to_string();
+    let raw_title = title_re
+        .captures(block)?
+        .get(1)?
+        .as_str()
+        .trim()
+        .to_string();
+    let tag = raw_title
+        .trim_start_matches("ScreenTime Pro ")
+        .trim_start_matches("Release ")
+        .trim_start_matches("release ")
+        .trim()
+        .trim_start_matches('v')
+        .to_string();
     // v1.2.10：tag 必须过版本号校验，否则返回 None 让上层回落到 API / 镜像。
     // 为什么不能只 trim 前缀就往上走：本项目确有「非版本型 release」的用法
     // （`ocr-runtime` 就是 OCR 运行库的下载源）。一旦它被发到 GitHub 且发生在
     // 最新位置，atom feed 第一条就是它 —— 不校验的话前端会弹
     // 「发现新版本 ocr-runtime」的死链。返回 None 比返回脏 tag 安全。
-    if !is_version_tag(&tag) { return None; }
+    if !is_version_tag(&tag) {
+        return None;
+    }
     let link_re = Regex::new(r#"<link[^>]*href="([^"]+)""#).ok()?;
     let url = link_re.captures(block)?.get(1)?.as_str().to_string();
     let sum_re = Regex::new(r"<summary[^>]*>([\s\S]*?)</summary>").ok()?;
-    let notes = sum_re.captures(block).and_then(|c| c.get(1)).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
-    if tag.is_empty() { return None; }
+    let notes = sum_re
+        .captures(block)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().trim().to_string())
+        .unwrap_or_default();
+    if tag.is_empty() {
+        return None;
+    }
     Some((tag, url, notes))
 }
 
@@ -1174,8 +1664,12 @@ fn semver_gt(latest: &str, current: &str) -> bool {
     for i in 0..3 {
         let lv = l.get(i).copied().unwrap_or(0);
         let cv = c.get(i).copied().unwrap_or(0);
-        if lv > cv { return true; }
-        if lv < cv { return false; }
+        if lv > cv {
+            return true;
+        }
+        if lv < cv {
+            return false;
+        }
     }
     false
 }
@@ -1186,7 +1680,10 @@ fn semver_gt(latest: &str, current: &str) -> bool {
 /// 把 `v1.2.8` 读成 `2.8.0` 的根因。
 fn parse_version(s: &str) -> Option<Vec<u32>> {
     let t = s.trim();
-    let core = t.strip_prefix('v').or_else(|| t.strip_prefix('V')).unwrap_or(t);
+    let core = t
+        .strip_prefix('v')
+        .or_else(|| t.strip_prefix('V'))
+        .unwrap_or(t);
     // 预发布后缀与构建元数据不参与比较（`1.3.0-beta` 的主版本就是 1.3.0）
     let core = core.split('-').next().unwrap_or("");
     let core = core.split('+').next().unwrap_or("");
@@ -1198,7 +1695,11 @@ fn parse_version(s: &str) -> Option<Vec<u32>> {
         // 空段（`1..3` / `1.2.`）同样视为非法，不能当 0
         out.push(p.parse::<u32>().ok()?);
     }
-    if out.is_empty() { None } else { Some(out) }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 // ===== v1.2.4（2026-10-22）：自动检查更新 =====
@@ -1254,15 +1755,28 @@ pub async fn auto_check_update(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<AutoUpdateInfo, String> {
-    let current = app.config().version.clone().unwrap_or_else(|| "0.0.0".to_string());
-    let no_update = AutoUpdateInfo { has_update: false, current: current.clone(), latest: String::new(), url: String::new() };
+    let current = app
+        .config()
+        .version
+        .clone()
+        .unwrap_or_else(|| "0.0.0".to_string());
+    let no_update = AutoUpdateInfo {
+        has_update: false,
+        current: current.clone(),
+        latest: String::new(),
+        url: String::new(),
+    };
 
     // ① 节流：距上次成功检查不足 6h 就跳过，不发请求
     let now = Local::now().timestamp();
-    if let Some(last) = state.db.get_setting("update_last_check_at").and_then(|v| v.parse::<i64>().ok()) {
+    if let Some(last) = state
+        .db
+        .get_setting("update_last_check_at")
+        .and_then(|v| v.parse::<i64>().ok())
+    {
         // 负值（系统时间被回拨）也视为需要重新检查，避免永久锁死
         let elapsed = now - last;
-        if elapsed >= 0 && elapsed < UPDATE_CHECK_INTERVAL_SECS {
+        if (0..UPDATE_CHECK_INTERVAL_SECS).contains(&elapsed) {
             // v1.2.10：debug → info。这是「用户说没检测到更新」时最常见的答案，
             // 必须能落盘（release 默认级别 info，debug 会被直接丢弃）。
             tracing::info!(
@@ -1337,7 +1851,10 @@ pub async fn auto_check_update(
 
     // ⑤ 到这里才算「本次确认完成」，写时间戳。
     //    ⚠️ 三条出口（无新版 / 已 dismissed / 有新版本）都会执行到这里，不要提前 return。
-    match state.db.set_setting("update_last_check_at", &now.to_string()) {
+    match state
+        .db
+        .set_setting("update_last_check_at", &now.to_string())
+    {
         Ok(_) => tracing::info!(
             current = %current,
             latest = %latest,
@@ -1356,16 +1873,27 @@ pub async fn auto_check_update(
     }
 
     tracing::info!(current = %current, latest = %latest, "自动检查更新：发现新版本，将展示横幅");
-    Ok(AutoUpdateInfo { has_update: true, current, latest, url })
+    Ok(AutoUpdateInfo {
+        has_update: true,
+        current,
+        latest,
+        url,
+    })
 }
 
 /// 用户点「关闭」时记录该版本，不再重复提示。
 /// 单独一个命令而不是复用 save_settings：这里只改一个键，
 /// 走 save_settings 会顺带覆写其他设置（它要求传全部字段）。
 #[tauri::command]
-pub fn dismiss_update(state: tauri::State<'_, Arc<AppState>>, version: String) -> Result<bool, String> {
+pub fn dismiss_update(
+    state: tauri::State<'_, Arc<AppState>>,
+    version: String,
+) -> Result<bool, String> {
     let trimmed = version.trim();
-    state.db.set_setting("update_dismissed_version", trimmed).map_err(|e| e.to_string())?;
+    state
+        .db
+        .set_setting("update_dismissed_version", trimmed)
+        .map_err(|e| e.to_string())?;
     crate::logging::audit("update_dismissed", &format!("version={trimmed}"));
     Ok(true)
 }
@@ -1497,7 +2025,10 @@ impl StatusBarConfig {
 
 #[tauri::command]
 pub fn get_status_bar_config(state: tauri::State<'_, Arc<AppState>>) -> StatusBarConfig {
-    *state.status_bar_config.lock().unwrap_or_else(|e| e.into_inner())
+    *state
+        .status_bar_config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }
 
 #[tauri::command]
@@ -1518,8 +2049,17 @@ pub fn set_status_bar_config(
         (c.enabled, c.float_enabled, c.float_glass)
     };
     config.save(&state.db).map_err(|e| e.to_string())?;
-    crate::logging::audit("status_bar_config_saved", &format!("enabled={} float={} glass={} screenshot={}", config.enabled, config.float_enabled, config.float_glass, config.screenshot_enabled));
-    *state.status_bar_config.lock().unwrap_or_else(|e| e.into_inner()) = config;
+    crate::logging::audit(
+        "status_bar_config_saved",
+        &format!(
+            "enabled={} float={} glass={} screenshot={}",
+            config.enabled, config.float_enabled, config.float_glass, config.screenshot_enabled
+        ),
+    );
+    *state
+        .status_bar_config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = config;
     // v0.8.2：screenshot_enabled 的权威源在截图模块。设置页可能持有打开时的旧快照，
     // 保存状态栏配置时会把旧值回写缓存，导致浮窗按钮显隐与截图实际开关脱节——
     // 这里强制用 DB 权威值兜底覆盖。
@@ -1537,8 +2077,7 @@ pub fn set_status_bar_config(
     let old_shown = old_enabled && old_float;
     let new_shown = config.enabled && config.float_enabled;
     if old_shown != new_shown {
-        crate::float_window::set_float_visible(&app, new_shown)
-            .map_err(|e| e.to_string())?;
+        crate::float_window::set_float_visible(&app, new_shown).map_err(|e| e.to_string())?;
     }
     // v1.2.2：液态玻璃模式翻转 → 应用/清除系统材质 + 同步窗口高度（36 ↔ 44）。
     //
@@ -1567,7 +2106,10 @@ pub fn set_status_bar_config(
 
 #[tauri::command]
 pub fn get_system_metrics(state: tauri::State<'_, Arc<AppState>>) -> MetricsOut {
-    let cfg = *state.status_bar_config.lock().unwrap_or_else(|e| e.into_inner());
+    let cfg = *state
+        .status_bar_config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let snap = state.metrics_sampler.sample_all();
     MetricsOut {
         supported: true,
@@ -1592,7 +2134,62 @@ pub fn get_system_metrics(state: tauri::State<'_, Arc<AppState>>) -> MetricsOut 
 // 两者都不会报错、不会留日志，只能靠单测锁住。
 #[cfg(test)]
 mod tests {
-    use super::{is_version_tag, parse_atom_latest_release, semver_gt};
+    use super::{is_idle_screen_process, is_version_tag, parse_atom_latest_release, semver_gt};
+
+    /// 🐞 回归（P1，2026-10-29 @v1.2.11）：锁屏 / 登录界面不得计入使用时长。
+    ///
+    /// 真机日志里 `loginwindow` 被连续统计 40+ 分钟（04:46 → 05:27，每分钟 switches=0），
+    /// 用户明明在锁屏。采样循环现在用本函数提前 `continue` 并结束会话。
+    #[test]
+    fn idle_screen_processes_are_recognized() {
+        // 必须命中：各平台锁屏 / 登录界面
+        for name in [
+            "loginwindow",
+            "LoginWindow",
+            "LOGINWINDOW",
+            "LockApp",
+            "LockApp.exe",
+            "LogonUI",
+            "LogonUI.exe",
+            "gdm",
+            "gdm3",
+            "lightdm",
+            "sddm",
+        ] {
+            assert!(
+                is_idle_screen_process(name),
+                "{name} 应被判为锁屏 / 登录界面"
+            );
+        }
+    }
+
+    /// 精确匹配的边界：真实应用名不能被误杀成锁屏进程。
+    ///
+    /// 这是「不用 contains(\"lock\") 模糊匹配」的理由 —— 误杀会让用户
+    /// 正常使用的软件完全不计时，比多记几分钟锁屏严重得多。
+    #[test]
+    fn real_apps_are_not_mistaken_for_idle_screens() {
+        for name in [
+            "Google Chrome",
+            "Code",
+            "WeChat",
+            "unlock-app",
+            "BlockchainWallet",
+            "Clockify",
+            "login-helper",
+            "ScreenTime Pro",
+            "Finder",
+            "screentime-pro",
+        ] {
+            assert!(
+                !is_idle_screen_process(name),
+                "{name} 是正常应用，不能被当成锁屏界面"
+            );
+        }
+        // 空串 / 空白也不能命中
+        assert!(!is_idle_screen_process(""));
+        assert!(!is_idle_screen_process("   "));
+    }
 
     #[test]
     fn semver_gt_basic_ordering() {
@@ -1609,7 +2206,10 @@ mod tests {
         // 结论碰巧也是 true，但那是巧合 —— 换成 "v1.1.0" vs "1.2.8" 就会误报。
         assert!(semver_gt("v1.2.9", "1.2.8"));
         assert!(semver_gt("V1.2.9", "1.2.8"));
-        assert!(!semver_gt("v1.1.0", "1.2.8"), "v 前缀不能让低版本被判成新版本");
+        assert!(
+            !semver_gt("v1.1.0", "1.2.8"),
+            "v 前缀不能让低版本被判成新版本"
+        );
         assert!(!semver_gt("v1.2.8", "1.2.8"));
     }
 
@@ -1664,12 +2264,24 @@ mod tests {
         // 「重切同名 tag」的用户永远收不到提示，而且没有任何 UI 能撤销
         // （横幅本身已经不显示了）—— 这正是第一批 v1.2.10 刚修掉的问题会复发。
         // 它不会报错、不会留日志，只有这条测试能拦住。
-        assert!(!semver_gt("1.2.8", "1.2.8"), "相等必须返回 false，否则自愈不触发");
+        assert!(
+            !semver_gt("1.2.8", "1.2.8"),
+            "相等必须返回 false，否则自愈不触发"
+        );
         // v 前缀不能让「同一个版本」被当成两个不同版本：
         // GitHub tag 带 v 前缀，而数据库里存的是裸版本号，两边经常不同写法。
-        assert!(!semver_gt("v1.2.8", "1.2.8"), "dismissed 带 v、current 不带");
-        assert!(!semver_gt("1.2.8", "v1.2.8"), "current 带 v、dismissed 不带");
-        assert!(!semver_gt("V1.2.8", "v1.2.8"), "大写 V 与小写 v 视为同一版本");
+        assert!(
+            !semver_gt("v1.2.8", "1.2.8"),
+            "dismissed 带 v、current 不带"
+        );
+        assert!(
+            !semver_gt("1.2.8", "v1.2.8"),
+            "current 带 v、dismissed 不带"
+        );
+        assert!(
+            !semver_gt("V1.2.8", "v1.2.8"),
+            "大写 V 与小写 v 视为同一版本"
+        );
         // 段数不同但数值相等（缺位补 0 后相等）同样必须返回 false
         assert!(!semver_gt("1.2", "1.2.0"));
         assert!(!semver_gt("1.2.0", "1.2"));
@@ -1684,8 +2296,14 @@ mod tests {
         // 这两件事必须分开：「段数不足」是合法版本号（补 0），「有非数字段」才非法。
         // 若把 `1.2` 也当非法整体返回 false，就会漏掉真实的升级
         // （远端 tag 写 `1.3` 时用户永远收不到提示）。
-        assert!(semver_gt("1.2.8", "1.2"), "缺位的 current 补 0 后 1.2.0 < 1.2.8");
-        assert!(semver_gt("1.3", "1.2.8"), "缺位的 latest 补 0 后 1.3.0 > 1.2.8");
+        assert!(
+            semver_gt("1.2.8", "1.2"),
+            "缺位的 current 补 0 后 1.2.0 < 1.2.8"
+        );
+        assert!(
+            semver_gt("1.3", "1.2.8"),
+            "缺位的 latest 补 0 后 1.3.0 > 1.2.8"
+        );
         assert!(semver_gt("2", "1.999.999"), "单段版本号合法");
         assert!(!semver_gt("1", "1.0.0"), "1 与 1.0.0 数值相等");
         // 对照：带非数字段的才整体判非法

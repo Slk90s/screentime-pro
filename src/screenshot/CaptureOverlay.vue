@@ -339,6 +339,29 @@ const textHover = ref(false);
 const vw = ref(window.innerWidth);
 const vh = ref(window.innerHeight);
 
+/**
+ * 选区坐标系的宽高（CSS 像素），**以 payload 的逻辑尺寸为准**。
+ *
+ * v1.2.11（P0）：`vw/vh` 来自 `window.innerWidth`，窗口刚 `set_size` 完时
+ * WebView 可能尚未重排，读到的还是创建时的 800×600。而 Rust 已经把
+ * 「这轮截图的真实逻辑尺寸」算好了放在 payload 里（`width` / `height`，
+ * 由 `physical_width / scale_factor` 派生），与重排时机无关。
+ *
+ * 所有**选区绘制 / 边界 clamp / 全选**都必须走这两个值，否则
+ * 「全选只有半屏」「拖到右下角就拖不动」会重现。
+ * `vw/vh` 仅保留给 `sync()` 与极端兜底（payload 缺失时）。
+ */
+const cw = computed(() => {
+  const m = meta.value;
+  if (m && m.width > 0) return m.width;
+  return vw.value;
+});
+const ch = computed(() => {
+  const m = meta.value;
+  if (m && m.height > 0) return m.height;
+  return vh.value;
+});
+
 const annoEl = ref<HTMLCanvasElement | null>(null);
 const textEl = ref<HTMLInputElement | null>(null);
 /** 离屏背景层：只画一次整屏图，供马赛克 / 模糊取样（保证重绘结果稳定） */
@@ -347,12 +370,60 @@ let base: HTMLCanvasElement | null = null;
 let drag: Drag = null;
 let unlisten: (() => void) | null = null;
 
+/**
+ * 最近一轮**已开启**的截图序号（v1.2.11 整改 0.2；取代原先的 `sessionStarted` 布尔值）。
+ *
+ * 为什么布尔值不够：`capture-ready` 事件与「主动拉取」是两条独立入口，首轮
+ * 事件常因 WebView 尚未注册监听而丢失，需要拉取补上 —— 这层去重布尔值做得到。
+ * 但**遮罩窗开着时再按一次快捷键同样是受支持的路径**（后端会先藏旧遮罩、
+ * 重抓一帧、把 `state.frame` 换成新图，见 Rust 侧 `SELF_OVERLAY_LABELS` 注释）。
+ * 此时布尔值仍为 `true` → 新一轮载荷被当成重复投递吞掉 → 界面继续显示**旧冻结帧**，
+ * 而取字 / 导出裁的是 Rust 手里那张**新图**：用户框的是上一秒的画面，出来的
+ * 是这一秒的内容。序号能区分这两件事：相等/更小 = 重复投递，更大 = 新的一轮。
+ *
+ * 初值 0：真实轮次从 1 起，永远不会撞上。
+ */
+let lastSessionSeq = 0;
+
+/**
+ * 会话代际。每次 `startSession` / `endSession` 递增，用于让**上一轮未完成的
+ * 异步链**（`getConfig` / `frame` 等 await）在回来时发现「我已经过期」而提前返回。
+ *
+ * 不加这个会出现：用户按 Esc 取消（`endSession`）后，上一轮的 `screenshot.frame()`
+ * 才返回，把整屏图写进已重置的界面 —— 表现为「取消后画面闪一下」。
+ */
+let sessionGeneration = 0;
+
+/**
+ * 本轮结束：递增代际，让上一轮在途的异步链作废。
+ *
+ * ⚠️ 这里**不回退** `lastSessionSeq`：序号是后端全局递增的，回退反而会让
+ * 一份已经消费过的载荷被重复消费（事件与拉取双入口）。下一轮的序号必然大于它。
+ */
+function endSession() {
+  sessionGeneration++;
+}
+
 const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max);
 
-/** CSS 像素 → canvas 物理像素的比例（= 物理宽 / 窗口 CSS 宽，高 DPI 下 ≈ dpr） */
+/**
+ * CSS 像素 → canvas 物理像素的比例。
+ *
+ * v1.2.11（P0）：**优先用 payload 的 `scale_factor`，不再反推**。
+ *
+ * 旧实现是 `physical_width / vw`，而 `vw` 来自 `window.innerWidth`。
+ * 窗口刚被 `set_size` 调整过时，WebView 可能还没重排，`vw` 仍是旧值
+ * → `k` 偏大或偏小 → 选区裁剪与标注坐标整体缩放错误（真机「首次半屏」）。
+ *
+ * `scale_factor` 是 Rust 侧抓屏时确定的**权威值**（SCK 的 point_pixel_scale /
+ * xcap 的 scale_factor），与窗口何时重排无关，因此永远自洽。
+ * 只有在 payload 缺失（极端兜底）时才退回按窗口宽度反推。
+ */
 const k = computed(() => {
   const m = meta.value;
-  if (!m || vw.value <= 0) return 1;
+  if (!m) return 1;
+  if (m.scale_factor && m.scale_factor > 0) return m.scale_factor;
+  if (vw.value <= 0) return 1;
   return m.physical_width / vw.value;
 });
 
@@ -406,27 +477,28 @@ function handlePos(h: Handle) {
 }
 
 // 工具条/胶囊尽量贴在选区外侧；贴不下就翻到另一侧
+// ⚠️ v1.2.11：边界一律用 cw/ch（payload 权威尺寸），不用 vw/vh —— 后者可能滞后。
 const pillStyle = computed(() => {
   const b = box.value!;
-  const top = b.y >= 40 ? b.y - 36 : Math.min(b.y + b.h + 10, vh.value - 36);
-  return { left: `${clamp(b.x, 8, Math.max(8, vw.value - 260))}px`, top: `${top}px` };
+  const top = b.y >= 40 ? b.y - 36 : Math.min(b.y + b.h + 10, ch.value - 36);
+  return { left: `${clamp(b.x, 8, Math.max(8, cw.value - 260))}px`, top: `${top}px` };
 });
 
 const barTop = computed(() => {
   const b = box.value!;
   const below = b.y + b.h + 12;
-  return below + 46 <= vh.value ? below : Math.max(8, b.y - 58);
+  return below + 46 <= ch.value ? below : Math.max(8, b.y - 58);
 });
 
 const barStyle = computed(() => {
   const b = box.value!;
-  const center = clamp(b.x + b.w / 2, 240, Math.max(240, vw.value - 240));
+  const center = clamp(b.x + b.w / 2, 240, Math.max(240, cw.value - 240));
   return { left: `${center}px`, top: `${barTop.value}px`, transform: "translateX(-50%)" };
 });
 
 const styleBarStyle = computed(() => {
   const b = box.value!;
-  const center = clamp(b.x + b.w / 2, 200, Math.max(200, vw.value - 200));
+  const center = clamp(b.x + b.w / 2, 200, Math.max(200, cw.value - 200));
   const up = barTop.value >= 44;
   return {
     left: `${center}px`,
@@ -437,7 +509,7 @@ const styleBarStyle = computed(() => {
 
 const panelStyle = computed(() => {
   const b = box.value!;
-  const center = clamp(b.x + b.w / 2, 140, Math.max(140, vw.value - 140));
+  const center = clamp(b.x + b.w / 2, 140, Math.max(140, cw.value - 140));
   const up = barTop.value >= 44;
   return {
     left: `${center}px`,
@@ -449,10 +521,10 @@ const panelStyle = computed(() => {
 /** 取字面板比圆角面板高得多，单独算落点：优先放工具栏下方，放不下才翻到上方 */
 const ocrPanelStyle = computed(() => {
   const b = box.value!;
-  const center = clamp(b.x + b.w / 2, 190, Math.max(190, vw.value - 190));
+  const center = clamp(b.x + b.w / 2, 190, Math.max(190, cw.value - 190));
   const panelH = 214;
   const below = barTop.value + 46;
-  const top = below + panelH <= vh.value ? below : Math.max(8, barTop.value - panelH - 6);
+  const top = below + panelH <= ch.value ? below : Math.max(8, barTop.value - panelH - 6);
   return { left: `${center}px`, top: `${top}px`, transform: "translateX(-50%)" };
 });
 
@@ -762,8 +834,8 @@ function onMove(e: PointerEvent) {
     // 用 splice 原位替换（不是 filter+push），保持 z 序与撤销语义不漂移。
     const op = drag.from;
     if (op.k !== "text") return;
-    const nx = clamp(op.x + (p.x - drag.sx), 0, vw.value);
-    const ny = clamp(op.y + (p.y - drag.sy), 0, vh.value);
+    const nx = clamp(op.x + (p.x - drag.sx), 0, cw.value);
+    const ny = clamp(op.y + (p.y - drag.sy), 0, ch.value);
     const moved: Op = { ...op, x: nx, y: ny };
     const list = [...ops.value];
     list[drag.index] = moved;
@@ -771,8 +843,8 @@ function onMove(e: PointerEvent) {
     return;
   }
   if (drag.kind === "move") {
-    const nx = clamp(drag.from.x + (p.x - drag.sx), 0, Math.max(0, vw.value - drag.from.w));
-    const ny = clamp(drag.from.y + (p.y - drag.sy), 0, Math.max(0, vh.value - drag.from.h));
+    const nx = clamp(drag.from.x + (p.x - drag.sx), 0, Math.max(0, cw.value - drag.from.w));
+    const ny = clamp(drag.from.y + (p.y - drag.sy), 0, Math.max(0, ch.value - drag.from.h));
     box.value = { ...drag.from, x: nx, y: ny };
     return;
   }
@@ -854,10 +926,12 @@ function resizeBox(from: Box, handle: Handle, dx: number, dy: number): Box {
 
 function clampBox(b: Box): Box {
   let { x, y, w, h } = b;
-  w = clamp(w, DRAG_MIN, vw.value);
-  h = clamp(h, DRAG_MIN, vh.value);
-  x = clamp(x, 0, Math.max(0, vw.value - w));
-  y = clamp(y, 0, Math.max(0, vh.value - h));
+  // v1.2.11：边界用 cw/ch（payload 权威尺寸）。用 vw/vh 时，窗口刚 set_size 完
+  // 而 WebView 尚未重排 → 上限停在旧值 → 选区被卡在半屏，拖不到右下角。
+  w = clamp(w, DRAG_MIN, cw.value);
+  h = clamp(h, DRAG_MIN, ch.value);
+  x = clamp(x, 0, Math.max(0, cw.value - w));
+  y = clamp(y, 0, Math.max(0, ch.value - h));
   return { x, y, w, h };
 }
 
@@ -976,7 +1050,10 @@ function undo() {
 function selectAll() {
   tool.value = "none";
   activePanel.value = null;
-  box.value = { x: 0, y: 0, w: vw.value, h: vh.value };
+  // v1.2.11（P0）：全选必须覆盖**整块屏幕**，用 payload 的权威尺寸。
+  // 旧实现用 vw/vh（window.innerWidth），首次截图时 WebView 尚未按新尺寸重排，
+  // 这里拿到的还是 800×600 之类的旧值 → 「全选只有半屏」，正是真机症状。
+  box.value = { x: 0, y: 0, w: cw.value, h: ch.value };
 }
 
 // ===== 提交 / 取消 =====
@@ -1013,25 +1090,27 @@ function compose(): string | null {
   return c.toDataURL("image/png");
 }
 
-async function cancel() {
-  try {
-    await screenshot.cancel();
-  } finally {
-    reset();
-    await getCurrentWindow().hide();
+  async function cancel() {
+    try {
+      await screenshot.cancel();
+    } finally {
+      endSession();
+      reset();
+      await getCurrentWindow().hide();
+    }
   }
-}
 
-async function commit(copy: boolean, save: boolean) {
-  const png = compose();
-  if (!png) return;
-  try {
-    await screenshot.commit({ pngBase64: png, copy, save });
-  } finally {
-    reset();
-    await getCurrentWindow().hide();
+  async function commit(copy: boolean, save: boolean) {
+    const png = compose();
+    if (!png) return;
+    try {
+      await screenshot.commit({ pngBase64: png, copy, save });
+    } finally {
+      endSession();
+      reset();
+      await getCurrentWindow().hide();
+    }
   }
-}
 
 function reset() {
   meta.value = null;
@@ -1110,13 +1189,58 @@ onMounted(async () => {
   }
   window.addEventListener("resize", sync);
   window.addEventListener("keydown", onKey);
-  unlisten = await listen<CaptureReadyPayload>("capture-ready", async (ev) => {
+
+  // v1.2.11（P0）：把「打开一轮截图」做成幂等入口，事件与主动拉取共用。
+  //
+  // 🔴 真机 bug（macOS 2026-10-28）：**第一次截图只有半个屏幕，第二次才正常**。
+  // 根因不在抓屏（日志证明两次都是 2560×1440），而在事件竞态：
+  // 遮罩窗 `visible(false)` 懒创建，首次截图时 WebView 正在从头加载 SPA，
+  // Rust 的 `emit_to` 即发即弃；本文件的监听器要等 `onMounted` 里的 `await listen`
+  // 完成才注册，晚于事件 → 载荷永久丢失 → `meta` 恒为 null、
+  // `vw/vh` 停在窗口创建默认值（800×600）→ `selectAll()` 只有半屏、
+  // `k` 算出错误的缩放比 → 导出图也按错的尺寸裁剪。
+  // 第二次截图时窗口已存在、WebView 已就绪，于是「恢复正常」。
+  //
+  // 现在两条入口都收敛到 `startSession`，由载荷里的 `seq` 去重，
+  // 谁先到都不会重复 reset；而序号变大说明是**新一轮截图**，会重开一轮。
+
+  /**
+   * 应用一份截图元信息并拉取整屏帧。
+   *
+   * ⚠️ 必须先 `await nextTick()` + 一帧 rAF 再 `sync()`：
+   * Rust 侧是 `set_position` / `set_size` → `show()` → `emit`，
+   * `set_size` 返回**不代表 WebView 已完成重排**。窗口从 800×600 变成
+   * 2560×1440 后立刻读 `window.innerWidth`，拿到的可能还是旧值。
+   * 等两帧能确保布局已落地（真机上这一步是「半屏」的另一半原因）。
+   *
+   * ⚠️ 代际守卫：本函数体内有多处 `await`。若用户在等待期间按 Esc 取消
+   * （`endSession()` 递增代际），上一轮的异步仍会继续跑，可能把
+   * `imgUrl` / `meta` 写进已经重置的新一轮 —— 表现为「取消后画面突然闪一下」。
+   * 用 `generation` 递增做失效判断，每次 await 回来都核对一次。
+   * 遮罩窗开着时重新触发截图走的也是这里：序号变大 → 代际跟着变大 →
+   * 上一轮在途的 `frame()` 回来时自动作废，不会把旧帧写进新一轮。
+   */
+  async function startSession(payload: CaptureReadyPayload) {
+    // 序号没变大 = 同一帧的重复投递（事件与主动拉取各来一次）→ 丢弃。
+    // `?? 0` 兜的是「载荷里没有 seq」：此时不去重，宁可多开一轮也不能不刷新画面。
+    const seq = payload.seq ?? 0;
+    if (seq > 0 && seq <= lastSessionSeq) return;
+    lastSessionSeq = Math.max(lastSessionSeq, seq);
+    const myGen = ++sessionGeneration;
+
     reset();
+    meta.value = payload;
+    radius.value = payload.default_radius ?? 8;
+
+    // 等布局稳定后再取窗口尺寸（见函数头说明）
+    await nextTick();
+    await new Promise<void>((r) => requestAnimationFrame(() => r()));
+    if (myGen !== sessionGeneration) return; // 已被取消 / 被新一轮取代
     sync();
-    meta.value = ev.payload;
-    radius.value = ev.payload.default_radius ?? 8;
+
     try {
       const cfg = await screenshot.getConfig();
+      if (myGen !== sessionGeneration) return;
       autoSave.value = cfg.auto_save;
       radius.value = cfg.corner_radius;
     } catch {
@@ -1124,12 +1248,35 @@ onMounted(async () => {
     }
     try {
       const url = await screenshot.frame();
+      if (myGen !== sessionGeneration) return; // 帧回来时本轮已失效
       imgUrl.value = url;
       await loadBase(url);
     } catch (err) {
       log.warn("[capture] 拉取整屏帧失败", err);
     }
+  }
+
+  unlisten = await listen<CaptureReadyPayload>("capture-ready", async (ev) => {
+    await startSession(ev.payload);
+    // 先把这一帧用起来，**再**清 Rust 侧待取槽：否则事件与拉取两条入口会互相
+    // 「吃掉」对方的载荷（遮罩开着时连按快捷键，A 的事件把槽里 B 的载荷 take 走
+    // 又丢弃，B 的事件若没到就再也刷不出新帧）。清槽仍然要做 —— 残留的旧载荷
+    // 会在窗口重建后被当成新截图消费；`seq` 去重保证同帧的第二份载荷只会空转。
+    const taken = await screenshot.takeReady().catch(() => null);
+    if (taken) await startSession(taken);
   });
+
+  // 关键兜底：监听器注册完成之后，主动拉一次。
+  // 若事件早于监听器（首次截图常态）→ 这里拿到载荷，正常开一轮；
+  // 若事件已被上面的监听器消费 → 返回 null，不重复 reset。
+  try {
+    const pending = await screenshot.takeReady();
+    if (pending) {
+      await startSession(pending);
+    }
+  } catch (err) {
+    log.warn("[capture] 主动拉取截图元信息失败", err);
+  }
 });
 
 onBeforeUnmount(() => {

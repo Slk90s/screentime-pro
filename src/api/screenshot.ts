@@ -20,6 +20,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "./tracker";
 import type {
+  CaptureReadyPayload,
   OcrEngineInfo,
   OcrOut,
   ScreenshotConfig,
@@ -92,6 +93,20 @@ export const screenshot = {
    * 只在遮罩窗内使用；会话结束（提交/取消）后返回空串。
    */
   frame: (): Promise<string> => invoke<string>("screenshot_frame"),
+
+  /**
+   * v1.2.11：主动拉取本次截图的元信息（消除 `capture-ready` 事件的竞态）。
+   *
+   * 遮罩窗是懒创建的，首次截图时 WebView 还在加载，Rust 侧的 `emit_to`
+   * 会发给「尚未注册监听」的页面 → 事件丢失 → 首截只有半屏。
+   * 前端在 `onMounted` 注册完监听后立刻调用本方法兜底。
+   *
+   * 返回 `null` 表示「已被事件消费」或「本轮尚无新截图」，调用方应忽略。
+   */
+  takeReady: (): Promise<CaptureReadyPayload | null> =>
+    isTauri
+      ? invoke<CaptureReadyPayload | null>("take_capture_ready")
+      : Promise.resolve(null),
 
   commit: (args: CommitArgs): Promise<ScreenshotResult> =>
     invoke<ScreenshotResult>("screenshot_commit", { ...args }),

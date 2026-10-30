@@ -151,9 +151,7 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{
-    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
-};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 /// 遮罩窗固定 label（同时声明在 tauri.conf.json 的 windows[]，保证权限与幂等复用）
 pub const CAPTURE_WINDOW_LABEL: &str = "capture";
@@ -176,6 +174,23 @@ pub struct ScreenshotState {
     /// 本次截图被临时隐藏的自家窗口 label（只为这些恢复可见）
     pub hidden: Mutex<Vec<String>>,
     pub config: Mutex<ScreenshotConfig>,
+    /// v1.2.11：本次截图待前端拉取的元信息。
+    ///
+    /// 为什么要有它（而不是直接 `emit_to` 完事）：遮罩窗懒创建时 WebView 首次加载
+    /// 较慢，`emit_to` 是即发即弃的，前端监听器若尚未注册，事件就永久丢失 ——
+    /// 真机表现是「第一次截图只有半屏」。存一份在这里，前端注册完监听后
+    /// 主动 `invoke("take_capture_ready")` 兜底，事件早晚都不会丢。
+    pub pending_capture: Mutex<Option<CaptureReadyPayload>>,
+    /// 截图轮次序号（v1.2.11 整改 0.2）：每轮 `begin_capture_inner` 递增，
+    /// 随载荷发给遮罩窗。
+    ///
+    /// 为什么必须有它（而不是前端一个 `sessionStarted` 布尔值）：遮罩窗开着时
+    /// **再按一次快捷键是受支持的路径**（见 `SELF_OVERLAY_LABELS` 含 `capture`
+    /// 的说明：先藏旧遮罩 → 抓新帧），此时 `state.frame` 已被换成新图，
+    /// 但前端拿旧图做的框选还在继续 → 取字/导出裁的是新图、选的是旧图，对不上。
+    /// 布尔值分不出「同一帧重复投递」和「新一轮截图」，序号能：小的/相等的丢弃，
+    /// 更大的重开一轮。
+    pub capture_seq: std::sync::atomic::AtomicU64,
 }
 
 impl ScreenshotState {
@@ -184,7 +199,19 @@ impl ScreenshotState {
             frame: Mutex::new(None),
             hidden: Mutex::new(Vec::new()),
             config: Mutex::new(config),
+            pending_capture: Mutex::new(None),
+            capture_seq: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// 开一轮新截图，返回它的序号（从 **1** 起）。
+    ///
+    /// 0 特意留空：前端把「没有序号」（`seq == 0`）当作兜底放行信号，
+    /// 真实轮次永远不会是 0，两者不会撞。
+    pub fn next_capture_seq(&self) -> u64 {
+        self.capture_seq
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+            + 1
     }
 }
 
@@ -669,9 +696,10 @@ async fn begin_capture_inner(app: &AppHandle) -> Result<(), String> {
     // v0.9.4：macOS「屏幕录制」权限闸门（P0）—— 收口到 `platform::Backend::ensure_ready`。
     // 宿主负责把它挪到阻塞线程：首次授权会弹系统授权框并同步等用户点击，
     // 直接跑在 async 任务里会占住 runtime 线程。非 macOS 平台恒 Ok（无 TCC 概念）。
-    if let Err(reason_code) = tauri::async_runtime::spawn_blocking(crate::screenshot::platform::Backend::ensure_ready)
-        .await
-        .unwrap_or_else(|e| Err(format!("__THREAD__:{e}")))
+    if let Err(reason_code) =
+        tauri::async_runtime::spawn_blocking(crate::screenshot::platform::Backend::ensure_ready)
+            .await
+            .unwrap_or_else(|e| Err(format!("__THREAD__:{e}")))
     {
         if let Some(reason) = reason_code.strip_prefix("__PERM__:") {
             // 权限未授权：发结构化事件给主窗，紧凑授权弹窗据此渲染（Task 81）
@@ -705,9 +733,10 @@ async fn begin_capture_inner(app: &AppHandle) -> Result<(), String> {
     // 冻结帧是物理像素，两者对不上（`xcap-0.9.8/src/macos/impl_monitor.rs:159`
     // vs `windows/impl_monitor.rs:236`，同一行代码两平台语义不同）。
     // 现统一改用 `img` 自身尺寸（`img` 就是这块屏的完整抓屏，天然自洽、零换算误差）。
-    let captured = tauri::async_runtime::spawn_blocking(crate::screenshot::platform::Backend::capture)
-        .await
-        .map_err(|e| format!("截图线程异常: {e}"))??;
+    let captured =
+        tauri::async_runtime::spawn_blocking(crate::screenshot::platform::Backend::capture)
+            .await
+            .map_err(|e| format!("截图线程异常: {e}"))??;
     // `capture_scale` = **抓屏侧**缩放因子（来自 `platform::Backend::capture`，
     // macOS 上是 SCK 的 `point_pixel_scale`、其它平台是 xcap 的 `scale_factor`）。
     // ⚠️ v1.1.1 之前这里叫 `scale`，与下方 `window_scale`（显示器侧）同名遮蔽，
@@ -716,7 +745,13 @@ async fn begin_capture_inner(app: &AppHandle) -> Result<(), String> {
     //    / 抓屏回落等场景会发散 —— 现在靠改名消除歧义。
     let (img, mx, my, mw, mh, capture_scale) = captured;
 
-    tracing::info!(w = img.width(), h = img.height(), x = mx, y = my, "整屏已抓取");
+    tracing::info!(
+        w = img.width(),
+        h = img.height(),
+        x = mx,
+        y = my,
+        "整屏已抓取"
+    );
     let phys_w = img.width();
     let phys_h = img.height();
     // 用**抓屏侧** scale 把物理像素换成 CSS 逻辑像素：这才是前端
@@ -802,21 +837,65 @@ async fn begin_capture_inner(app: &AppHandle) -> Result<(), String> {
 
     win.show().map_err(|e| format!("显示遮罩窗失败: {e}"))?;
     let _ = win.set_focus();
-    // 事件只带元信息（尺寸/DPI/默认样式），整屏图由前端在收到事件后调
-    // `screenshot_frame` 取回来——把几 MB 的图从事件通道里挪开，避免事件体过大。
-    let _ = app.emit_to(
-        CAPTURE_WINDOW_LABEL,
-        "capture-ready",
-        CaptureReadyPayload {
-            width: logical_w,
-            height: logical_h,
-            physical_width: phys_w,
-            physical_height: phys_h,
-            scale_factor: capture_scale,
-            default_radius: cfg.corner_radius,
-        },
-    );
+
+    // ③'' 事件发给前端，但**前端不再依赖"恰好收到这条事件"**（v1.2.11，P0）。
+    //
+    // 🔴 真机 bug（macOS 2026-10-28）：**第一次截图只有半个屏幕，第二次才正常**。
+    // 根因不是抓屏（日志证明两次都是 2560×1440、完全正确），而是事件丢了：
+    //   遮罩窗是 `visible(false)` **懒创建**的（`ensure_capture_window`），
+    //   首次截图时 WebView 要从头加载整个 SPA。`emit_to` 是**即发即弃**的，
+    //   前端此时监听器还没注册（`onMounted` 里的 `await listen(...)` 尚未完成），
+    //   事件被直接丢弃 → `meta` 一直是 null、`imgUrl` 为空 →
+    //   `vw/vh` 停在窗口创建时的默认值（800×600）→ `selectAll()` 得到的选区
+    //   只有半个屏，导出图也跟着按错误的 `k` 裁剪。
+    //   第二次截图时窗口已存在、WebView 已就绪，监听器在位，于是"恢复正常"。
+    //
+    // 修法：把载荷**存进 state**，事件只作"可以来拉了"的提示；
+    // 前端在 `onMounted` 里注册监听**之后**立刻主动 `invoke` 一次拉取
+    // （见 `take_capture_ready`）。这样无论事件早于还是晚于监听器，都不会丢。
+    //
+    // 事件仍保留：窗口已就绪时（第二次起）走事件是最省事的路径，
+    // 且避免前端每帧轮询。
+    let payload = CaptureReadyPayload {
+        seq: state.next_capture_seq(),
+        width: logical_w,
+        height: logical_h,
+        physical_width: phys_w,
+        physical_height: phys_h,
+        scale_factor: capture_scale,
+        default_radius: cfg.corner_radius,
+    };
+    // 先落一份到 state（供前端 `take_capture_ready` 拉取），再发事件。
+    // 顺序很重要：必须先存后发 —— 若先发后存，前端收到事件后立刻 invoke
+    // 拉取时会读到空槽（整改 0.2 起前端处理完事件还会再 take 一次清槽，
+    // 这个顺序保证那次 take 拿回的正是同一份载荷）。
+    *state
+        .pending_capture
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(payload.clone());
+    let _ = app.emit_to(CAPTURE_WINDOW_LABEL, "capture-ready", payload);
     Ok(())
+}
+
+/// 遮罩窗主动拉取本次截图的元信息（v1.2.11）。
+///
+/// 存在的唯一理由是**消除 `capture-ready` 事件与前端监听器注册之间的竞态**：
+/// 遮罩窗懒创建时 WebView 首次加载较慢，Rust 侧的 `emit_to` 会把事件发给
+/// 「还没开始监听」的页面，事件静默丢失（真机表现为「首截半屏」）。
+///
+/// 前端在 `onMounted` 注册完监听后立刻调用本命令，即可拿到同一份载荷；
+/// `take` 语义（取走即清空）保证同一帧不会被消费两次 —— 事件先到的情况下
+/// 前端已消费过，这里返回 `None`，不会重复 reset。
+///
+/// 整改 0.2 起去重的**权威判据是载荷里的 `seq`**（事件与拉取谁后到都会因
+/// 序号没变大而空转），`take` 只负责「槽位不残留」，不再单独承担防重复。
+#[tauri::command]
+pub fn take_capture_ready(state: tauri::State<'_, ScreenshotState>) -> Option<CaptureReadyPayload> {
+    state
+        .pending_capture
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
 }
 
 /// `capture-ready` 事件的载荷（Rust → 遮罩窗）。
@@ -833,6 +912,15 @@ async fn begin_capture_inner(app: &AppHandle) -> Result<(), String> {
 /// 可被日志与真机排障直接观测，而不是让前端去反推。
 #[derive(Clone, serde::Serialize)]
 pub struct CaptureReadyPayload {
+    /// **本轮截图的序号**（自 1 起严格递增，见 [`ScreenshotState::next_capture_seq`]）。
+    ///
+    /// 前端用它区分两种「又收到一份载荷」：
+    /// - 序号相同 → 事件与主动拉取对**同一帧**的重复投递 → 丢弃（这是原本
+    ///   `sessionStarted` 布尔值唯一做对的事）；
+    /// - 序号更大 → **新一轮截图**（遮罩窗开着时再按快捷键）→ 必须重开一轮，
+    ///   否则界面继续显示上一轮的冻结帧，而 `state.frame` 已经是新图，
+    ///   框选与取字/导出口径错位。
+    pub seq: u64,
     /// 冻结帧的 CSS 逻辑尺寸 = `physical_width ÷ scale_factor`（前端据此铺满）。
     pub width: f64,
     pub height: f64,
@@ -916,7 +1004,9 @@ fn capture_with_xcap() -> Result<(RgbaImage, i32, i32, i32, i32, f64), String> {
             .cloned()
             .unwrap_or_else(|| monitors[0].clone()),
     };
-    let img = m.capture_image().map_err(|e| format!("屏幕捕获失败: {e}"))?;
+    let img = m
+        .capture_image()
+        .map_err(|e| format!("屏幕捕获失败: {e}"))?;
     // scale 取目标屏自身的 scale_factor：Windows 是 per-monitor 物理/逻辑比、
     // macOS 是 pixel_width/width、Linux 是像素/逻辑像素比，与遮罩窗定位的
     // `window_scale`（改用 capture_scale 后）同源，保证逻辑尺寸换算一致。
@@ -935,14 +1025,7 @@ fn capture_with_xcap() -> Result<(RgbaImage, i32, i32, i32, i32, f64), String> {
         (f64::from(mx_raw) * scale).round() as i32,
         (f64::from(my_raw) * scale).round() as i32,
     );
-    tracing::debug!(
-        mx,
-        my,
-        mw,
-        mh,
-        scale,
-        "xcap 抓屏几何（已归一到物理像素）"
-    );
+    tracing::debug!(mx, my, mw, mh, scale, "xcap 抓屏几何（已归一到物理像素）");
     Ok((img, mx, my, mw as i32, mh as i32, scale))
 }
 
@@ -1069,6 +1152,12 @@ pub async fn screenshot_commit(
 pub fn screenshot_cancel(app: AppHandle) -> Result<(), String> {
     if let Some(state) = app.try_state::<ScreenshotState>() {
         *state.frame.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        // 本轮的元信息载荷一并清掉：它与 frame 同生命周期，留着会让「遮罩窗被重建」
+        // 时的主动拉取把上一轮的载荷当成本轮消费（`seq` 只能去重，认不出「这轮已经结束」）。
+        *state
+            .pending_capture
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
         restore_self(&app, &state);
     }
     hide_capture_window(&app);
@@ -1103,7 +1192,12 @@ fn prune_history(app: &AppHandle, app_state: &Arc<AppState>, state: &ScreenshotS
 /// 前端手动触发一次截图（设置页「立即截图」按钮，等价于按快捷键）
 #[tauri::command]
 pub fn screenshot_trigger(app: AppHandle, state: tauri::State<'_, ScreenshotState>) -> bool {
-    if !state.config.lock().unwrap_or_else(|e| e.into_inner()).enabled {
+    if !state
+        .config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .enabled
+    {
         return false;
     }
     begin_capture(&app);
@@ -1121,7 +1215,12 @@ pub fn screenshot_trigger_delayed(
     state: tauri::State<'_, ScreenshotState>,
     seconds: u32,
 ) -> bool {
-    if !state.config.lock().unwrap_or_else(|e| e.into_inner()).enabled {
+    if !state
+        .config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .enabled
+    {
         return false;
     }
     let seconds = seconds.clamp(1, 30);
@@ -1238,11 +1337,7 @@ pub fn screenshot_delete_many(
     let requested = ids.len();
     let mut deleted = 0u32;
     for id in ids {
-        if let Some(name) = state
-            .db
-            .delete_screenshot(id)
-            .map_err(|e| e.to_string())?
-        {
+        if let Some(name) = state.db.delete_screenshot(id).map_err(|e| e.to_string())? {
             let path = dir.join(&name);
             if path.exists() {
                 move_to_trash(&path);
@@ -1337,7 +1432,14 @@ pub async fn screenshot_ocr(
         if x2 - x1 < 1 || y2 - y1 < 1 {
             return Err("取字范围为空".into());
         }
-        imageops::crop_imm(img, x1 as u32, y1 as u32, (x2 - x1) as u32, (y2 - y1) as u32).to_image()
+        imageops::crop_imm(
+            img,
+            x1 as u32,
+            y1 as u32,
+            (x2 - x1) as u32,
+            (y2 - y1) as u32,
+        )
+        .to_image()
     };
 
     // ② 引擎选择与资源路径在此解析（读配置 + 探测文件系统），
@@ -1353,7 +1455,10 @@ pub async fn screenshot_ocr(
 
     // ③ 识别必须离开 async 上下文：WinRT 的 `IAsyncOperation::join()` 是阻塞等待，
     //    且 COM 初始化属线程级状态 —— 两者都要求「初始化与调用在同一线程」。
-    crate::logging::audit("ocr_run", &format!("engine={kind:?} region={width}x{height}"));
+    crate::logging::audit(
+        "ocr_run",
+        &format!("engine={kind:?} region={width}x{height}"),
+    );
     tauri::async_runtime::spawn_blocking(move || ocr_engine::recognize(kind, &paths, &crop))
         .await
         .map_err(|e| format!("取字任务异常：{e}"))?
@@ -1409,9 +1514,11 @@ pub fn screenshot_permission_status() -> ScreenshotPermissionStatus {
 /// ② 主动请求屏幕录制授权（弹系统框；**阻塞** → spawn_blocking 包裹）
 #[tauri::command]
 pub async fn screenshot_request_permission() -> Result<ScreenshotPermissionStatus, String> {
-    let s = tauri::async_runtime::spawn_blocking(crate::screenshot::platform::Backend::request_permission)
-        .await
-        .map_err(|e| format!("权限请求线程异常: {e}"))?;
+    let s = tauri::async_runtime::spawn_blocking(
+        crate::screenshot::platform::Backend::request_permission,
+    )
+    .await
+    .map_err(|e| format!("权限请求线程异常: {e}"))?;
     Ok(s)
 }
 
@@ -1484,6 +1591,26 @@ pub mod shortcut {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 🐞 回归（整改 0.2，2026-10-29 @v1.2.11）：**每一轮截图都要发一个可比较的序号**。
+    ///
+    /// 遮罩窗开着时再按一次快捷键是**受支持的路径**（`SELF_OVERLAY_LABELS` 含
+    /// `capture`：先藏旧遮罩 → 抓新帧 → `state.frame` 被换成新图）。
+    /// 前端若只用一个布尔值判断「本轮已开启」，第二轮的 `capture-ready` 会被吞掉：
+    /// 用户仍在**旧图**上框选，而取字 / 导出裁的是**新图** —— 选区和结果对不上。
+    /// 序号严格递增，前端据此区分「同一帧重复投递」（忽略）与「新一轮截图」（重开）。
+    #[test]
+    fn capture_seq_is_monotonic_per_round() {
+        let state = ScreenshotState::new(ScreenshotConfig::default());
+        let a = state.next_capture_seq();
+        let b = state.next_capture_seq();
+        let c = state.next_capture_seq();
+        assert!(a < b && b < c, "每轮截图的序号必须严格递增：{a} {b} {c}");
+        assert_ne!(
+            a, 0,
+            "0 保留给「前端没拿到序号」的兜底语义，不能发给真实轮次"
+        );
+    }
 
     /// v0.9.0：脏值必须在**进入内存缓存与 DB 之前**就被归一化。
     ///

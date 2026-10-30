@@ -510,7 +510,16 @@ impl AppDb {
         let month_days = [
             31,
             if leap { 29 } else { 28 },
-            31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+            31,
+            30,
+            31,
+            30,
+            31,
+            31,
+            30,
+            31,
+            30,
+            31,
         ];
         let days_in_month = month_days[(month - 1) as usize] as i64;
 
@@ -851,9 +860,8 @@ impl AppDb {
         device_filter: Option<&str>,
     ) -> rusqlite::Result<ExportBundle> {
         let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
-            "SELECT name, process_name, exe_path, category_id, platform FROM apps",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT name, process_name, exe_path, category_id, platform FROM apps")?;
         let apps = stmt
             .query_map([], |r| {
                 Ok(ExportApp {
@@ -917,7 +925,8 @@ impl AppDb {
         let mut dev_stmt =
             conn.prepare("SELECT key, value FROM settings WHERE key LIKE 'device_name:%'")?;
         let mut devices: HashMap<String, String> = HashMap::new();
-        let rows = dev_stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let rows =
+            dev_stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         for row in rows {
             let (k, v) = row?;
             if let Some(id) = k.strip_prefix("device_name:") {
@@ -1001,33 +1010,33 @@ impl AppDb {
     }
 
     /// 清理超过 retention_days 天的旧时段（按日期）
-/// - `device_filter`：可选设备 ID 过滤。Some(id) → 仅清该设备的旧数据；None → 清全部设备的旧数据
-///   用于多设备合并场景下「只想清某一台历史数据」
-pub fn prune_old(
-    &self,
-    retention_days: u32,
-    device_filter: Option<&str>,
-) -> rusqlite::Result<usize> {
-    let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
-    let cutoff = (Local::now() - Duration::days(retention_days as i64))
-        .format("%Y-%m-%d")
-        .to_string();
-    let n: usize = match device_filter {
-        Some(dev) if !dev.is_empty() => {
-            // 仅清指定设备的旧数据（用于「按设备清理」入口）
-            conn.execute(
-                "DELETE FROM sessions WHERE date < ?1 AND device = ?2",
-                params![cutoff, dev],
-            )?
-        }
-        _ => conn.execute("DELETE FROM sessions WHERE date < ?1", params![cutoff])?,
-    } as usize;
-    conn.execute(
-        "DELETE FROM daily_summaries WHERE date < ?1",
-        params![cutoff],
-    )?;
-    Ok(n)
-}
+    /// - `device_filter`：可选设备 ID 过滤。Some(id) → 仅清该设备的旧数据；None → 清全部设备的旧数据
+    ///   用于多设备合并场景下「只想清某一台历史数据」
+    pub fn prune_old(
+        &self,
+        retention_days: u32,
+        device_filter: Option<&str>,
+    ) -> rusqlite::Result<usize> {
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let cutoff = (Local::now() - Duration::days(retention_days as i64))
+            .format("%Y-%m-%d")
+            .to_string();
+        let n: usize = match device_filter {
+            Some(dev) if !dev.is_empty() => {
+                // 仅清指定设备的旧数据（用于「按设备清理」入口）
+                conn.execute(
+                    "DELETE FROM sessions WHERE date < ?1 AND device = ?2",
+                    params![cutoff, dev],
+                )?
+            }
+            _ => conn.execute("DELETE FROM sessions WHERE date < ?1", params![cutoff])?,
+        };
+        conn.execute(
+            "DELETE FROM daily_summaries WHERE date < ?1",
+            params![cutoff],
+        )?;
+        Ok(n)
+    }
 
     // ===================== 简易键值配置 =====================
 
@@ -1036,12 +1045,8 @@ pub fn prune_old(
     /// - 同步清理 daily_summaries（同 device 的记录）
     pub fn delete_all_sessions_for_device(&self, device_id: &str) -> rusqlite::Result<usize> {
         let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        let n: usize = conn
-            .execute(
-                "DELETE FROM sessions WHERE device = ?1",
-                params![device_id],
-            )?
-            as usize;
+        let n: usize =
+            conn.execute("DELETE FROM sessions WHERE device = ?1", params![device_id])?;
         // daily_summaries 是按 (date, app_id) 聚合的，无法按 device 过滤（无 device 列）
         // 删除 sessions 后，对应日聚合仍保留但少了一段时长，accuracy 影响小；
         // 真正彻底清理需要重建 daily_summaries（v0.5+ 优化）。
@@ -1099,7 +1104,11 @@ pub fn prune_old(
     ///
     /// v1.1.1：增加 `offset` 支持「加载更多」分页，与 `max_count`（FIFO 上限）解耦——
     /// 用户设了较大 `max_count` 时也能翻页看到全部历史，不再硬编码只取最近 60 张。
-    pub fn list_screenshots(&self, limit: u32, offset: u32) -> rusqlite::Result<Vec<ScreenshotOut>> {
+    pub fn list_screenshots(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> rusqlite::Result<Vec<ScreenshotOut>> {
         let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT id, file_name, width, height, bytes, created_at
@@ -1166,9 +1175,8 @@ pub fn prune_old(
 
 /// 标准 base64 编码（内联实现，避免额外依赖）
 fn to_base64(data: &[u8]) -> String {
-    const CHARS: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    const CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = chunk.get(1).copied().unwrap_or(0) as u32;

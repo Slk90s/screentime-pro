@@ -221,27 +221,296 @@ fn candidate_roots(resource_dir: Option<&Path>) -> Vec<PathBuf> {
 /// 注意 `ORT_DYLIB_PATH` 环境变量优先级最高 —— 探针/开发靠它指向 pip 装的那份；
 /// 产品态不设它，走下面的资源探测。（ort 2.x 认的就是这个名字，
 /// 写成 `ONNXRUNTIME_DYLIB_PATH` 会被静默忽略并从 PATH 搜到旧版 dll → BadVersion abort。）
+///
+/// 🔴 2026-10-29 @v1.2.11（P0）：**下载落点必须通过完整性闸门才算「就绪」**。
+///
+/// 旧实现只判断 `cand.is_file()`。v1.2.10 可能已把一份短读的残缺 dylib 写进了
+/// `用户缓存目录/ort/`，那些文件在升级后依然会被这里命中 → `ort::init_from` →
+/// `Session::builder()` 内部 `expect("Failed to initialize ORT API")` →
+/// 在 v1.2.10 及以前（release 还是 `panic = "abort"`）那是**每次启动、每次截图都必然
+/// 整进程崩溃**；本版虽然改回了 `"unwind"`，但坏库依然会污染 ort 的全局状态，
+/// 所以这里仍要把坏文件「认成不存在」，让它们走重新下载的路径。
+/// 只把下载修好（写 .tmp + rename）救不了这批存量用户，必须在这里把坏文件
+/// 「认成不存在」，让它们走重新下载的路径。
+///
+/// 判据用 [`probe_ort_lib`]（体积 + 平台魔数 + ORT 自检），不做完整 SHA256
+/// （那需要网络，而本函数在取字同步路径上被调用）。
 fn resolve_ort_lib(resource_dir: Option<&Path>) -> Option<PathBuf> {
     if let Ok(p) = std::env::var("ORT_DYLIB_PATH") {
         let p = PathBuf::from(p);
+        // 环境变量是开发者/探针显式指定的，不做完整性闸门：
+        // 探针场景可能指向 pip 装的库，误杀会让人以为是代码坏了。
         if p.is_file() {
             return Some(p);
         }
     }
+    scan_ort_roots(&candidate_roots(resource_dir), user_ort_dir().as_deref())
+}
+
+/// 逐个候选根目录验库。与 [`resolve_ort_lib`] 拆开的原因：根目录与「下载目录」
+/// 都要能注入，否则「删不删这份文件」这条破坏性分支在单测里根本碰不到。
+///
+/// 三种结论对应三种处置（整改 0.1）：
+/// - **可用** → 直接返回，优先级最高的那份就是它；
+/// - **环境阻塞**（文件完好，但本机缺前置依赖，典型是 Windows 没装 VC++ 运行库）
+///   → **保留文件**，且在没有其它可用库时把它返回出去：它比「什么都没有」更有价值 ——
+///   `ort::init_from` 会原样带回系统错误码，[`ocr_onnx::ensure_env`] 据此提示装运行库。
+///   这里删它是最坏的选择：随包库一旦消失，Windows 上没有下载通道可以补回来；
+/// - **不可用**（体积/魔数/符号/版本不合格）→ 跳过；**仅当它躺在下载目录里**
+///   （即「我们自己下载的那份」）才剔除，等待重新下载。
+fn scan_ort_roots(roots: &[PathBuf], download_dir: Option<&Path>) -> Option<PathBuf> {
     let name = ort_lib_name();
-    for root in candidate_roots(resource_dir) {
+    let mut env_blocked: Option<PathBuf> = None;
+    for root in roots {
         for sub in ["ort", ""] {
             let cand = if sub.is_empty() {
                 root.join(name)
             } else {
                 root.join(sub).join(name)
             };
-            if cand.is_file() {
-                return Some(cand);
+            if !cand.is_file() {
+                continue;
+            }
+            match probe_ort_lib(&cand) {
+                OrtProbe::Usable => return Some(cand),
+                OrtProbe::EnvBlocked(reason) => {
+                    tracing::error!(
+                        path = %cand.display(),
+                        reason = %reason,
+                        "onnxruntime 运行库完好但本机缺前置依赖（未删除；取字时会给出安装提示）"
+                    );
+                    if env_blocked.is_none() {
+                        env_blocked = Some(cand);
+                    }
+                }
+                OrtProbe::Unusable(reason) => {
+                    let ours = is_our_download_copy(&cand, download_dir);
+                    tracing::error!(
+                        path = %cand.display(),
+                        bytes = std::fs::metadata(&cand).map(|m| m.len()).unwrap_or(0),
+                        reason = %reason,
+                        pruned = ours,
+                        "onnxruntime 运行库文件不可用（体积/格式/符号/版本不合格）"
+                    );
+                    // 删不掉（只读安装目录等）也无妨，下一轮探测仍会跳过。
+                    if ours {
+                        let _ = std::fs::remove_file(&cand);
+                    }
+                }
             }
         }
     }
-    None
+    env_blocked
+}
+
+/// 这份文件是不是「我们自己下载到缓存目录的那份」—— 唯一允许被剔除的情况。
+/// 判据用父目录相等，不做前缀匹配：下载目录的父级也在用户缓存里，
+/// 但那里的文件不是本程序写的。
+fn is_our_download_copy(path: &Path, download_dir: Option<&Path>) -> bool {
+    download_dir.is_some_and(|d| path.parent() == Some(d))
+}
+
+/// 动态库自检结论。
+///
+/// 拆成三态而不是 `bool` 的原因（整改 0.1）：布尔值会把「文件坏了」和
+/// 「文件好好的、但这台机器加载不了」压成同一件事，而这两件事的**处置完全相反** ——
+/// 前者该删掉重下，后者删了就把随包库永久毁掉，还会把「装 VC++ 运行库」这句
+/// 唯一有用的提示挤掉。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum OrtProbe {
+    /// 文件完好且本机可加载
+    Usable,
+    /// 文件完好，但本机环境缺前置依赖（Windows = 未装 VC++ 运行库；POSIX = 缺 `@rpath` 依赖库）
+    EnvBlocked(String),
+    /// 文件本身不合格（体积异常 / 不是本平台动态库 / 截断 / 没有 ORT 符号 / API 版本不匹配）
+    Unusable(String),
+}
+
+/// 运行库「像不像一份可用的 ORT 动态库」—— 纯本地判定，不联网。
+///
+/// 三道闸门，任何一道不过即判 [`OrtProbe::Unusable`]：
+/// 1. **体积** ≥ [`RUNTIME_MIN_BYTES`]：拦住短读、错误页、空文件；
+/// 2. **平台魔数**：拦住「HTML 错误页被存成 .dylib」这类完全不是库的文件；
+/// 3. **符号与版本自检**：真正 dlopen 一次并调 `OrtGetApiBase` /
+///    `GetApi(ORT_API_VERSION)` —— 这两步正是 `ort::setup_api` 里会
+///    `expect` panic 的位置（`"`OrtGetApiBase` must be present"` 与
+///    `"Failed to initialize ORT API"`），在这里提前做完并转成 `Unusable`，
+///    就等于**把那条 abort 路径彻底堵死**。
+///
+/// 第 3 道闸门里 dlopen 失败要再分一次岔（见 [`is_missing_dependency`]）：
+/// 文案指向「依赖库找不到」时文件是**好的**，坏的是本机环境 → [`OrtProbe::EnvBlocked`]。
+///
+/// 可用的结果按 `(路径, 长度, mtime)` 缓存：同一份文件只 dlopen 一次，
+/// 避免每张截图重复映射 30MB 动态库。文件被替换（长度或 mtime 变）会自动重验，
+/// 因此「先下坏包 → 再下好包」也能正确翻案。
+pub(crate) fn probe_ort_lib(path: &Path) -> OrtProbe {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return OrtProbe::Unusable("文件不存在".to_string());
+    };
+    let len = meta.len();
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // 只缓存「可用」：坏文件必须每次重判（可能刚被重新下载覆盖）；
+    // 「环境阻塞」也不能缓存 —— 用户装完 VC++ 运行库后不重启应用就该直接可用。
+    if let Ok(g) = VERIFIED_LIBS.lock() {
+        if let Some((p, l, m)) = g.as_ref() {
+            if p == path && *l == len && *m == mtime {
+                return OrtProbe::Usable;
+            }
+        }
+    }
+    if len < RUNTIME_MIN_BYTES as u64 {
+        return OrtProbe::Unusable(format!("体积 {} 字节，低于下限 {}", len, RUNTIME_MIN_BYTES));
+    }
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return OrtProbe::Unusable("打不开该文件".to_string());
+    };
+    let mut head = [0u8; 8];
+    if std::io::Read::read_exact(&mut f, &mut head).is_err() {
+        return OrtProbe::Unusable("读不出文件头".to_string());
+    }
+    if !magic_matches(&head) {
+        return OrtProbe::Unusable("文件头不是本平台动态库".to_string());
+    }
+    match probe_ort_api(path) {
+        OrtProbe::Usable => {
+            if let Ok(mut g) = VERIFIED_LIBS.lock() {
+                *g = Some((path.to_path_buf(), len, mtime));
+            }
+            OrtProbe::Usable
+        }
+        other => other,
+    }
+}
+
+/// 加载失败的原因是不是「本机缺前置依赖」（而不是文件本身坏）。
+///
+/// 认得出来的依据只有错误文案，所以这张表要按各平台加载器的实际输出列：
+/// - **Windows**：`LoadLibraryExW` 对「依赖的 DLL 找不到」返回 `ERROR_MOD_NOT_FOUND`(126)，
+///   对「依赖的 DLL 里少了这个导出函数」返回 `ERROR_PROC_NOT_FOUND`(127)。
+///   126 正是没装 VC++ 2015-2022 运行库（`vcruntime140.dll` / `msvcp140.dll` 缺失）的表现。
+///   文案随系统语言变（中文系统给「找不到指定的模块。」），所以错误码和文案都匹配。
+/// - **macOS**：`dyld` 报 `Library not loaded: @rpath/... Reason: image not found`。
+/// - **Linux**：缺 C++ 运行库时是 `version 'GLIBCXX_x.y.z' not found` / `CXXABI_...`。
+///
+/// ⚠️ 反过来，`os error 193`（「不是有效的 Win32 应用程序」）**不算**环境缺依赖：
+/// 它是 PE 头不合格 / 位宽不符，对本程序而言等价于「这份文件不行」。
+/// Linux 的 `cannot open shared object file` 也不列进来 —— 该文案对「文件自己在哪」
+/// 和「依赖找不到」是歧义的，宁可判成「不可用」（不删随包库，只是不选用它）。
+fn is_missing_dependency(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    const NEEDLE: &[&str] = &[
+        "os error 126",
+        "os error 127",
+        "module could not be found",
+        "procedure could not be found",
+        "找不到指定的模块",
+        "找不到指定的程序",
+        "image not found",
+        "library not loaded",
+        "glibcxx_",
+        "cxxabi_",
+    ];
+    NEEDLE.iter().any(|n| m.contains(n))
+}
+
+/// 最近一次通过自检的运行库指纹 `(路径, 长度, mtime 秒)`。
+static VERIFIED_LIBS: std::sync::Mutex<Option<(PathBuf, u64, u64)>> = std::sync::Mutex::new(None);
+
+/// 各平台动态库的魔数。
+///
+/// 只认「确实是本平台动态库」的文件，与后续能否加载解耦：
+/// 一份 HTML 错误页 / JSON 报错体即使大于 10MB 也不会带这些魔数。
+fn magic_matches(head: &[u8; 8]) -> bool {
+    if cfg!(target_os = "windows") {
+        // PE：'MZ'
+        head.starts_with(b"MZ")
+    } else if cfg!(target_os = "macos") {
+        // Mach-O 64 小端 / FAT（通用二进制）/ FAT64
+        head.starts_with(&[0xCF, 0xFA, 0xED, 0xFE])
+            || head.starts_with(&[0xCE, 0xFA, 0xED, 0xFE])
+            || head.starts_with(&[0xCA, 0xFE, 0xBA, 0xBE])
+    } else {
+        // ELF
+        head.starts_with(&[0x7F, b'E', b'L', b'F'])
+    }
+}
+
+/// 真正加载一次并做 ORT API 自检。
+///
+/// 只 `dlopen` + 取两个符号 + 调 `GetApi`，**不创建 Environment / Session**，
+/// 因此不会与随后 `ort::init_from` 产生的全局状态冲突：
+/// POSIX 下同一个库被 dlopen 两次返回同一 handle（引用计数），
+/// 这里 drop 掉本地 handle 只是减一次引用，ort 自己持有的那份仍然有效。
+///
+/// 加载失败分两类（整改 0.1）：文案指向「依赖库找不到」→ [`OrtProbe::EnvBlocked`]
+/// （文件是好的，**不许删**，也不许谎报「下载不完整」）；其余 → [`OrtProbe::Unusable`]。
+/// 取到符号之后 `GetApi` 返回 null 属于 **API 版本不匹配** —— 那正是 ort 内部
+/// `expect("Failed to initialize ORT API")` 的位置，必须在这里判死，绝不让调用方走到那步。
+fn probe_ort_api(path: &Path) -> OrtProbe {
+    // SAFETY: 只在本地已通过体积与魔数检查的文件上调用；
+    // 符号签名取自 `onnxruntime_c_api.h` 的公开 ABI：
+    //   `const OrtApiBase* OrtGetApiBase(void)`
+    //   `struct OrtApiBase { const OrtApi* (*GetApi)(uint32_t version);
+    //                        const char* (*GetVersionString)(void); }`
+    unsafe {
+        let lib = match libloading::Library::new(path) {
+            Ok(l) => l,
+            Err(e) => {
+                let msg = e.to_string();
+                return if is_missing_dependency(&msg) {
+                    OrtProbe::EnvBlocked(msg)
+                } else {
+                    OrtProbe::Unusable(msg)
+                };
+            }
+        };
+        let Ok(get_base) =
+            lib.get::<unsafe extern "C" fn() -> *const OrtApiBase>(b"OrtGetApiBase\0")
+        else {
+            return OrtProbe::Unusable(
+                "库内没有 OrtGetApiBase 符号（这不是 onnxruntime 运行库）".to_string(),
+            );
+        };
+        let base = get_base();
+        if base.is_null() {
+            return OrtProbe::Unusable("OrtGetApiBase 返回空指针".to_string());
+        }
+        let base = &*base;
+        let api = (base.get_api)(ORT_API_VERSION as i32);
+        if api.is_null() {
+            return OrtProbe::Unusable(format!(
+                "该库不支持 ORT API 版本 {ORT_API_VERSION}（与 ort 编译期版本不匹配）"
+            ));
+        }
+        // 版本串只用于诊断日志（也是 GetVersionString 的唯一用途，
+        // 顺带证明这个字段的偏移没错位 —— 若结构体布局错了，这里会拿到空指针）。
+        let vs = (base.get_version_string)();
+        if !vs.is_null() {
+            let s = std::ffi::CStr::from_ptr(vs).to_string_lossy();
+            tracing::debug!(version = %s, path = %path.display(), "onnxruntime 运行库自检通过");
+        }
+        OrtProbe::Usable
+    }
+}
+
+/// `onnxruntime_c_api.h` 中的 `ORT_API_VERSION`。
+///
+/// 必须与 `ort-sys` 编译期使用的值一致，否则自检可能放行一个 ort 自己会拒绝的库。
+/// 这里直接引用 `ort::sys`（`ort` 已 `pub use ort_sys as sys`）而不是本地写死数字：
+/// 升级 `ort` 时 API 版本若变化，下面这行断言会在**编译期**报错，
+/// 而不是等到线上自检与 ort 实际行为不一致。
+const ORT_API_VERSION: u32 = ort::sys::ORT_API_VERSION;
+
+/// `OrtApiBase` 的最小 ABI 视图（只取前两个字段，其余不关心）。
+#[repr(C)]
+struct OrtApiBase {
+    get_api: unsafe extern "C" fn(version: i32) -> *const std::ffi::c_void,
+    get_version_string: unsafe extern "C" fn() -> *const std::ffi::c_char,
 }
 
 /// 各平台运行库文件名
@@ -283,6 +552,7 @@ fn resolve_models_dir(resource_dir: Option<&Path>) -> Option<PathBuf> {
 /// - Windows: `%LOCALAPPDATA%\ScreenTime Pro\ort`（NSIS 安装目录本就在这里，可读写）
 /// - macOS:   `~/Library/Caches/com.screentime.pro/ort`
 /// - Linux:   `~/.cache/screentime-pro/ort`
+///
 /// 该目录同时被 `resolve_ort_lib` 探测，下载后即被命中。
 fn user_ort_dir() -> Option<PathBuf> {
     if cfg!(target_os = "windows") {
@@ -380,40 +650,66 @@ fn fetch_runtime_lib_bytes(
     None
 }
 
-/// 可选 SHA256 校验：仅当基址下存在 `<name>.sha256` 且内容确为 64 位十六进制摘要时才校验；
-/// 缺失 / 404 / 网络失败 / 内容不是摘要 → **一律放行**（仅记日志）。
-/// 绝不因为「校验文件本身不可用」而把一份完好的运行库误判为损坏。
-/// 返回 `true` = 通过（或无从校验）。
+/// 下载体积下限（字节）：低于此值一律视为残缺包，**不与网络交互就丢弃**。
+///
+/// 2026-10-29 @v1.2.11 修复（macOS 截图后崩溃的 P0 根因之一）：
+/// 真机日志出现过「`attempt=1` 之后既无重试也无失败日志，紧接着进程 panic」——
+/// 连接被中途切断时 `reqwest` 的 `bytes()` 在部分场景返回**短读的 Ok**，
+/// 一份几 KB 的残缺 dylib 被当成下载成功写进缓存目录。
+///
+/// 取 8MB 的理由（**不是越大越安全**）：这是**廉价的预筛**，只需拦住
+/// 「错误页 / 空文件 / 明显短读」这类一眼假的东西，真正权威的判据是
+/// [`probe_ort_lib`] 里的 dlopen + ORT API 自检（截断的 PE/Mach-O
+/// 一定过不了加载器校验）。
+///
+/// 上限方向的风险更大：Windows 的随包 `onnxruntime.dll` 实测 18,446,136 字节，
+/// macOS dylib ~43MB、Linux so ~29MB。下限若贴近 18MB，就会把 Windows
+/// 随包库误判为损坏并删除 —— 而 Windows 根本没有下载通道，
+/// 增强引擎会直接不可用。8MB 相对最小的随包库留出 2.3 倍余量。
+const RUNTIME_MIN_BYTES: usize = 8 * 1024 * 1024;
+
+/// 可选 SHA256 校验。
+///
+/// ⚠️ 2026-10-29 @v1.2.11 语义变更（**安全方向**）：
+/// 旧版把「拉不到 `.sha256`」判为**通过**（`return true`），即校验形同虚设 ——
+/// 真正的校验只有发布方提供 `.sha256` 且网络恰好成功时才生效，而这恰恰是
+/// 最不可靠的一环。现在改为**三态**：
+/// - `Some(true)`  ：拿到了摘要且**匹配** → 可信
+/// - `Some(false)` ：拿到了摘要但**不匹配** → 一定是坏包，必须丢弃
+/// - `None`        ：摘要不可用（404 / 网络失败 / 内容非法）→ **无法判定**，
+///   由调用方结合 [`RUNTIME_MIN_BYTES`] 的体积下限做兜底判断，而不是盲目放行。
+///
+/// 这样「网络差」只会退化为「按体积粗筛」，不会退化为「完全不校验」。
 fn verify_sha256(
     client: &reqwest::blocking::Client,
     base: &str,
     name: &str,
     bytes: &[u8],
-) -> bool {
+) -> Option<bool> {
     let Ok(hr) = client.get(format!("{}/{}.sha256", base, name)).send() else {
-        return true;
+        return None;
     };
     if !hr.status().is_success() {
-        return true;
+        return None;
     }
-    let Ok(htext) = hr.text() else { return true };
+    let Ok(htext) = hr.text() else { return None };
     let expected = htext
         .split_whitespace()
         .next()
         .unwrap_or("")
         .to_ascii_lowercase();
     if expected.len() != 64 || !expected.bytes().all(|c| c.is_ascii_hexdigit()) {
-        tracing::warn!("增强引擎运行库 .sha256 内容非摘要，跳过校验");
-        return true;
+        tracing::warn!("增强引擎运行库 .sha256 内容非摘要，无法校验");
+        return None;
     }
     let mut h = Sha256::new();
     h.update(bytes);
     let got = format!("{:x}", h.finalize());
     if got != expected {
         tracing::error!(expected = %expected, got = %got, "增强引擎运行库 SHA256 校验失败，已丢弃");
-        return false;
+        return Some(false);
     }
-    true
+    Some(true)
 }
 
 /// 下载 → 校验 → 落盘（生产路径与测试探针共用同一实现）。
@@ -421,18 +717,79 @@ fn verify_sha256(
 /// ⚠️ **只在后台线程调用**：运行库 29~43MB，慢网下可能耗时数分钟。
 /// ⚠️ `target` 必须是**文件路径**（`<ort 目录>/<库文件名>`）—— 传目录必然写失败，
 /// 见 [`download_target_path`] 记录的历史 bug。
+///
+/// 🔴 2026-10-29 @v1.2.11（P0）：**先写 `.tmp` → 校验 → 原子 rename**。
+///
+/// 旧实现是「先校验字节、再 `fs::write(target)` 直写目标路径」，有两个致命缺口：
+/// 1. `verify_sha256` 拉不到 `.sha256` 时返回 `true`（等于不校验），
+///    于是任何短读 / 错误页都能落盘；
+/// 2. `fs::write` 是**非原子**的（内部 create + 截断 + 写），
+///    进程在写入中途被 panic / 被杀 → 目标路径留下**半截 dylib**。
+///
+/// 而 `resolve_ort_lib` 只判断 `is_file()`，半截文件会被认定为「已就绪」，
+/// 下次启动 `ort::init_from` 载入坏库 → `Session::builder()` 内部
+/// `expect("Failed to initialize ORT API")` → 配上当时（v1.2.10）的
+/// `panic = "abort"` → **整个进程消失**。这正是真机日志里「截完图就崩溃」的机制。
+///
+/// 现在的不变式：**`target` 要么不存在，要么是一份通过校验的完整文件**。
+/// `.tmp` 是唯一的中间态，且每次进入都先清理，不会跨进程残留。
 fn fetch_and_store(name: &str, target: &Path, bases: &[String]) -> Result<(), String> {
     let client = download_client().map_err(|e| format!("创建下载客户端失败: {e}"))?;
     let Some((base, bytes)) = fetch_runtime_lib_bytes(&client, name, bases) else {
         return Err("所有下载源均失败".to_string());
     };
-    if !verify_sha256(&client, &base, name, &bytes) {
-        return Err("SHA256 校验失败".to_string());
+
+    // ① 体积闸门：不看网络、不看摘要，先按绝对下限筛掉残缺包。
+    if bytes.len() < RUNTIME_MIN_BYTES {
+        tracing::error!(
+            bytes = bytes.len(),
+            floor = RUNTIME_MIN_BYTES,
+            "增强引擎运行库体积异常（疑似短读 / 错误页），已丢弃"
+        );
+        return Err(format!(
+            "运行库体积异常：{} 字节（下限 {}）",
+            bytes.len(),
+            RUNTIME_MIN_BYTES
+        ));
     }
+
+    // ② 摘要三态：明确不匹配 → 拒绝；无从校验 → 依赖上面的体积闸门兜底。
+    match verify_sha256(&client, &base, name, &bytes) {
+        Some(false) => return Err("SHA256 校验失败".to_string()),
+        Some(true) => tracing::info!("增强引擎运行库 SHA256 校验通过"),
+        None => tracing::warn!("增强引擎运行库无可用 .sha256 摘要，已按体积闸门放行"),
+    }
+
     if let Some(parent) = target.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建 {} 失败: {e}", parent.display()))?;
     }
-    std::fs::write(target, &bytes).map_err(|e| format!("写入 {} 失败: {e}", target.display()))?;
+
+    // ③ 先写临时文件（同目录，保证 rename 不跨文件系统）。
+    let tmp = target.with_extension(format!(
+        "{}.tmp",
+        target.extension().and_then(|e| e.to_str()).unwrap_or("bin")
+    ));
+    // 上一次异常退出可能留下 .tmp；先清掉，避免磁盘上堆积大文件。
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::write(&tmp, &bytes).map_err(|e| format!("写入 {} 失败: {e}", tmp.display()))?;
+
+    // ④ 回读长度复核：磁盘写满 / 配额限制时 write 可能"成功"但内容截断。
+    let written = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
+    if written != bytes.len() as u64 {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!(
+            "写入不完整：期望 {} 字节，实际 {written}",
+            bytes.len()
+        ));
+    }
+
+    // ⑤ 原子转正。rename 覆盖同名文件在 POSIX 与 Windows 上均成立。
+    if let Err(e) = std::fs::rename(&tmp, target) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("落盘 {} 失败: {e}", target.display()));
+    }
+
     tracing::info!(path = %target.display(), bytes = bytes.len(), "增强引擎运行库下载完成");
     Ok(())
 }
@@ -515,7 +872,11 @@ const MIRROR_OCR_DOWNLOAD_BASES: [&str; 2] = [
 ];
 
 /// 统一取字出口：按引擎分发，返回结构与标准引擎一致（多一个 `engine` 字段）。
-pub fn recognize(kind: EngineKind, paths: &EnginePaths, img: &RgbaImage) -> Result<ocr::OcrOut, String> {
+pub fn recognize(
+    kind: EngineKind,
+    paths: &EnginePaths,
+    img: &RgbaImage,
+) -> Result<ocr::OcrOut, String> {
     match kind {
         EngineKind::System => ocr::recognize(img),
         EngineKind::Enhanced => recognize_enhanced(paths, img),
@@ -620,6 +981,12 @@ impl EngineInfo {
 mod tests {
     use super::*;
 
+    /// 产品路径不再需要这个布尔壳（调用方要的是三态结论，见 [`OrtProbe`]），
+    /// 但回归测试要一句读得懂的断言：v1.2.10 之前的写法就是「文件存在 = 可用」。
+    fn ort_lib_usable(path: &Path) -> bool {
+        matches!(probe_ort_lib(path), OrtProbe::Usable)
+    }
+
     #[test]
     fn parse_falls_back_to_system() {
         assert_eq!(EngineKind::parse("enhanced"), EngineKind::Enhanced);
@@ -664,6 +1031,174 @@ mod tests {
                 p.display()
             );
         }
+    }
+
+    /// 🐞 回归（P0，2026-10-29 @v1.2.11）：**残缺/伪造的运行库必须被判为不可用**。
+    ///
+    /// 背景：真机日志里「macOS 截完图就崩溃」，根因是缓存目录里躺着一份下载不完整的
+    /// `libonnxruntime.dylib`。旧 `resolve_ort_lib` 只判断 `is_file()`，把它当成
+    /// 「已就绪」交给 `ort::init_from`；而 ort 在 `setup_api()` 里对
+    /// `GetApi` 返回 null 写的是 `expect(...)`，配合 `panic = "abort"`
+    /// —— 进程被直接 abort，连 Err 都拿不到。
+    ///
+    /// 本测试锁定新的判据：体积、魔数、ORT API 自检，任一不过即 `false`。
+    /// 若有人把自检退回「只看文件存在」，这里会立刻红。
+    #[test]
+    fn rejects_truncated_and_fake_runtime_libs() {
+        let dir = std::env::temp_dir().join(format!("sd-ort-probe-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+
+        // ① 空文件：体积闸门第一道就拦住
+        let empty = dir.join("empty_lib.bin");
+        std::fs::write(&empty, b"").unwrap();
+        assert!(!ort_lib_usable(&empty), "空文件必须被判为不可用");
+
+        // ② 太小：即便有正确魔数也不够（模拟短读截断）
+        let tiny = dir.join("tiny_lib.bin");
+        let mut tiny_bytes = vec![0u8; 1024];
+        if cfg!(target_os = "windows") {
+            tiny_bytes[..2].copy_from_slice(b"MZ");
+        } else if cfg!(target_os = "macos") {
+            tiny_bytes[..4].copy_from_slice(&[0xCF, 0xFA, 0xED, 0xFE]);
+        } else {
+            tiny_bytes[..4].copy_from_slice(&[0x7F, b'E', b'L', b'F']);
+        }
+        std::fs::write(&tiny, &tiny_bytes).unwrap();
+        assert!(!ort_lib_usable(&tiny), "体积不足必须被判为不可用");
+
+        // ③ 体积够大但内容不是动态库（HTML 错误页被存成 .dylib 的典型形态）
+        let fake = dir.join("fake_lib.bin");
+        let fake_bytes = vec![b'x'; RUNTIME_MIN_BYTES + 1024];
+        std::fs::write(&fake, &fake_bytes).unwrap();
+        assert!(
+            !ort_lib_usable(&fake),
+            "魔数不符（不是 PE/Mach-O/ELF）必须被判为不可用"
+        );
+
+        // ④ 不存在的路径不能 panic
+        assert!(!ort_lib_usable(&dir.join("nope.bin")));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 🐞 回归（P0，2026-10-29 @v1.2.11 整改 0.1）：**自检失败的候选，只允许删我们自己下载的那份**。
+    ///
+    /// 旧实现对**所有**候选一律 `remove_file`，其中包含随包分发的 `onnxruntime.dll`
+    /// （安装目录 / 仓库 `src-tauri/ort/`）。一旦失败原因是**环境**而非文件
+    /// （典型：本机未装 VC++ 2015-2022 运行库 → dlopen 报 ERROR_MOD_NOT_FOUND 126），
+    /// 一份完好的随包 dll 就会被当「坏文件」删掉。而 Windows 没有下载通道
+    /// （`download_runtime_lib_if_missing` 对 Windows 提前返回），删了就是**永久不可用**。
+    #[test]
+    fn only_prunes_the_downloaded_copy() {
+        let dir = std::env::temp_dir().join(format!("sd-ort-prune-{}", std::process::id()));
+        let bundled = dir.join("install"); // 模拟安装目录里的随包库
+        let download = dir.join("download"); // 模拟 user_ort_dir()
+        std::fs::create_dir_all(&bundled).unwrap();
+        std::fs::create_dir_all(&download).unwrap();
+
+        let name = ort_lib_name();
+        let bundled_lib = bundled.join(name);
+        let download_lib = download.join(name);
+        // 两份都写成几字节垃圾：体积闸门必然判坏 → 走进「剔除」分支
+        std::fs::write(&bundled_lib, b"not a lib").unwrap();
+        std::fs::write(&download_lib, b"not a lib").unwrap();
+
+        let found = scan_ort_roots(&[bundled.clone(), download.clone()], Some(&download));
+        assert!(found.is_none(), "两份都是坏文件，不该有命中：{found:?}");
+        assert!(
+            bundled_lib.exists(),
+            "随包运行库自检失败时绝不能删除（Windows 无下载通道，删了即永久不可用）"
+        );
+        assert!(
+            !download_lib.exists(),
+            "下载目录里我们自己写的坏文件应被剔除，等待重新下载"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 同目录下的两份坏文件，若连下载目录都没配（取不到 HOME/LOCALAPPDATA），
+    /// 一律**不删** —— 删除是破坏性操作，判据不明时宁可留着。
+    #[test]
+    fn prunes_nothing_without_a_known_download_dir() {
+        let dir = std::env::temp_dir().join(format!("sd-ort-noprune-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let lib = dir.join(ort_lib_name());
+        std::fs::write(&lib, b"not a lib").unwrap();
+        assert!(scan_ort_roots(std::slice::from_ref(&dir), None).is_none());
+        assert!(lib.exists(), "下载目录未知时不得删除任何候选文件");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 🐞 回归（P0，整改 0.1）：**「本机缺依赖」不等于「文件损坏」**。
+    ///
+    /// 这条判据决定两件事：① 随包库删不删（缺依赖 → 不删）；
+    /// ② 给用户哪句提示（缺依赖 → 该说「装 VC++ 运行库」，而不是「文件损坏、稍后重试」）。
+    #[test]
+    fn missing_dependency_is_not_corruption() {
+        let env_cases = [
+            "The specified module could not be found. (os error 126)",
+            "找不到指定的模块。 (os error 126)",
+            "The specified procedure could not be found. (os error 127)",
+            "找不到指定的程序。 (os error 127)",
+            "dlopen(/tmp/x/libonnxruntime.dylib): Library not loaded: @rpath/libc++.1.dylib\n  Referenced from: ... Reason: image not found",
+            "libonnxruntime.so: version `GLIBCXX_3.4.29' not found (required by libonnxruntime.so)",
+        ];
+        for msg in env_cases {
+            assert!(is_missing_dependency(msg), "应判为「环境缺依赖」：{msg}");
+        }
+        // 这些才是「文件本身不行」：截断 / 位宽不符 / 不是本平台动态库
+        let file_cases = [
+            "%1 is not a valid Win32 application. (os error 193)",
+            "不是有效的 Win32 应用程序。 (os error 193)",
+            "dlopen failed: malformed mach-o image: section content out of bounds",
+            "An unknown error occurred (os error -2147024704)",
+            "",
+        ];
+        for msg in file_cases {
+            assert!(
+                !is_missing_dependency(msg),
+                "不应判为「环境缺依赖」：{msg:?}"
+            );
+        }
+    }
+
+    /// 🐞 回归（P0，整改 0.1）：坏文件必须被**分类**，不能一律压成 `false`。
+    #[test]
+    fn probe_distinguishes_unusable_from_env_blocked() {
+        let dir = std::env::temp_dir().join(format!("sd-ort-kind-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // 体积不足 → 文件不可用（不是环境问题）
+        let tiny = dir.join(ort_lib_name());
+        std::fs::write(&tiny, b"zip").unwrap();
+        match probe_ort_lib(&tiny) {
+            OrtProbe::Unusable(reason) => assert!(!reason.is_empty(), "结论要带可读原因"),
+            other => panic!("小文件应判 Unusable，实际 {other:?}"),
+        }
+        // 不存在的路径同样不能 panic，也不能判成「环境阻塞」（否则 resolve 会把它当可用库返回）
+        assert!(
+            !matches!(probe_ort_lib(&dir.join("nope")), OrtProbe::EnvBlocked(_)),
+            "不存在的文件不可能「完好但环境阻塞」"
+        );
+        assert!(!ort_lib_usable(&tiny));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 🐞 回归：体积下限必须严格小于真实运行库，否则 Windows 随包 dll 会被误杀。
+    ///
+    /// Windows 的 `onnxruntime.dll` 随包分发且只有 ~18MB。若 RUNTIME_MIN_BYTES
+    /// 被调到超过它，`resolve_ort_lib` 会把随包库判成损坏并删除 ——
+    /// 增强引擎在 Windows 上直接不可用，且下载通道也没配（Windows 本来不下载）。
+    #[test]
+    fn runtime_size_floor_leaves_headroom_for_bundled_dll() {
+        // 随包 dll 实测 18,446,136 字节（2026-09-18）。下限必须留出足够余量。
+        const BUNDLED_DLL_BYTES: u64 = 18_446_136;
+        assert!(
+            (RUNTIME_MIN_BYTES as u64) * 2 <= BUNDLED_DLL_BYTES,
+            "下限 {} 相对随包 dll {} 余量不足，存在误杀风险",
+            RUNTIME_MIN_BYTES,
+            BUNDLED_DLL_BYTES
+        );
     }
 
     /// 平台差异：本平台没有标准引擎时（当前只有 Linux），
@@ -790,7 +1325,7 @@ mod tests {
         // 与官方 .sha256 对账（verify_sha256 已在 fetch_and_store 内执行，此处复核一次）
         let mut h = Sha256::new();
         h.update(&got);
-        println!("== sha256 {}", format!("{:x}", h.finalize()));
+        println!("== sha256 {:x}", h.finalize());
         let _ = std::fs::remove_file(&target);
     }
 }

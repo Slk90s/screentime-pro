@@ -4500,6 +4500,7 @@ dependencies = [
  "gethostname 0.5.0",
  "image",
  "libc",
+ "libloading 0.8.9",
  "lru",
  "ndarray",
  "objc2",
