@@ -23,7 +23,7 @@ Linux / macOS）并行跑同一个 tag，三份 latest.json 互相覆盖 —— 
 
 本项目实际产出的两个键：
   - windows-x86_64-nsis        （NSIS setup.exe）
-  - linux-x86_64-appimage      （AppImage.tar.gz）
+  - linux-x86_64-appimage      （裸 AppImage，非 tar.gz —— 见下方 TARGETS 处的说明）
 
 macOS **故意不写**：本项目是 ad-hoc 签名，签名身份每次构建都变，TCC 授权
 （屏幕录制 / 辅助功能）会随升级整体失效。详见 src-tauri/src/app_update.rs 模块头。
@@ -44,11 +44,32 @@ import sys
 
 
 # (平台键, 安装包 glob, 说明) —— glob 相对 artifacts 根目录，recursive=True
+#
+# 🔴 v1.2.12 修正：Linux 的 glob 从 `*_amd64.AppImage.tar.gz` 改为 `*_amd64.AppImage`。
+#
+# 旧写法假设 Tauri 会产出 `.AppImage.tar.gz` 包裹包，那是 **Tauri v1 时代**的行为。
+# Tauri 2 在 `createUpdaterArtifacts: true` 下对 Linux 只做两件事（v1.2.12 CI 实测）：
+#
+#   Finished 3 bundles at:
+#       …/bundle/deb/ScreenTime Pro_1.2.12_amd64.deb
+#       …/bundle/rpm/ScreenTime Pro-1.2.12-1.x86_64.rpm
+#       …/bundle/appimage/ScreenTime Pro_1.2.12_amd64.AppImage      ← 未压缩
+#   Finished 1 updater signature at:
+#       …/bundle/appimage/ScreenTime Pro_1.2.12_amd64.AppImage.sig  ← 直接签 AppImage
+#
+# 即：**3 个包 / 1 个签名，全程不生成 tar.gz**。所以旧 glob 永远匹配不到，
+# 报错是「找不到匹配 '*_amd64.AppImage.tar.gz' 的产物」—— 而这行报错本身
+# 又很像「构建失败」，极易把排查方向带偏。
+#
+# 客户端可用性已核对 tauri-plugin-updater 2.12.0 `install_appimage`
+# （src/updater.rs:1083）：它先 `infer::archive::is_gz(bytes)` 判断，
+# 是 gz 才走 tar 解包取 `.AppImage`；**不是 gz 就直接 `std::fs::write` 原样覆盖自身**。
+# 所以裸 `.AppImage` 是合法载荷，不需要包裹。
 TARGETS = [
     ("windows-x86_64-nsis", "**/*_x64-setup.exe",
      "Windows NSIS 安装包"),
-    ("linux-x86_64-appimage", "**/*_amd64.AppImage.tar.gz",
-     "Linux AppImage（tar.gz 包，updater 会解包取 .AppImage）"),
+    ("linux-x86_64-appimage", "**/*_amd64.AppImage",
+     "Linux AppImage（裸包，updater 走非 gz 分支原样覆盖）"),
 ]
 
 
