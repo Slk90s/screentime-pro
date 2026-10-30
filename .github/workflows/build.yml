@@ -202,10 +202,18 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
-          # v1.2.11：Linux 会产出 .deb / .rpm / .AppImage / .AppImage.tar.gz 及其 .sig。
-          # 但客户端**只会用 AppImage** 那份（deb/rpm 在 install_supported() 里被拒），
-          # 所以 latest.json 里必须放 AppImage.tar.gz —— updater 的
-          # `install_appimage` 认 tar.gz（解包取 .AppImage）也认裸 AppImage。
+          # 🔴 v1.2.12 实测订正（原注释是 Tauri v1 时代的残留，会误导排查方向）：
+          # Linux 实际只产出 3 个包 + 1 个签名，**不生成 .AppImage.tar.gz**：
+          #   Finished 3 bundles at:  …/deb/….deb, …/rpm/….rpm,
+          #                           …/appimage/…_amd64.AppImage   ← 未压缩
+          #   Finished 1 updater signature at: …appimage/…_amd64.AppImage.sig
+          # 即 `createUpdaterArtifacts: true` 在 Tauri 2 下直接签**裸 AppImage**。
+          # 客户端**只会用 AppImage** 那份（deb/rpm 在 install_supported() 里被拒）。
+          # `install_appimage` 两种都认：先 `infer::archive::is_gz(bytes)` 判断，
+          # 是 gz 才 tar 解包取 .AppImage，不是就 `std::fs::write` 原样覆盖
+          # （tauri-plugin-updater 2.12.0 src/updater.rs:1083）。
+          # 所以 latest.json 里放裸 AppImage 的 url + .AppImage.sig 的内容即可，
+          # 详见 .github/scripts/gen_latest_json.py 的 TARGETS 注释。
           args: --ci --target x86_64-unknown-linux-gnu
           includeUpdaterJson: false
           tagName: "v__VERSION__"
