@@ -52,7 +52,11 @@ impl NetworkSampler {
             Err(p) => p.into_inner(),
         };
         let now = Instant::now();
-        let snap = match (inner.last_total_rx, inner.last_total_tx, inner.last_sample_at) {
+        let snap = match (
+            inner.last_total_rx,
+            inner.last_total_tx,
+            inner.last_sample_at,
+        ) {
             (Some(lr), Some(lt), Some(at)) => {
                 let elapsed = now.duration_since(at).as_secs_f64();
                 if elapsed > 0.0 {
@@ -169,7 +173,7 @@ struct IfData {
 #[cfg(target_os = "windows")]
 fn read_iface_totals() -> (u64, u64) {
     use windows::Win32::NetworkManagement::IpHelper::{
-        GetIfTable2, FreeMibTable, MIB_IF_TABLE2, IF_TYPE_SOFTWARE_LOOPBACK,
+        FreeMibTable, GetIfTable2, IF_TYPE_SOFTWARE_LOOPBACK, MIB_IF_TABLE2,
     };
     use windows::Win32::NetworkManagement::Ndis::IF_OPER_STATUS;
     // IfOperStatusUp = 1（参考 Microsoft Docs NET_IF_OPER_STATUS 枚举）
@@ -216,7 +220,9 @@ fn read_iface_totals() -> (u64, u64) {
     let mut total_tx: u64 = 0;
     for line in s.lines().skip(2) {
         // 格式：<name>:<whitespace><rx_bytes> <rx_packets> ...
-        let Some(colon) = line.find(':') else { continue; };
+        let Some(colon) = line.find(':') else {
+            continue;
+        };
         let name = line[..colon].trim();
         if name == "lo" {
             continue;
@@ -227,10 +233,7 @@ fn read_iface_totals() -> (u64, u64) {
         let rx = it.next().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
         // 此时迭代器已在 index 0 之后；nth(7) 再跳过 index 1..7（rx_packets..rx_multicast），
         // 落到 index 8 = Transmit 栏的 tx_bytes。字段顺序见上方头注释。
-        let tx = it
-            .nth(7)
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(0);
+        let tx = it.nth(7).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
         total_rx = total_rx.saturating_add(rx);
         total_tx = total_tx.saturating_add(tx);
     }

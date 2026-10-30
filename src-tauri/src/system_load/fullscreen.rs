@@ -107,10 +107,10 @@ mod macos_impl {
     use core_foundation_sys::array::{CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef};
     use core_foundation_sys::base::CFTypeRef;
     use core_foundation_sys::dictionary::{CFDictionaryGetValue, CFDictionaryRef};
-    use core_foundation_sys::number::{CFNumberGetValue, CFNumberRef, kCFNumberFloat64Type};
+    use core_foundation_sys::number::{kCFNumberFloat64Type, CFNumberGetValue, CFNumberRef};
     use core_graphics::window::{
-        CGWindowListCopyWindowInfo, CGWindowListOption, kCGNullWindowID, kCGWindowBounds,
-        kCGWindowLayer, kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly,
+        kCGNullWindowID, kCGWindowBounds, kCGWindowLayer, kCGWindowListExcludeDesktopElements,
+        kCGWindowListOptionOnScreenOnly, CGWindowListCopyWindowInfo, CGWindowListOption,
     };
     use std::os::raw::c_void;
 

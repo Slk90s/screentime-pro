@@ -176,7 +176,9 @@ mod platform {
         // 系统上限（通常 10000）。超限直接给一句人话，别让引擎抛一句看不懂的 HRESULT。
         if let Ok(max) = OcrEngine::MaxImageDimension() {
             if max > 0 && (w > max || h > max) {
-                return Err(format!("取字范围过大（系统上限 {max}px），请缩小选区后重试"));
+                return Err(format!(
+                    "取字范围过大（系统上限 {max}px），请缩小选区后重试"
+                ));
             }
         }
 
@@ -244,9 +246,11 @@ mod platform {
                 }
             }
         }
-        Err("系统里没有可用的 OCR 识别语言包：请到「设置 → 时间和语言 → 语言和区域」\
+        Err(
+            "系统里没有可用的 OCR 识别语言包：请到「设置 → 时间和语言 → 语言和区域」\
              给中文或英文语言添加可选功能「光学字符识别(OCR)」后重试"
-            .into())
+                .into(),
+        )
     }
 }
 
@@ -351,7 +355,11 @@ mod tests {
         let (x, y, w, h) = (n[0], n[1], n[2], n[3]);
 
         let img = image::open(&path).expect("打开探针图失败").to_rgba8();
-        println!("原图 {}x{}，裁剪 ({x},{y}) {w}x{h}", img.width(), img.height());
+        println!(
+            "原图 {}x{}，裁剪 ({x},{y}) {w}x{h}",
+            img.width(),
+            img.height()
+        );
         let crop = image::imageops::crop_imm(&img, x, y, w, h).to_image();
 
         let scale = |src: &RgbaImage, s: u32, f: FilterType| -> RgbaImage {
@@ -375,7 +383,10 @@ mod tests {
             ("2x Nearest", scale(&crop, 2, FilterType::Nearest)),
             ("2x Triangle", scale(&crop, 2, FilterType::Triangle)),
             ("1x 灰度", gray(&crop)),
-            ("2x Nearest 灰度", gray(&scale(&crop, 2, FilterType::Nearest))),
+            (
+                "2x Nearest 灰度",
+                gray(&scale(&crop, 2, FilterType::Nearest)),
+            ),
         ];
 
         for (name, im) in variants {

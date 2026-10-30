@@ -48,8 +48,7 @@ fn read_times() -> Option<(u64, u64, u64)> {
     let mut kernel = FILETIME::default();
     let mut user = FILETIME::default();
     unsafe {
-        GetSystemTimes(Some(&mut idle), Some(&mut kernel), Some(&mut user))
-            .ok()?;
+        GetSystemTimes(Some(&mut idle), Some(&mut kernel), Some(&mut user)).ok()?;
     }
     Some((filetime_u64(idle), filetime_u64(kernel), filetime_u64(user)))
 }

@@ -109,8 +109,9 @@ impl Drop for BusyGuard {
 /// 所以用 `cfg!(debug_assertions)` 直接拦掉，而不是靠 `bundle_type()` 兜底。
 fn install_supported() -> Result<(), String> {
     if cfg!(debug_assertions) {
-        return Err("开发模式下不支持应用内升级（无签名产物，且会覆盖 target/ 下的调试二进制）"
-            .to_string());
+        return Err(
+            "开发模式下不支持应用内升级（无签名产物，且会覆盖 target/ 下的调试二进制）".to_string(),
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -144,8 +145,9 @@ fn install_supported() -> Result<(), String> {
     {
         match bundle_type() {
             Some(BundleType::Nsis) | Some(BundleType::Msi) => Ok(()),
-            _ => Err("应用内升级仅在安装版（NSIS / MSI）中可用，便携运行请手动下载新版"
-                .to_string()),
+            _ => {
+                Err("应用内升级仅在安装版（NSIS / MSI）中可用，便携运行请手动下载新版".to_string())
+            }
         }
     }
 
@@ -236,10 +238,11 @@ pub async fn install_app_update(
 ) -> Result<(), String> {
     install_supported()?;
 
-    let _guard = BusyGuard::acquire()
-        .ok_or_else(|| "已有一次更新正在进行，请稍候".to_string())?;
+    let _guard = BusyGuard::acquire().ok_or_else(|| "已有一次更新正在进行，请稍候".to_string())?;
 
-    let updater = app.updater().map_err(|e| format!("初始化升级组件失败：{e}"))?;
+    let updater = app
+        .updater()
+        .map_err(|e| format!("初始化升级组件失败：{e}"))?;
 
     // check() 在这里**必须重做一次**，不能复用 check_app_update 的结果：
     // Updater 不持有「上次查到的 Update」句柄，且两次调用之间远端可能已变。

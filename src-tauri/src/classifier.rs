@@ -44,8 +44,14 @@ pub fn classify_app(app: &RawApp, rules: &[Rule]) -> String {
             "window_title",
             app.window_title.clone().unwrap_or_default().to_lowercase(),
         ),
-        ("exe_path", app.exe_path.clone().unwrap_or_default().to_lowercase()),
-        ("bundle_id", app.bundle_id.clone().unwrap_or_default().to_lowercase()),
+        (
+            "exe_path",
+            app.exe_path.clone().unwrap_or_default().to_lowercase(),
+        ),
+        (
+            "bundle_id",
+            app.bundle_id.clone().unwrap_or_default().to_lowercase(),
+        ),
         ("name", app.name.to_lowercase()),
     ];
 

@@ -12,8 +12,8 @@
 
 use tauri::AppHandle;
 
-use crate::db::PermissionStatus;
 use crate::commands::Webview2Status;
+use crate::db::PermissionStatus;
 
 /// 在系统壳里打开文件 / URL
 pub(crate) trait OsOpenBackend {
@@ -47,16 +47,16 @@ pub(crate) trait Webview2Backend {
     fn open_download() -> Result<(), String>;
 }
 
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
-#[cfg(target_os = "linux")]
-mod linux;
 
+#[cfg(target_os = "linux")]
+pub(crate) use linux::Backend;
 #[cfg(target_os = "macos")]
 pub(crate) use macos::Backend;
 #[cfg(target_os = "windows")]
 pub(crate) use windows::Backend;
-#[cfg(target_os = "linux")]
-pub(crate) use linux::Backend;

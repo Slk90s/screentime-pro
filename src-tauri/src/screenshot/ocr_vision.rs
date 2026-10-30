@@ -65,8 +65,11 @@ pub fn recognize(img: &RgbaImage) -> Result<OcrOut, String> {
 
     // ② 图像处理器。options 传空字典即可（相机内参等参数对截图无意义）。
     let options: Retained<NSDictionary<VNImageOption, AnyObject>> = NSDictionary::new();
-    let handler =
-        VNImageRequestHandler::initWithData_options(VNImageRequestHandler::alloc(), &data, &options);
+    let handler = VNImageRequestHandler::initWithData_options(
+        VNImageRequestHandler::alloc(),
+        &data,
+        &options,
+    );
 
     // ③ 配置识别请求（语言部分要单独拿，回给前端做语言提示）
     let request = VNRecognizeTextRequest::new();
@@ -113,9 +116,7 @@ pub fn recognize(img: &RgbaImage) -> Result<OcrOut, String> {
 /// 返回「可直接设置的语言数组」+「主语言标签（回给前端展示）」。
 /// 交集为空时返回 `None` —— 此时**不设置** `recognitionLanguages`，
 /// 让 Vision 用它自己的默认（系统语言），而不是塞一个系统不认的标签把请求弄失败。
-fn choose_languages(
-    req: &VNRecognizeTextRequest,
-) -> Option<(Retained<NSArray<NSString>>, String)> {
+fn choose_languages(req: &VNRecognizeTextRequest) -> Option<(Retained<NSArray<NSString>>, String)> {
     // 该方法在 objc2 里是 unsafe fn（有 out-error 参数），但语义无害：失败就当不支持。
     let supported = unsafe { req.supportedRecognitionLanguagesAndReturnError() }.ok()?;
     let codes: Vec<String> = supported.iter().map(|s| s.to_string()).collect();
@@ -244,7 +245,10 @@ mod tests {
         println!("== 探针图 {} ({}×{})", path, img.width(), img.height());
 
         let out = recognize(&img).expect("系统取字失败");
-        println!("== 引擎 {} / 语言 {:?} / 行数 {}", out.engine, out.language, out.lines);
+        println!(
+            "== 引擎 {} / 语言 {:?} / 行数 {}",
+            out.engine, out.language, out.lines
+        );
         for (i, l) in out.text.lines().enumerate() {
             println!("   {:>2}. {}", i + 1, l);
         }

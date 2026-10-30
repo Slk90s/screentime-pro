@@ -38,9 +38,7 @@
 
 use screencapturekit::screenshot_manager::{CGImageExt, SCScreenshotManager};
 use screencapturekit::shareable_content::SCShareableContent;
-use screencapturekit::stream::configuration::{
-    SCCaptureResolutionType, SCStreamConfiguration,
-};
+use screencapturekit::stream::configuration::{SCCaptureResolutionType, SCStreamConfiguration};
 use screencapturekit::stream::content_filter::SCContentFilter;
 
 /// SCK 路径的错误（转成 String 给上层统一处理）
@@ -60,7 +58,12 @@ fn is_macos_14_plus() -> bool {
             .arg("-productVersion")
             .output()
             .ok()
-            .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<String>().ok())
+            .and_then(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .trim()
+                    .parse::<String>()
+                    .ok()
+            })
             .map(|s| {
                 // "14.5" / "15.0" / "26.1" —— 取主版本号比较即可（macOS 26 是 Tahoe 的正式版本号）
                 s.split('.')
@@ -178,7 +181,11 @@ pub fn capture_main_display() -> SckResult<(image::RgbaImage, i32, i32, f64)> {
     //     与旧行为一致，不会更糟。
     let scale = {
         let s = filter.point_pixel_scale() as f64;
-        if (1.0..=4.0).contains(&s) { s } else { 1.0 }
+        if (1.0..=4.0).contains(&s) {
+            s
+        } else {
+            1.0
+        }
     };
 
     // ②' 期望出图物理像素尺寸：content_rect（点）× scale。

@@ -89,11 +89,7 @@ pub async fn hide_pet_menu_window(app: AppHandle) -> Result<(), String> {
 /// 入参 x/y 是逻辑像素（LogicalPosition = CSS 像素），与 Tauri setPosition 对齐。
 /// 在用户拖动菜单时每帧调用（但配合 rAF 合并，实际频率 ≤ 60fps）。
 #[tauri::command]
-pub async fn move_pet_menu_window(
-    app: AppHandle,
-    x: f64,
-    y: f64,
-) -> Result<(), String> {
+pub async fn move_pet_menu_window(app: AppHandle, x: f64, y: f64) -> Result<(), String> {
     let window = app
         .get_webview_window(PET_MENU_WINDOW_LABEL)
         .ok_or_else(|| "pet-menu 窗口尚未创建".to_string())?;

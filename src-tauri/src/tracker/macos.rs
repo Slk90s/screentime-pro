@@ -34,13 +34,14 @@ use std::path::Path;
 use core_foundation_sys::array::{CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef};
 use core_foundation_sys::base::{CFIndex, CFTypeRef};
 use core_foundation_sys::dictionary::{CFDictionaryGetValue, CFDictionaryRef};
-use core_foundation_sys::number::{CFNumberGetValue, CFNumberRef, kCFNumberSInt64Type};
+use core_foundation_sys::number::{kCFNumberSInt64Type, CFNumberGetValue, CFNumberRef};
 use core_foundation_sys::string::{
-    CFStringGetCString, CFStringGetLength, CFStringRef, kCFStringEncodingUTF8,
+    kCFStringEncodingUTF8, CFStringGetCString, CFStringGetLength, CFStringRef,
 };
 use core_graphics::window::{
-    CGWindowListCopyWindowInfo, CGWindowListOption, kCGNullWindowID, kCGWindowListExcludeDesktopElements,
-    kCGWindowListOptionOnScreenOnly, kCGWindowLayer, kCGWindowName, kCGWindowOwnerPID,
+    kCGNullWindowID, kCGWindowLayer, kCGWindowListExcludeDesktopElements,
+    kCGWindowListOptionOnScreenOnly, kCGWindowName, kCGWindowOwnerPID, CGWindowListCopyWindowInfo,
+    CGWindowListOption,
 };
 
 /// macOS 采集器：基于 NSWorkspace 前台应用 + CoreGraphics 空闲检测
@@ -183,15 +184,24 @@ pub fn get_foreground_window_title(pid: i32) -> Option<String> {
 /// 与 `screenshot::macos::dict_i64` 同型但独立实现：先 `CFGetTypeID` 校验再强转，
 /// 避免类型不符时裸转指针是 UB。tracker 模块不依赖 screenshot 模块（后者是
 /// `#[cfg(target_os = "macos")]` 的 pub(crate)，且职责上采集器应自洽）。
-unsafe fn dict_i64_of(dict: core_foundation_sys::dictionary::CFDictionaryRef, key: *const c_void) -> Option<i64> {
+unsafe fn dict_i64_of(
+    dict: core_foundation_sys::dictionary::CFDictionaryRef,
+    key: *const c_void,
+) -> Option<i64> {
     use core_foundation_sys::base::{CFGetTypeID, CFTypeRef};
-    use core_foundation_sys::number::{CFNumberGetTypeID, CFNumberGetValue, CFNumberRef, kCFNumberSInt64Type};
+    use core_foundation_sys::number::{
+        kCFNumberSInt64Type, CFNumberGetTypeID, CFNumberGetValue, CFNumberRef,
+    };
     let value: CFTypeRef = core_foundation_sys::dictionary::CFDictionaryGetValue(dict, key);
     if value.is_null() || CFGetTypeID(value) != CFNumberGetTypeID() {
         return None;
     }
     let mut out: i64 = 0;
-    if CFNumberGetValue(value as CFNumberRef, kCFNumberSInt64Type, &mut out as *mut i64 as *mut c_void) {
+    if CFNumberGetValue(
+        value as CFNumberRef,
+        kCFNumberSInt64Type,
+        &mut out as *mut i64 as *mut c_void,
+    ) {
         Some(out)
     } else {
         None

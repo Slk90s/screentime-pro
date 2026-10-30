@@ -60,14 +60,16 @@
 use core_foundation_sys::array::{CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef};
 use core_foundation_sys::base::{CFGetTypeID, CFIndex, CFRelease, CFTypeRef};
 use core_foundation_sys::dictionary::{CFDictionaryGetValue, CFDictionaryRef};
-use core_foundation_sys::number::{CFNumberGetTypeID, CFNumberGetValue, CFNumberRef, kCFNumberSInt64Type};
+use core_foundation_sys::number::{
+    kCFNumberSInt64Type, CFNumberGetTypeID, CFNumberGetValue, CFNumberRef,
+};
 use core_foundation_sys::string::{
-    CFStringGetCString, CFStringGetLength, CFStringGetTypeID, CFStringRef, kCFStringEncodingUTF8,
+    kCFStringEncodingUTF8, CFStringGetCString, CFStringGetLength, CFStringGetTypeID, CFStringRef,
 };
 use core_graphics::window::{
-    CGWindowListCopyWindowInfo, CGWindowListOption, kCGNullWindowID,
-    kCGWindowListExcludeDesktopElements, kCGWindowLayer, kCGWindowListOptionOnScreenOnly,
-    kCGWindowName, kCGWindowOwnerPID,
+    kCGNullWindowID, kCGWindowLayer, kCGWindowListExcludeDesktopElements,
+    kCGWindowListOptionOnScreenOnly, kCGWindowName, kCGWindowOwnerPID, CGWindowListCopyWindowInfo,
+    CGWindowListOption,
 };
 use std::os::raw::{c_char, c_void};
 
@@ -163,10 +165,7 @@ pub fn collect() -> PermissionSignals {
 
     let bundle_path = bundle_path_from_exe(&exe_path);
     let (adhoc_unsigned, signature_summary) = signature_info(bundle_path.as_deref());
-    let quarantined = bundle_path
-        .as_deref()
-        .map(has_quarantine)
-        .unwrap_or(false);
+    let quarantined = bundle_path.as_deref().map(has_quarantine).unwrap_or(false);
 
     PermissionSignals {
         preflight,
@@ -317,7 +316,10 @@ fn signature_info(bundle: Option<&str>) -> (Option<bool>, String) {
 
     if !out.status.success() {
         if text.to_lowercase().contains("not signed") {
-            return (Some(true), "未签名（code object is not signed at all）".to_string());
+            return (
+                Some(true),
+                "未签名（code object is not signed at all）".to_string(),
+            );
         }
         return (
             None,
@@ -408,7 +410,9 @@ fn build_error(sig: &PermissionSignals) -> String {
          ③ 若那里本来就是开着的：先点左下角「−」把本应用移除，再重新打开本应用授权。\n\
          \x20  （在本应用「设置 → 截图」点「重置权限并重启」等价于终端执行：\n",
     );
-    m.push_str(&format!("       tccutil reset ScreenCapture {BUNDLE_ID}\n）\n"));
+    m.push_str(&format!(
+        "       tccutil reset ScreenCapture {BUNDLE_ID}\n）\n"
+    ));
 
     m.push_str("\n—— 本次实际检测到的情况 ——\n");
     m.push_str(&format!("运行路径：{}\n", sig.exe_path));
@@ -423,7 +427,9 @@ fn build_error(sig: &PermissionSignals) -> String {
         );
     }
     if sig.quarantined {
-        m.push_str("⚠️ 应用带下载隔离标记（com.apple.quarantine），会持续触发上面的临时路径运行。\n");
+        m.push_str(
+            "⚠️ 应用带下载隔离标记（com.apple.quarantine），会持续触发上面的临时路径运行。\n",
+        );
         if let Some(b) = &sig.bundle_path {
             m.push_str(&format!(
                 "✅ 处理：终端执行 xattr -dr com.apple.quarantine \"{b}\" 后再重新授权。\n"

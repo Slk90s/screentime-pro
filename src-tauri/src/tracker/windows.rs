@@ -26,16 +26,15 @@
 
 use crate::error::TrackerError;
 use crate::tracker::platform::{PlatformTracker, RawApp};
-use std::path::Path;
 use std::os::raw::{c_uint, c_void};
+use std::path::Path;
 use windows::Win32::System::Threading::{
-    OpenProcess, PROCESS_QUERY_INFORMATION,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
+    OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 
 /// Windows 采集器
 pub struct WindowsTracker;
@@ -186,7 +185,12 @@ unsafe fn get_process_path(pid: u32) -> (Option<String>, String) {
     if let Ok(handle) = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid) {
         let mut buf = [0u16; 1024];
         let hproc = handle.0 as *mut c_void; // HANDLE → 原始指针
-        let n = GetModuleFileNameExW(hproc, std::ptr::null_mut(), buf.as_mut_ptr(), buf.len() as u32);
+        let n = GetModuleFileNameExW(
+            hproc,
+            std::ptr::null_mut(),
+            buf.as_mut_ptr(),
+            buf.len() as u32,
+        );
         if n > 0 {
             let path = String::from_utf16_lossy(&buf[..n as usize]);
             let name = Path::new(&path)

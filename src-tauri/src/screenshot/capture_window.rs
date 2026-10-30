@@ -36,7 +36,7 @@
 #[cfg(target_os = "macos")]
 mod imp {
     use objc2_app_kit::{
-        NSWindow, NSWindowCollectionBehavior, NSScreenSaverWindowLevel, NSFloatingWindowLevel,
+        NSFloatingWindowLevel, NSScreenSaverWindowLevel, NSWindow, NSWindowCollectionBehavior,
     };
     use std::ptr::NonNull;
     use tauri::{Manager, WebviewWindow};

@@ -96,10 +96,14 @@ struct X11Connection {
 
 impl X11Connection {
     fn connect() -> Result<Self, TrackerError> {
-        let (conn, screen_num) =
-            x11rb::connect(None).map_err(|e| TrackerError::Platform(format!("X11 connect failed: {}", e)))?;
+        let (conn, screen_num) = x11rb::connect(None)
+            .map_err(|e| TrackerError::Platform(format!("X11 connect failed: {}", e)))?;
         let atoms = X11Atoms::intern(&conn)?;
-        Ok(Self { conn, screen_num, atoms })
+        Ok(Self {
+            conn,
+            screen_num,
+            atoms,
+        })
     }
 
     fn root(&self) -> u32 {
@@ -120,9 +124,9 @@ impl PlatformTracker for LinuxTracker {
             .conn
             .get_property(false, root, x.atoms.net_active_window, x.atoms.window, 0, 1)
             .map_err(|e| TrackerError::Platform(format!("_NET_ACTIVE_WINDOW send: {}", e)))?;
-        let active_reply = active_cookie
-            .reply()
-            .map_err(|e| TrackerError::Platform(format!("_NET_ACTIVE_WINDOW query failed: {}", e)))?;
+        let active_reply = active_cookie.reply().map_err(|e| {
+            TrackerError::Platform(format!("_NET_ACTIVE_WINDOW query failed: {}", e))
+        })?;
 
         // x11rb 0.13: value32() 返回 Option<Iterator<Item=u32>>（format != 32 时 None）
         let window_id = active_reply
@@ -170,13 +174,11 @@ impl PlatformTracker for LinuxTracker {
 ///
 /// x11rb 0.13: GetPropertyReply 的 value 字段私有化；
 /// UTF-8 字符串用 `value8()` 读取字节迭代器再收集为 Vec<u8>。
-fn get_window_title(
-    conn: &impl Connection,
-    window: u32,
-    atoms: &X11Atoms,
-) -> Option<String> {
+fn get_window_title(conn: &impl Connection, window: u32, atoms: &X11Atoms) -> Option<String> {
     // 优先尝试 _NET_WM_NAME（UTF-8 编码，现代桌面环境标准）
-    if let Ok(cookie) = conn.get_property(false, window, atoms.net_wm_name, atoms.utf8_string, 0, 256) {
+    if let Ok(cookie) =
+        conn.get_property(false, window, atoms.net_wm_name, atoms.utf8_string, 0, 256)
+    {
         if let Ok(reply) = cookie.reply() {
             // value8(): format==8 时 Some(Iterator<u8>)，否则 None
             if let Some(bytes) = reply.value8() {

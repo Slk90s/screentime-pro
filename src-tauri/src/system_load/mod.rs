@@ -34,12 +34,12 @@ pub struct CpuMonitor {
     inner: Mutex<CpuMonitorInner>,
 }
 
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
-#[cfg(target_os = "linux")]
-mod linux;
 
 mod network;
 // MetricsSampler 自 v0.7.6 起跨平台存在；平台差异（mem/disk FFI）抽到 platform/ 下

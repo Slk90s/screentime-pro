@@ -234,8 +234,8 @@ fn platform_support() -> GlassTier {
 #[cfg(target_os = "macos")]
 fn platform_apply(window: &WebviewWindow, glass: bool) -> Result<(), String> {
     use window_vibrancy::{
-        apply_liquid_glass, apply_vibrancy, clear_liquid_glass, clear_vibrancy,
-        LiquidGlassOptions, NSGlassEffectViewStyle, NSVisualEffectMaterial, NSVisualEffectState,
+        apply_liquid_glass, apply_vibrancy, clear_liquid_glass, clear_vibrancy, LiquidGlassOptions,
+        NSGlassEffectViewStyle, NSVisualEffectMaterial, NSVisualEffectState,
     };
 
     if !glass {
@@ -337,8 +337,7 @@ fn platform_support() -> GlassTier {
 ///
 /// 与 macOS 不同，这里要如实告诉用户"没有背景模糊"，避免开了开关期待落空。
 #[cfg(target_os = "windows")]
-const WINDOWS_REASON: &str =
-    "Windows: high-transparency glass (no system backdrop blur); \
+const WINDOWS_REASON: &str = "Windows: high-transparency glass (no system backdrop blur); \
      Acrylic renders opaque on borderless windows";
 
 #[cfg(target_os = "windows")]

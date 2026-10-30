@@ -113,7 +113,10 @@ fn read_cpu_ticks() -> Option<[u32; 4]> {
         )
     };
     if rc != 0 {
-        tracing::warn!(rc, "host_statistics(HOST_CPU_LOAD_INFO) 失败，本次 CPU 记为 0");
+        tracing::warn!(
+            rc,
+            "host_statistics(HOST_CPU_LOAD_INFO) 失败，本次 CPU 记为 0"
+        );
         return None;
     }
     if count < HOST_CPU_LOAD_INFO_COUNT {
