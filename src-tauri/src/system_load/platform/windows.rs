@@ -104,7 +104,7 @@ fn ffi_read_disk_usage() -> (u64, u64) {
 /// - `DRIVE_CDROM` / `DRIVE_RAMDISK` / `DRIVE_NO_ROOT_DIR`：无意义或不可用
 /// - **未就绪的卷**（`GetDiskFreeSpaceExW` 失败）：直接跳过而非记 0，
 ///   否则会显示「0/0」这种假数据
-#[allow(dead_code)] // v1.2.12 接入多盘调用方后删除（详见 platform/mod.rs 的 DiskVolume 文档）
+#[allow(dead_code)] // v1.2.13 接入多盘调用方后删除（详见 platform/mod.rs 的 DiskVolume 文档）
 fn ffi_read_disks() -> Vec<DiskVolume> {
     use windows::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives};
 

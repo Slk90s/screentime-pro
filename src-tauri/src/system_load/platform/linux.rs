@@ -150,7 +150,7 @@ const SKIP_MOUNT_PREFIX: &[&str] = &[
 ///
 /// **同设备去重**：bind mount（`mount --bind`）会让同一设备出现多次，
 /// 用设备名去重后只保留首个（通常是真实挂载点而非 bind 视图）。
-#[allow(dead_code)] // v1.2.12 接入多盘调用方后删除（详见 platform/mod.rs 的 DiskVolume 文档）
+#[allow(dead_code)] // v1.2.13 接入多盘调用方后删除（详见 platform/mod.rs 的 DiskVolume 文档）
 fn ffi_read_disks() -> Vec<DiskVolume> {
     let text = match std::fs::read_to_string("/proc/mounts") {
         Ok(t) => t,

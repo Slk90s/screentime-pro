@@ -283,7 +283,7 @@ fn macos_volume_selected(fs_type: &str, mount: &str, flags: u32) -> bool {
 ///
 /// ⚠️ `getfsstat` 的 `bufsize` 参数是**字节数**，且结构体是 **2168 字节**（见 `StatFs` 断言）。
 /// 传 `[0u8; 256]` 之类的裸缓冲会越界写（v0.7.7 崩溃根因），这里用 `Vec<StatFs>` 保证尺寸。
-#[allow(dead_code)] // v1.2.12 接入多盘调用方后删除（详见 platform/mod.rs 的 DiskVolume 文档）
+#[allow(dead_code)] // v1.2.13 接入多盘调用方后删除（详见 platform/mod.rs 的 DiskVolume 文档）
 fn ffi_read_disks() -> Vec<DiskVolume> {
     const MNT_NOWAIT: i32 = 2;
 

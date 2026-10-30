@@ -21,15 +21,20 @@ use crate::system_load::metrics::MetricsInner;
 /// v1.2.11 及以前三端口径不一致：Windows/macOS 用「全部空闲」、Linux 用「非特权可用」，
 /// 导致同一块 ext4 盘在 Linux 上显示得更满（默认 5% root 保留）。本版统一为后者。
 ///
-/// ⚠️ **`allow(dead_code)` 的由来（v1.2.11 加，v1.2.12 接入时删除）**：
-/// 本类型的消费方（前端多盘卡片 + `metrics.rs` 的 `get_system_metrics` 扩展）属于 v1.2.12，
-/// 尚未落地；而 v1.2.11 是**稳定性紧急版**，要求 `cargo check` 零警告。
-/// 于是这一整条多盘链（`DiskVolume` / `read_disks` / `ffi_read_disks`）在 v1.2.11 里是
+/// ⚠️ **`allow(dead_code)` 的由来（v1.2.11 加，顺延至 v1.2.13）**：
+/// 本类型的消费方（前端多盘卡片 + `metrics.rs` 的 `get_system_metrics` 扩展）尚未落地，
+/// 而链路落地的 v1.2.11 是**稳定性紧急版**，要求 `cargo check` 零警告。
+/// 于是这一整条多盘链（`DiskVolume` / `read_disks` / `ffi_read_disks`）一直是
 /// 「已实现、无调用方」的死代码。**保留而不删**的原因：三平台的 FFI 与过滤规则
 /// （`getfsstat` / `GetLogicalDrives` / `/proc/mounts`）是逐字节验过交叉探针的，
-/// 删掉等于把验证过的成果丢掉。v1.2.12 接上调用方后**必须移除这个 allow**，
-/// 否则将来真的写出死代码也不会再报警。
-#[allow(dead_code)] // v1.2.12 接入多盘调用方后删除；保留原因见上
+/// 删掉等于把验证过的成果丢掉。
+///
+/// 📌 **2026-10-30 @v1.2.12 决策**：原本计划「v1.2.12 接入调用方并删除此 allow」，
+/// 但 v1.2.12 的主题是**拖拽 P0 修复**（重启跳回拖拽起点 / 跨 DPI 屏幕跳一下），
+/// 多盘是顺手带的功能。混在一起会让「这一版到底修了什么」讲不清，也无谓拖慢发版，
+/// 故 Ryan 决定**本次不接**，标注顺延到 **v1.2.13**。
+/// 到 v1.2.13 接上调用方后**必须移除这些 allow**，否则将来真的写出死代码也不会再报警。
+#[allow(dead_code)] // v1.2.13 接入多盘调用方后删除；保留原因见上
 #[derive(Debug, Clone)]
 pub(crate) struct DiskVolume {
     /// 卷标识：Windows 盘符（`C:`）、Unix 挂载点（`/`、`/home`）。
@@ -65,8 +70,8 @@ pub(crate) trait MetricsBackend {
     /// **不保证包含系统盘**：macOS 的 APFS 卷组结构下 `/` 与 `Data` 卷共享容器，
     /// 这里按「挂载点」列出（`/` 一定是其中一项）。各平台过滤规则见各自实现。
     ///
-    /// ⚠️ `allow(dead_code)` 同 `DiskVolume`：v1.2.12 接上调用方后删除。
-    #[allow(dead_code)] // v1.2.12 接入多盘调用方后删除；保留原因见 `DiskVolume` 文档
+    /// ⚠️ `allow(dead_code)` 同 `DiskVolume`：v1.2.13 接上调用方后删除。
+    #[allow(dead_code)] // v1.2.13 接入多盘调用方后删除；保留原因见 `DiskVolume` 文档
     fn read_disks() -> Vec<DiskVolume>;
     /// macOS 用：写入 inner.page_size / inner.memory_total；其余平台为 no-op
     fn init_memory_constants(inner: &mut MetricsInner);
