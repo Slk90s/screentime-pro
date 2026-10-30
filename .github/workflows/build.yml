@@ -343,6 +343,8 @@ jobs:
           name: linux-build
           path: |
             src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
+            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage.tar.gz
+            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage.tar.gz.sig
             src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
 
   # ---------- macOS (Apple Silicon) ----------
@@ -601,6 +603,13 @@ jobs:
     needs: [windows, linux]
     runs-on: ubuntu-24.04
     steps:
+      # 🔴 v1.2.12 修复：本作业缺 checkout，导致仓库文件根本不在 runner 上。
+      # 现象：`python3: can't open file '.../gen_latest_json.py': No such file or directory`。
+      # 这个作业是 v1.2.11 新增的，**从未成功跑过一次**（v1.2.10 的 run 里没有它，
+      # 而 v1.2.11 因签名密钥缺失整个 CI 没起来）。新增作业最容易漏的就是 checkout ——
+      # download-artifact 只把「构建产物」放下来，不含任何仓库源码。
+      - uses: actions/checkout@v4
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -608,12 +617,25 @@ jobs:
 
       - name: Generate latest.json
         env:
-          TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           echo "--- 收到的产物 ---"
           find dist-artifacts -type f | sort
+          # 🔴 v1.2.12 修复：不能直接用 `github.ref_name` 当 tag。
+          # tag 推送时它是 `v1.2.12`（正确）；但 `workflow_dispatch` 下它是**分支名**
+          # `main` —— 于是 latest.json 会写出 …/releases/download/main/… 的死链，
+          # 且 `version` 被脚本 `lstrip('vV')` 变成 `main`，客户端 semver 解析直接失败。
+          # 版本号唯一可信来源是 package.json（发版时与 tauri.conf.json 同步）。
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+            echo "tag 触发，TAG=$TAG"
+          else
+            VER="$(python3 -c "import json;print(json.load(open('package.json',encoding='utf-8'))['version'])")"
+            TAG="v$VER"
+            echo "非 tag 触发（${GITHUB_REF}），按 package.json 归一化 TAG=$TAG"
+          fi
+          export TAG
           # ⚠️ PUB_DATE 必须是严格 RFC3339（Z 结尾）：updater 用
           # `OffsetDateTime::parse(..., Rfc3339)` 反序列化，格式不对会让客户端
           # 检查更新直接失败（updater.rs:1479-1484 把解析错误转成 DeError）。
@@ -628,7 +650,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          TAG="${{ github.ref_name }}"
+          # 与上一步同源：TAG 优先取真实 tag，dispatch 下退化为 package.json 版本。
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            VER="$(python3 -c "import json;print(json.load(open('package.json',encoding='utf-8'))['version'])")"
+            TAG="v$VER"
+          fi
+          echo "上传目标 tag=$TAG"
           # Release 由构建作业创建；并行时可能尚未就绪，最多等 ~5 分钟。
           for i in $(seq 1 30); do
             if gh release view "$TAG" >/dev/null 2>&1; then break; fi
