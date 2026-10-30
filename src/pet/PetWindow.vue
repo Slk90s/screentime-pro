@@ -31,6 +31,10 @@
   - 2026-09-16 @v0.8.0: 修复 - 接入 usePetHitMask（按身体 alpha 动态切鼠标穿透，
     修「150×330 竖窗透明区吃掉下层点击」的 P0 死区）；气泡隐藏时暂停（pet-hidden）；
     监听 pet-fullscreen-enter/exit 自动隐藏；过热角标上边距修正（不再被 overflow 裁切）
+  - 2026-10-29 @v1.2.12: 修复 - 启动时恢复桌宠（整改 1.2）。开关是持久化的，但「上次开着」
+    以前只有设置页开关认账，pet 窗按 conf 预创建成 visible:false 后没人 show 它 →
+    重启后宠物消失、设置里还显示「开」。改为 pet 窗 mounted 末尾自查 enabled，
+    按 setSize → move(clamp) → show 的顺序带回（顺序反了会闪一帧 140×140）。
 -->
 <template>
   <div
@@ -281,6 +285,40 @@ let unlistenFsExit: (() => void) | null = null;
 // v0.7.0：饱食度随时间自然衰减（之前 tickFullness 从未被调用，导致「饿度值不变」）
 const FULLNESS_DECAY_MS = 120_000; // 每 2 分钟 -1
 let decayTimer: number | null = null;
+
+/**
+ * v1.2.12（整改 1.2）：启动时把桌宠带回来。
+ *
+ * 问题：桌宠开关是**持久化**的（localStorage `screentime-pet` 的 `enabled`），但「上次是开着的」
+ * 这件事以前只有设置页的开关处理过。pet 窗在 tauri.conf.json 里预创建成 `visible:false`，
+ * 重启后没有任何人 show 它 → 用户看到的就是「更新/重开后宠物没了，得去设置里再开一次」，
+ * 而设置页里的开关还显示「开」（三处状态里只有窗口可见性丢了）。
+ *
+ * 为什么由 pet 窗自己恢复、而不是 Rust setup 或主窗口：
+ * - Rust 读不到 localStorage（桌宠状态只在前端；要 Rust 侧决定显隐就得先把状态镜像进
+ *   SQLite，那是批次 4.1 的账）。整改方案原文写的「setup 读持久化」在本项目不成立，此处按
+ *   「前端自恢复」落地并记录偏差。
+ * - 主窗口可能因「启动最小化到托盘」而延后加载；pet 窗 webview 一定起来，依赖最少。
+ *
+ * 顺序：先 setSize（皮肤/缩放决定的窗口尺寸）→ 再定位置（带离屏纠偏，纠偏按最终尺寸算才对）
+ * → 最后 show。反过来的话会先以 140×140 露出一帧，再被撑成皮肤尺寸。
+ */
+async function restorePetOnStartup(): Promise<void> {
+  if (!petStore.enabled) return; // 用户明确关掉的状态绝不复活
+  const win = getCurrentWindow();
+  try {
+    const s = scaledSize.value;
+    await win.setSize(new LogicalSize(s.w, s.h));
+    const p = petStore.position;
+    // clamp：持久化坐标可能是拔副屏 / 换机器前的绝对坐标，落点没了就贴回主屏右下角（整改 1.3）
+    await invoke('move_pet_window', { x: p.x, y: p.y, clamp: true });
+    await invoke('show_pet_window');
+  } catch (e) {
+    // 恢复失败只影响「这次没显示出来」，不影响开关状态；设置页仍可用开关手动拉起
+    log.warn('[pet] 启动恢复桌宠失败', e);
+  }
+}
+
 onMounted(async () => {
   try {
     unlistenShown = await listen('pet-shown', () => {
@@ -334,6 +372,9 @@ onMounted(async () => {
     petStore.tickFullness();
   }, FULLNESS_DECAY_MS);
   scheduleNextBubble(); // 启动气泡周期（v0.6.2-beta.15）
+  // v1.2.12（整改 1.2）：开关持久化为「开」时把桌宠重新显示出来。
+  // 放在监听注册**之后**：show_pet_window 会 emit_to 'pet-shown'，早于上面 listen 就收不到
+  await restorePetOnStartup();
 });
 
 // v0.6.2：初始按当前皮肤尺寸调整窗口 + 订阅皮肤切换动态 resize

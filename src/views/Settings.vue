@@ -1174,11 +1174,14 @@ async function onTogglePet(checked: boolean) {
   petStore.setEnabled(checked);
   if (checked) {
     invoke("create_pet_window")
-      .then(() => invoke("show_pet_window"))
       .then(() => {
         const pos = petStore.position;
-        return invoke("move_pet_window", { x: pos.x, y: pos.y });
+        // clamp: 位置来自 localStorage（可能是拔掉副屏/换机器前的绝对坐标），
+        // 交给 Rust 侧做一次离屏判定，屏外则回落主屏右下角（v1.2.12 整改 1.3，
+        // 与 v1.2.1 修 float 同一根因，当时 pet 漏了）
+        return invoke("move_pet_window", { x: pos.x, y: pos.y, clamp: true });
       })
+      .then(() => invoke("show_pet_window"))
       .catch((err) => {
         log.error("[pet] 切换桌宠失败", err);
         showAlert("warn", t("common.error"), String(err));
@@ -1192,9 +1195,11 @@ async function onTogglePet(checked: boolean) {
 async function onShowPet() {
   try {
     await invoke("create_pet_window");
-    await invoke("show_pet_window");
+    // v1.2.12（整改 1.3）：先按持久化坐标落位（带离屏纠偏）再 show ——
+    // 顺序反了用户会看到宠物「先在别处冒出来、再跳一下」
     const pos = petStore.position;
-    await invoke("move_pet_window", { x: pos.x, y: pos.y });
+    await invoke("move_pet_window", { x: pos.x, y: pos.y, clamp: true });
+    await invoke("show_pet_window");
   } catch (err) {
     log.error("[pet] 显示桌宠失败", err);
     showAlert("warn", t("common.error"), String(err));

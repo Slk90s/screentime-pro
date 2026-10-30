@@ -31,6 +31,33 @@
     输入名的真伪、`pub_date` 严格 RFC3339、`updater-json` job 的三条硬约束、私钥托管红线）。
     头部推进至 v1.2.11 并压缩 v1.2.10 为一行；§3.1「当前 releaseBody 现值」更新为 **v1.2.11**
     （49 行 / 5052 字节 × 3 份逐字节相同，SHA256 `e90b632afae95c7f…`）；§7 补 v1.2.11 行（发布落点待填）。
+  - 2026-10-29 @v1.2.11（**归版调整 + 补 §3.4**）: 修正 - 真机反馈的截图链路两个 P0（截完图进程直接消失 /
+    首次截图只有半个屏幕）与两个 P1（锁屏计入时长 / 分类失败被永久缓存）**并入 v1.2.11**，不另开新版本号。
+    理由：v1.2.11 从未发布（远端无该 tag），若让它先单独发出，用户装完仍会「截完图就消失」、得再升一次才好。
+    同步项：头部「最后更新」推到 2026-10-29 并补第二块内容摘要；IPC **88 → 89**（新增 `take_capture_ready`）；
+    §3.1「releaseBody 现值」更新为 **96 行 / 10,431 字节 × 3 份逐字节相同，SHA256 `b7fd6b0ef1dc8e7e…`**；
+    §7 的 v1.2.11 行补两段 P0/P1 并改「IPC 对账 89 = 89」。
+    **新增 §3.4「运行库下载完整性 + 截图事件不丢」** —— 把「落盘四条不变式」「`panic` 必须 unwind 且
+    验证只能走 release 档」「`capture-ready` 不可依赖恰好收到」写成改这几个文件前必读的约束。
+    ⚠️ 同期并存的「多盘枚举 + 三端磁盘口径统一」（`src-tauri/src/system_load/`，注释标 v1.2.12）
+    **不并入本版**，顺延为 v1.2.12 —— 它改的是用户可见数值（磁盘占用百分比会变），与稳定性修复混发不便讲清。
+  - 2026-10-30 @v1.2.12: 修正 - **三份 `releaseBody` 改写为 v1.2.12 合并口径**，消除「conf 已到 1.2.12
+    而正文仍是 v1.2.11」的错位（§3.1 与头部警告同步解除）。口径决策：因 v1.2.11 从未发布，正文
+    **同时覆盖 v1.2.11 + v1.2.12 两版内容**，开篇用 `>` 引子明说理由 —— 否则从 v1.2.10 升上来的用户
+    看不到「截完图闪退已修」这句最该知道的话（与 v1.2.7「v1.2.3~v1.2.6 四版合并」先例一致）。
+    实测各 **124 行 / 15,920 字节**，三份 SHA256 `832e52905341e23d…` 逐字节相同；
+    校验走 `yaml.safe_load` 解析后逐份比对 `with.releaseBody`，并断言
+    `args` / `includeUpdaterJson` / `tagName` / `releaseName` / `releaseDraft` / `release` / `prerelease`
+    七个兄弟键全部还在（防「正则吞兄弟键」复发）。**IPC 总数复核为 91**（从 `generate_handler!` 重数：
+    48 commands + 22 screenshot + 14 pet + 3 float_window + 3 app_update + 1 float_glass）。
+  - 2026-10-29 @v1.2.12: 新增 - 桌宠整改批次 1/2 落地并按 §1.1 把版本号推到 **1.2.12**
+    （tauri.conf.json / package.json / package-lock ×2 / README 徽章 + 版本历史行 /
+    ARCHITECTURE 头部 + §3.1 + §5 + §9 + §11 / CHANGELOG / 本文件 §7）。
+    头部「最后更新」改为 v1.2.12 并**明确标注三份 `releaseBody` 仍是 v1.2.11 文案**（§3.1 同步加警告），
+    因为 conf 已到 1.2.12 而正文未改 —— 此时打 tag 会让 Release 正文漏掉整版内容，
+    这正是 §3 P0 清单里「最易漏」那一项的现行实例。**IPC 89→91**（+`begin_drag` / `end_drag`），
+    计数方式是**从 `generate_handler!` 重新数**（48+22+14+3+3+1），不是照文档递推。
+    §7 补 v1.2.12 行（发布落点待填，本版尚未打 tag）。
   - 2026-10-26 @v1.2.10: 修正 - 头部推进至 v1.2.10（macOS 交互体验专项：浅色反色 / 高度单一源 /
     菜单栏 template 图 / 更新检测三成因 / 权限弹窗 / 材质层泄漏 + 权限中心 + conf 补 x/y）；
     按「只留当前版 + 上一版一行」压缩，v1.2.8 收成一行；§3.1「当前 releaseBody 现值」由 v1.2.8
@@ -46,9 +73,18 @@
 
 > 目的：定义 **版本号从哪来、发版前改哪些地方、CI 怎么跑、出问题怎么回滚**。
 > 与 README 区别：README 是用户面（去哪下载、每个版本有什么），本文件是维护者面（怎么发出去）。
-> 最后更新：2026-10-27（**v1.2.11 待发布** —— 应用内自动升级 + macOS 授权误报三修复；
-> 版本号同步见 §1.1，IPC 总数 **88**）。
-> 本版内容：**Windows / Linux（AppImage）终于能一键升完；macOS 修掉「辅助功能已授权却报未授权」**。
+> 最后更新：2026-10-30（**当前版本号 v1.2.12**，代码已完成、三份 `releaseBody` 已对齐；待 review 与真机验收后打 tag。
+> v1.2.11 同样尚未发布 —— 本版**一次交付 v1.2.11 + v1.2.12 两版内容**，releaseBody 已按此口径合并撰写。
+> v1.2.12 = 桌宠整改批次 1/2（拖拽跟手 + 启动恢复 + 离屏防丢 + Linux 连接缓存）+ v1.2.11 顺延的
+> 「磁盘口径三端统一」。版本号同步见 §1.1，IPC 总数 **91**）。
+> ✅ **三份 `releaseBody` 已于 2026-10-30 改写为 v1.2.12 合并口径**（各 124 行 / 15,920 字节，SHA256 `832e52905341e23d…`）——
+> 见 §3.1。这是 §3 P0 清单里历史上漏得最多的一项，已消除。
+> ⚠️ 下面「本版内容分两块」那段讲的是 **v1.2.11**（其内容已并入 v1.2.12 的 releaseBody）；
+> v1.2.12 的完整变更见 §7 表 v1.2.12 行与 CHANGELOG。
+> 本版内容分两块，**合一次 CI 出包**（v1.2.11 此前从未发布，远端无该 tag；若先单独发出 1.2.11，
+> 用户装完仍会「截完图就消失」，得再升一次才好）。
+>
+> 第一块：**Windows / Linux（AppImage）终于能一键升完；macOS 修掉「辅助功能已授权却报未授权」**。
 > ① **应用内自动升级（新模块 `app_update.rs`）** —— 与 `commands::check_for_update` **并存不替代**：
 > 后者只告知并跳浏览器，前者真的「查 + 下 + ed25519 验签 + 装」。三平台分支互不相同：
 > **Windows** 拉起 NSIS 后**进程立即退出**（upstream `install_inner` 在 `ShellExecuteW` 后直接
@@ -67,7 +103,21 @@
 > job 汇总；`pub_date` 必须**严格 RFC3339**（解析错误变 `DeError` 会中断整个检查）。
 > ⑤ **`.gitignore` 的 `scripts/` 会匹配任意层级**，吞掉 `.github/scripts/` —— 本地正常、CI 才报
 > 文件不存在，已锚定 `/scripts/`；另加 `*.key` / `.tauri/` 保护私钥。
-> ⚠️ **本版 macOS 侧改动仍未经真机目视复验**：需在 Mac 上确认授权提示状态与重置按钮的实际落点。
+>
+> 第二块（10-29 补入）：**截图链路的两个 P0 + 两个 P1**，来自真机反馈
+> 「第一次截图只有半个屏幕，第二次才是全屏，截完图程序崩溃」。
+> - **P0 截完图进程消失**：下载校验在拉不到 `.sha256` 时 `return true` 放行 + 只看 HTTP 200 不看字节数
+>   → 残缺 dylib 被当成功；落盘非原子直写目标路径 → 半截文件被 `is_file()` 认定「已就绪」，
+>   **此后每次启动都崩**；`ort::setup_api()` 用内建 `expect`，而 release 是 `panic = "abort"`
+>   → `process::abort()`，**无 Err 出口**。修法四层见 §3.4。
+> - **P0 首次截图半屏**：遮罩窗懒创建时 WebView 还在加载 SPA，`emit_to` 即发即弃而监听器未注册
+>   → 事件丢弃 → `meta` 恒 null、`vw/vh` 停在 800×600 → 全选半屏、缩放比例错。
+>   修法见 §3.4（新增 IPC `take_capture_ready`，**89 = 89** 已对账）。
+> - **P1 锁屏计入时长**：`loginwindow` 等锁屏进程命中即结束会话并跳过本 tick（精确名匹配）。
+> - **P1 分类失败被永久缓存**：改为负缓存 + 10 分钟 TTL。
+>
+> ⚠️ **本版 macOS 侧改动仍未经真机目视复验**：需在 Mac 上确认授权提示状态与重置按钮的实际落点，
+> 以及截图遮罩在 Retina 屏上的实际观感。
 > ⚠️ **首次启用前必做**：GitHub Secret `TAURI_SIGNING_PRIVATE_KEY` 未配 → CI 出包时签名步骤失败；
 > 私钥 `~/.tauri/screentime-pro.key` **丢失即全体用户永久收不到更新**。
 > 上一版 v1.2.10：macOS 交互体验专项（浅色反色 / 高度单一源 / 托盘 template 图 / 更新检测三成因 /
@@ -156,15 +206,26 @@ grep -n 'badge/version' README.md
 `.github/workflows/build.yml` 中三个 job（windows / linux / macos）**各写了一份**
 `releaseBody`，内容是**硬编码的字符串**，不会自动跟着版本变。
 
-**当前仓库的三份 `releaseBody` 已是 v1.2.11 的文案**（v0.7.6 起每版发版时同步改写），
-三份**逐字节相同**（实测各 **5052 字节 / 49 行**，SHA256 `e90b632afae95c7f…`），可用「缩进块扫描」而非正则校验一致性：
+**当前仓库的三份 `releaseBody` 已是 v1.2.12 的文案**（v0.7.6 起每版发版时同步改写），
+与 `tauri.conf.json` 的 `1.2.12` **已对齐**（v1.2.11 那份"conf 已推进而正文未改"的错位已在 2026-10-30 修掉）。
+三份**逐字节相同**（实测各 **15,920 字节 / 124 行**，SHA256 `832e52905341e23d…`），可用「缩进块扫描」而非正则校验一致性：
 取 `releaseBody: |` 的基准缩进，正文缩进为基准 +2，遇到首个非空且缩进 ≤ 基准的行即视为块结束。
 （历史上用正则 `releaseBody: \|\n(.*?)(?=\n      - name:)` 抽取，会吞掉后续兄弟键，
 症状是三份「长度分别为 3757/3757/3758」且差异恰好落在 `release: true` vs `release: false`。）
-v1.2.11 的 body 结构为：标题行 `### 屏幕时间管家 ScreenTime Pro — v1.2.11` →
-`✨ 新增`（应用内自动升级：Windows 进程会退出 / Linux 仅 AppImage 且 deb·rpm 明确不参与 /
-签名不可关闭）→ `🐞 修复一`（辅助功能已授权却报未授权，三层根因）→ `🐞 修复二`（macOS 为何仍不自动升级，
-写明是**已知边界非缺陷**）→ `📌 已知局限`（三条：macOS 不参与 / deb·rpm 不参与 / Windows 升级时进程消失属正常）。
+v1.2.12 的 body 结构为：标题行 `### 屏幕时间管家 ScreenTime Pro — v1.2.12` →
+开篇 `>` 引子（**说明本版一次交付 v1.2.11 + v1.2.12 两个版本的内容**，理由是 1.2.11 从未发布、
+跳过它会让用户看不到「截完图闪退已修」）→ `🔴 先说最重要的`（截完图闪退，三层根因 + 四层修法 +
+顺带修的「缺 VC++ 时会误删随包 dll」）→ `🔴 第二次`（首截半屏，事件丢失 + 序号去重 + 代际守卫）→
+`✨ 新增`（应用内自动升级，Windows 进程会退出 / Linux 仅 AppImage 且 deb·rpm 不参与 / 签名不可关闭）→
+`✨ 新增`（桌宠拖拽跟手三处根因 + 重启恢复 + 离屏防丢 + Linux 连接缓存）→
+`🐞 修复`×3（锁屏计时 / 分类负缓存 / 辅助功能误报三层根因）→
+`⚠️ 改动说明`（磁盘口径统一，**明确告知百分比会变且是修复不是回归**）→
+`📌 已知局限`（五条：macOS 不自动升级 / deb·rpm 不参与 / Windows 升级进程消失属正常 /
+**macOS 侧三条拖拽用例未经真机复验** / 桌宠状态不进数据库备份）→ `✅ 验证`。
+上一版 v1.2.11 的 body 为：标题 → `> 本版两块主题`（截图两个 P0 + 应用内自动升级）→
+`🔴 P0 修复一`/`二` → `✨ 新增`（自动升级）→ `🐞 修复三~五`（锁屏计时 / 分类负缓存 / 辅助功能误报）→
+`🐞 关于 macOS 为何仍不自动升级`（写明是**已知边界非缺陷**）→ `📌 已知局限` → `✅ 验证`
+（96 行 / 10,431 字节）。
 上一版 v1.2.10 的 body 为 `🐞 修复一~六`（浅色反色 / 高度双源 / 菜单栏图标 / 更新检测三成因 /
 权限弹窗 / 材质层泄漏）→ `✨ 新增`（权限中心）→ `📌 已知局限`（**明确写出 macOS 侧未经真机目视复验**）→
 `✅ 验证`。更早的 v1.2.8 的 body 为 `🐞 P0 修复`（玻璃右端 3px 灰边 + 右角双弧的根因与四步修法）→
@@ -235,13 +296,89 @@ v1.2.11 的 body 结构为：标题行 `### 屏幕时间管家 ScreenTime Pro �
 GitHub。Gitee 的 `latest` Release 需**手工上传同名 `latest.json`**，否则 Gitee 渠道的客户端
 会在第一个 endpoint 失败后回落到一个 404 地址。
 
-**发版后验收**（v1.2.12 起每版都做）：
+**发版后验收**（v1.2.11 起每版都做）：
 ```bash
 curl -sL https://github.com/Slk90s/screentime-pro/releases/latest/download/latest.json | head -30
 # 应看到 version / pub_date（严格 RFC3339）/ platforms 两个键 / 每个键有 signature（非空）
 ```
 再用**上一版**的真实安装包点「立即升级」跑一遍端到端 —— 这是唯一能证明签名链、
 下载源、安装器三者都对的方法。
+
+### 3.4 🔴 运行库下载完整性 + 截图事件不丢（v1.2.11 起，改这两块前必读）
+
+这两条都来自 2026-10-28 的真机崩溃（macOS 15，v1.2.10），**根因互相独立**，但都会让
+「基础功能」直接不可用。改 `screenshot/ocr_engine.rs`、`screenshot/ocr_onnx.rs`、
+`screenshot/mod.rs`、`CaptureOverlay.vue` 之前先读这一节。
+
+#### (a) 运行库落盘的四条不变式（`ocr_engine.rs`）
+
+背景：macOS / Linux 的增强取字运行库**不随包**，运行时从 `ocr-runtime` Release 下载
+（见 §5.1）。旧实现对此毫无防护，于是「下载被中途切断」= 「一份残缺 dylib 被当成成功」=
+「`ort` 内部 `expect` 失败」= 「`panic = "abort"` 下 `process::abort()`」= **进程直接消失**。
+
+现行实现必须同时满足四条，缺一条就会退回旧行为：
+
+1. **先写 `.tmp`，校验通过才 `rename`**。不变式：**目标路径要么不存在，要么是一份通过校验的
+   完整文件**。直接 `fs::write(target)` 会在中途失败时留下半截文件，而半截文件会被
+   `resolve_ort_lib` 的 `is_file()` 认定为「已就绪」→ **此后每次启动都崩**。
+2. **体积闸门 `RUNTIME_MIN_BYTES`（8 MiB）**。真实运行库是 29~42 MB，任何 MB 级以下的文件都是坏的。
+   ⚠️ 这个值同时是**上界约束**：Windows 随包的 `onnxruntime.dll` 是当前最小的真实 lib
+   （18,446,136 字节），而 Windows **没有下载通道**，所以下限必须显著小于它。
+   单测 `runtime_size_floor_leaves_headroom_for_bundled_dll` 就守这条 ——
+   初版写 10 MB 时被这个测试当场抓出余量不足（1.76×），已改 8 MB。
+3. **摘要三态，不是布尔**。`verify_sha256` 返回 `Option<bool>`：`Some(true)` 匹配、
+   `Some(false)` **必须拒绝**、`None` 表示拿不到 `.sha256`（只允许此时靠体积闸门放行）。
+   旧的 `-> bool` 把「拿不到摘要」和「摘要不匹配」都折成 `true`，等于校验形同虚设。
+4. **回读长度复核后再 `rename`**。写盘返回成功不等于字节都落了，长度不符即删 `.tmp` 并报错。
+
+另：`looks_like_ort_lib()` 是**加载前体检**（体积 + 平台魔数 PE/Mach-O/ELF + 真 `dlopen` 后调
+`OrtGetApiBase` / `GetApi(ORT_API_VERSION)`），结果按 `(路径, 长度, mtime)` 缓存 ——
+否则每张截图都要重复映射几十 MB 动态库。`resolve_ort_lib` 走它，**已损坏的存量缓存会被删除**，
+这是让 v1.2.10 已写入坏文件的用户自动走出坑的唯一手段（否则他们升级后照崩）。
+
+⚠️ **`ensure_env` 失败时绝不能写 `ENV_READY`**：`ort::init_from` 只检查符号与版本，
+`commit()` 完全不碰 ort api —— 所以「初始化通过」在旧实现里本身就是假信号，
+真正的炸点在**之后任意一次** `Session::builder()`。
+
+#### (b) 进程必须能兜住第三方库的 panic
+
+`[profile.release]` 的 `panic` **必须是 `"unwind"`**，且 `ocr_onnx.rs` 的 `guard_ort_panic`
+必须包住 `warmup` / `recognize_cached` 两个 ort 入口。
+
+- 原因：`ort` 的 `setup_api()` 对 `OrtGetApiBase` 缺失 / `GetApi` 返回 null 用的是**内建
+  `expect(...)`**，我们无法把它改成 `Result`。`abort` 之下 panic 绕过栈展开直接
+  `std::process::abort()`，用户只看到「闪退」，没有任何日志之外的线索。
+- **验证方式（别搞错）**：dev 档默认就是 unwind，所以「dev 下测试通过」**不能证明**线上配置。
+  必须跑 `cargo test --release --lib screenshot::ocr_onnx::tests::ort_panic`
+  （`lto = true` + `codegen-units = 1` 会全量重编，约 14 分钟）。结果应是 `1 passed`。
+- 若有人把 `panic` 改回 `abort`，该测试会让 **test binary 硬崩**（不是 FAILED，是进程消失）——
+  这正是期望的报警方式，不要把它改成「更友好」的断言。
+- `strip` 用 `"debuginfo"` 而非 `true`：panic 消息串在 `.rodata`，`strip = true` 删不掉文字
+  但会连行号一起去掉，线上只剩函数名。
+
+#### (c) `capture-ready` 事件不可依赖「恰好收到」（`mod.rs` + `CaptureOverlay.vue`）
+
+遮罩窗是 `visible(false)` **懒创建**的。首次截图时 WebView 正在从头加载整个 SPA，
+而 Rust 的 `emit_to` **即发即弃** —— 监听器要等 `onMounted` 里 `await listen(...)` 才注册，
+事件在无人接收时被丢弃。后果不是「没截到」，而是**静默算错**：`meta` 恒为 `null`、
+`vw/vh` 停在窗口创建默认值（800×600）→ `selectAll()` 只有半屏、`k = physical_width / vw`
+算出错误比例、导出图尺寸跟着错。第二次截图窗口已存在，于是「恢复正常」—— 极难复现定位。
+
+两条约束：
+
+1. **载荷必须同时进状态槽和事件**。`ScreenshotState.pending_capture` 存一份，
+   新增命令 `take_capture_ready`（`.take()`，取走即清空）。事件仍发，但前端不得依赖它。
+2. **前端必须在监听注册完成后主动拉一次兜底**，且两条入口都收敛到 `startSession`
+   （`sessionStarted` 去重），再配 `sessionGeneration` 代际守卫 —— 用户按 Esc 取消后，
+   上一轮的异步结果不能把画面写回去（每个 `await` 之后都要复查代号）。
+
+几何基准：`cw`/`ch` 由**载荷的 `width`/`height`** 派生，`k` 优先用载荷的 `scale_factor`。
+`vw`/`vh` 只作为 `sync()` 与兜底存在，**选区、`clampBox`、工具条定位不得再用它** ——
+窗口何时重排都不该影响选区与导出尺寸。
+
+> IPC 计数：本版新增 `take_capture_ready`，总数 **89**（88 → 89）。
+> 改命令后务必实地数（`generate_handler!` 注册项数与 `#[tauri::command]` 函数数双向比对，
+> 两者相等才算数），不要凭文档递推 —— 见 §9 的权威脚本。
 
 ---
 
@@ -429,7 +566,8 @@ echo "   git push origin main && git push origin v$NEW"
 
 | 版本 | 发布时间 | 状态 | 关键说明 |
 |------|----------|------|----------|
-| **v1.2.11** | 2026-10-27 | ✨+🐞 **应用内自动升级（Windows / Linux AppImage）+ macOS 授权误报三修复** | **本版主题是「发现新版本」终于能一键升完，外加 macOS「辅助功能已授权却报未授权」的连环修复**。① **应用内自动升级（新模块 `app_update.rs`，与既有 `commands::check_for_update` 并存不替代）**：后者只「告知并跳浏览器」，前者真的「查 + 下 + **ed25519 验签** + 装」。三平台分支**互不相同**：**Windows**（NSIS / MSI）拉起安装包后**进程立即退出** —— upstream `install_inner` 在 `ShellExecuteW` 之后直接 `std::process::exit(0)`（updater.rs:876），`install()` **永不返回**，故前端刻意**不写**「安装完成」toast（那条路径在 Windows 上永远走不到）；这不是崩溃，是安装器接管。**Linux 仅 AppImage**：原地覆盖自身并 `app.restart()`。**deb / rpm 明确不参与** —— 它们走 `pkexec dpkg -i` / `rpm -U`，每次升级都要过一次系统授权框，本就该由包管理器接手（`apt upgrade` / `dnf upgrade`）；用 `bundle_type()`（`__TAURI_BUNDLE_TYPE` 二进制补丁的静态值，**dev 下返回 `None`**）识别自身包型，deb/rpm 用户点「检查更新」仍只看到「前往下载」。**macOS 主动关闭**，两个独立理由：(a) ad-hoc 签名让「升级后授权失效」每次都复发，自动升级等于把这个坑自动化；(b) `latest.json` 缺 macOS 条目时 updater 返的是 `Err(TargetsNotFound)` 而非「无更新」（`get_urls` 在 `should_update` **之前**执行，故任何版本比较都会先炸），会让用户每次启动都刷一条错误日志。并发用 **RAII 闸门**（`BUSY.compare_exchange` + `Drop` 复位），下载进度走 `tauri::ipc::Channel<DownloadProgress>`。**IPC 85→88**。② **「辅助功能已授权却报未授权」（P0）三层叠加**：**(a)** 设置页提示条件写反；**(b)** 「重置并重启」只清 `ScreenCapture`、不清 `Accessibility`（`tccutil reset` 的**服务名按服务不同且大小写敏感**），文案与实际动作不符、用户白忙 → 按服务分流 + 辅助功能行补独立重置入口；**(c)** 真因是 **TCC 授权按进程快照**（勾选时进程已在跑，拿不到新授权，必须重启进程）**× ad-hoc 签名 cdhash 每次 CI 都变**（记录按「路径 + cdhash」绑定，升级后旧记录失效，而系统设置界面仍显示为开）。顺带确认**辅助功能对本应用并非功能必需** —— 空闲检测走 `CGEventSourceSecondsSinceLastEventType`，**不需要**该权限，未授权不影响计时准确性，它只用于设置页状态显示（已写进文案，避免用户为「修好显示」折腾权限）。③ **updater 依赖钉死 `=2.12.0`**：实测版本边界 —— ≤2.12.0 只要 tauri 2.10 / Rust 1.77.2 / edition 2021，**2.13.0+ 要 Rust 1.90 + edition 2024**；裸写 `"2"` 会解析到 2.14.x 直接编不过，故显式 `=` 锁定。④ **CI 出 `latest.json`**：三个 `tauri-action` 步骤一律 `includeUpdaterJson: false` —— 该输入名**真实存在**（`action.yml`），而拟用的 `uploadUpdaterJson` **根本不存在**，Actions 对未知输入只 warning 不报错，会导致三平台各自生成、互相覆盖；改由独立 `updater-json` job（`needs: [windows, linux]`）汇总产物统一生成。`pub_date` 必须**严格 RFC3339**：`OffsetDateTime::parse(..., Rfc3339)` 的解析错误会变成 `DeError` **中断整个检查**，故用 `date -u +%Y-%m-%dT%H:%M:%SZ` 生成 + 正则守卫 + 空值直接省略（`github.event.repository.updated_at` **不是**严格 RFC3339，用它会让所有客户端检查更新全灭）。新增 `.github/scripts/gen_latest_json.py`（`pick_one()` 对 0 匹配 / 多匹配都报错，缺 `.sig` 直接 `::error::` + exit 1；URL 用固定 tag 而非 `/latest/download/`）。⑤ **`.gitignore` 的 `scripts/` 会匹配任意层级**，把 `.github/scripts/` 一起吞掉 —— 本地 `ls` 一切正常、CI 才报「文件不存在」，已锚定为 **`/scripts/`**；另加 `*.key` / `*.key.pub` / `.tauri/` 保护私钥（`~/.tauri/screentime-pro.key` 丢了 = 已安装用户**永久**收不到更新）。**验证**：`cargo check --lib` 零警告（本机 + 显式 `--target x86_64-pc-windows-msvc`）/ `cargo test --lib` **35 passed / 0 failed / 4 ignored** / `vue-tsc --noEmit` 零错误 / `vite build` 通过；**IPC 精确对账 88 = 88**（注册 / 定义 / 去重后各 88，无缺无多）；i18n zh/en **360 = 360** 叶子键、差异 0。Linux 分支无法直接 `cargo check --target`（缺 pkg-config 会得到**假失败**），改走独立交叉探针（`#[path]` 引真实代码 + 等宽 shim + **反证**：注入 `BundleType::AppImageXXX` 得 E0599、类型错得 E0308，探针自身还踩过 E0107/E0599 两个坑 —— `BundleType` 只 derive `Clone` **无 `Copy`**，须 `RefCell` + `.borrow().clone()`）；`latest.json` 用**真实** `RemoteRelease` 反序列化验证 + 三组反证（坏 `pub_date` 被拒、缺平台被拦、`v` 前缀被 `parse_version` 正确 trim）；CI YAML 解析后三个既有 job 步骤数不变（6/7/8），三份 releaseBody SHA256 相同（`e90b632afae95c7f…` / 5052 字节 / 49 行）。⚠️ **本版 macOS 侧改动仍未经真机目视复验**（授权提示状态与重置按钮实际落点）。⚠️ **首次启用前必做**：GitHub Secret `TAURI_SIGNING_PRIVATE_KEY` 未配 → CI 出包签名步骤失败；Gitee 的 `latest` Release 需手工上传 `latest.json`（CI 目前只传 GitHub）。**发布落点**：⏳ **待填**（v1.2.11 尚未打 tag —— 发版后回填 tag/commit、CI run、双端 Release id 与资产体积）。 |
+| **v1.2.12** | 2026-10-29 | ⏳ **待发布** · 🐞✨ **桌宠整改批次 1/2（拖拽跟手 + 启动恢复 + 离屏防丢）+ 磁盘占用口径三端统一** | 两块主题：**① 桌宠整改**（`REMEDIATION-PLAN-2026-10-29.md` 批次 1 止血 + 批次 2 拖拽流畅性重构，Ryan 定「桌宠单开 v1.2.12」）；**② v1.2.11 归版时顺延的多盘 / 口径统一**。① **原生拖拽此前从未生效（整改 1.1，全案最高性价比的一行）**：`capabilities/pet.json` 缺 `core:window:allow-start-dragging`（依据 `gen/schemas/acl-manifests.json`：`core:window:default` 全 28 项不含它；对照组 `float.json` 一直有，故悬浮条原生拖拽可用），前端 `startDragging()` 被 ACL 拒 → catch → 每帧 `invoke('move_pet_window')`。**v0.6.2-beta.28 的「拖拽卡顿已根治」修的是这条回退路径，入口一直是死的**。② **macOS 改 Rust 侧拖拽循环（批次 2，新模块 `pet/drag.rs`）**：不上 mac 原生的依据是读 tao 0.35.3 —— mac 的 `start_dragging` 合成假 `LeftMouseDown`（`NSEventSubtype::WindowExposed`、pressure 硬编码 1.0）再调 `performWindowDragWithEvent:`，对无边框透明窗不稳定且**异步返回**（Promise 在拖拽刚开始就 resolve → 前端过早读位置收尾）。新 IPC **`begin_drag{grabDx,grabDy}` / `end_drag`**：按下只记抓取偏移，8ms 循环读**全局光标**自己搬窗（两轴位移都 <4px 不发），松手回传最终逻辑位置。同时解掉旧手动路径的结构缺陷（**没有 `setPointerCapture`、监听挂在 `window`** → 光标甩出宠物矩形就掉队回跳；本轮把 `setPointerCapture` 补回，但主路径已不依赖它）。**`DragMode` 四态**：`native`（Win/Linux）→ 抛错降 `rust` → 再兜底 `manual`（在途串行化，同一时刻只允许一个 `move_pet_window` 在飞）。**IPC 89→91**（48 commands + 22 screenshot + 14 pet〔窗口菜单 9 + 命中 3 + 拖拽 2〕+ 3 float + 3 app_update + 1 float_glass；⚠️ 是**重新数**的，不是照文档递推）。③ **线程约束（源码核实）**：tauri-runtime-wry 2.11.4 `send_user_message`（:235-255）主线程内联执行、否则 `proxy.send_event` fire-and-forget，`SetPosition → set_outer_position`（:3543）在主线程落地 ⇒ **不需要** `run_on_main_thread`；而 `getter!/window_getter!`（:197-211）一律「发事件 + `rx.recv()` 阻塞」⇒ **循环内零窗口 getter**，`end_drag` 回传循环自记目标值而非 `outer_position()`（`set_position` 异步，刚投的几帧还没落到 NSWindow，问到的是历史值 → 写进持久化就是「拖完回跳」）。④ **离屏校验公共 util（整改 1.3，新 `window_bounds.rs`）**：float 与 pet 共用，判据是**两轴各 ≥1/3 重叠**（旧 float 实现只有 `overlap_x`，纵向甩出屏外一路放行）；`move_pet_window` 新增 `clamp` 且**默认 false**（拖拽每帧纠偏会让窗口在用户手里弹跳）。⚠️ 纠偏后的位置**没有回写持久化**（批次 4.1 债：pet 状态只在 localStorage，Rust 读不到）。⑤ **启动恢复桌宠（整改 1.2，⚠️ 与方案字面有偏差）**：方案原写「setup 读持久化 enabled」，实际做不到（pet 开关与坐标只存 localStorage `screentime-pet`）→ 改**前端驱动**：pet 窗 `onMounted` 末尾 `restorePetOnStartup()`，顺序刻意是 `setSize → move{clamp:true} → show`（反了会以 140×140 露出一帧再撑成皮肤尺寸；纠偏也要按最终尺寸算）；`Settings.vue` 的开关 / 「显示桌宠」同步改成先 move 再 show。修前症状：设置里显示「开」但重启后宠物不出现，要关一次再开一次。⑥ **Linux X 连接缓存（整改 1.4）**：`cursor_logical` 的 linux 分支旧写法每次 `x11rb::connect(None)` 新建 socket（穿透轮询 ~18Hz，拖拽循环再叠一条 125Hz）→ 改 `thread_local!` + `Arc<RustConnection>`、读失败弃缓存自愈。🔴 **探针抓到的真实编译错误**：首版写 `conn.clone()`，而 **`RustConnection`（x11rb 0.13.2）没有实现 `Clone`** → E0599。这段 cfg 门控代码 Windows 本机 `cargo check` 不参与编译，整包 `--target x86_64-unknown-linux-gnu` 又必然**假失败**（libdbus-sys build.rs 要交叉 pkg-config，LINUX_EXIT=101 落在依赖里）→ 只能靠 `.tmp-probe-linux-cursor` 探针：正证 exit 0，反证注入 `conn.clone()` → 101。<br>⚠️ **反证本身差点是假的**：两次注入「反例」却仍 exit 0，根因是本机 `python` 是 **Microsoft Store 占位程序**（静默 no-op，脚本从没改到文件）；另一次是 **cargo 的 mtime 指纹在同秒内改文件会误判 fresh**，日志里没有 `Checking` 行就等于没重编。⑦ **磁盘口径三端统一（v1.2.11 顺延项）**：`used = total - available_to_user`；此前 Windows 用 `GetDiskFreeSpaceExW` 第 3 出参（未扣配额）、macOS 用 `f_bfree`（含 root 保留块）、Linux 用 `f_bavail`（对），后果是同一块默认 5% root reserved 的 ext4 在 Linux 上显示更满 —— **这是用户可见数值变化**，也是它不并入稳定性版 v1.2.11 的原因。多盘链（`DiskVolume` + 三端 `ffi_read_disks`，macOS 用 `getfsstat` + 类型/挂载点/只读位三重过滤避开 APFS 同容器子卷）**前端消费方未接**，带 `#[allow(dead_code)]`，**接入时必须移除**。 **验证**：`cargo test --lib` **61 passed / 0 failed / 5 ignored**（本批次 +10：`window_bounds` 7 例、`pet/drag` 3 例）/ `vue-tsc --noEmit` 零错误 / Linux 探针正证+反证。`cargo fmt -- --check` **干净**（本轮 fmt 只重写了 `pet/drag.rs`、`window_bounds.rs` 两个新文件 —— 批次 0 已把其余文件刷成 fmt-clean，**零附带改动**）。`cargo clippy --lib -- -D warnings` **62 条 = 批次 0 基线逐条相等，本批次新增 0**（两个新文件命中 0；`drag.rs` 首版自带的 3 条已修：两处 doc 列表缩进 + 一处 `if let Some(x) = f().ok()` 冗余匹配）。🔴 **真机验收全部未做，发版前必做**：Windows 拖桌宠后日志 grep `原生拖拽不可用` **0 命中**；杀进程重启后按上次位置出现；持久化坐标手改 `(-5000,-5000)` 重启应落回可见区；macOS 三条用例（横甩 400px 且光标一度离开宠物矩形 / `scripts/cdp.py` 量帧延迟与丢帧 / 拖拽中光标出体后穿透态正确）。**发布落点**：⏳ 待填（未打 tag） |
+| **v1.2.11** | 2026-10-29 | ✨+🐞🔴 **应用内自动升级（Windows / Linux AppImage）+ 截图链路两个 P0 修复 + macOS 授权误报三修复** | **本版两块主题合一次出包**：① 应用内自动升级；② 真机反馈的截图链路两个 P0（截完图进程直接消失 / 第一次截图只有半个屏幕）。**合成一版的原因**：v1.2.11 此前从未发布（远端无该 tag），若先单独发出 1.2.11，用户装完仍会「截完图就消失」、得再升一次才好。① **应用内自动升级（新模块 `app_update.rs`，与既有 `commands::check_for_update` 并存不替代）**：后者只「告知并跳浏览器」，前者真的「查 + 下 + **ed25519 验签** + 装」。三平台分支**互不相同**：**Windows**（NSIS / MSI）拉起安装包后**进程立即退出** —— upstream `install_inner` 在 `ShellExecuteW` 之后直接 `std::process::exit(0)`（updater.rs:876），`install()` **永不返回**，故前端刻意**不写**「安装完成」toast（那条路径在 Windows 上永远走不到）；这不是崩溃，是安装器接管。**Linux 仅 AppImage**：原地覆盖自身并 `app.restart()`。**deb / rpm 明确不参与** —— 它们走 `pkexec dpkg -i` / `rpm -U`，每次升级都要过一次系统授权框，本就该由包管理器接手（`apt upgrade` / `dnf upgrade`）；用 `bundle_type()`（`__TAURI_BUNDLE_TYPE` 二进制补丁的静态值，**dev 下返回 `None`**）识别自身包型，deb/rpm 用户点「检查更新」仍只看到「前往下载」。**macOS 主动关闭**，两个独立理由：(a) ad-hoc 签名让「升级后授权失效」每次都复发，自动升级等于把这个坑自动化；(b) `latest.json` 缺 macOS 条目时 updater 返的是 `Err(TargetsNotFound)` 而非「无更新」（`get_urls` 在 `should_update` **之前**执行，故任何版本比较都会先炸），会让用户每次启动都刷一条错误日志。并发用 **RAII 闸门**（`BUSY.compare_exchange` + `Drop` 复位），下载进度走 `tauri::ipc::Channel<DownloadProgress>`。**IPC 85→89**（自动升级 85→88；截图链路再 +1 新增 `take_capture_ready`）。② **「辅助功能已授权却报未授权」（P0）三层叠加**：**(a)** 设置页提示条件写反；**(b)** 「重置并重启」只清 `ScreenCapture`、不清 `Accessibility`（`tccutil reset` 的**服务名按服务不同且大小写敏感**），文案与实际动作不符、用户白忙 → 按服务分流 + 辅助功能行补独立重置入口；**(c)** 真因是 **TCC 授权按进程快照**（勾选时进程已在跑，拿不到新授权，必须重启进程）**× ad-hoc 签名 cdhash 每次 CI 都变**（记录按「路径 + cdhash」绑定，升级后旧记录失效，而系统设置界面仍显示为开）。顺带确认**辅助功能对本应用并非功能必需** —— 空闲检测走 `CGEventSourceSecondsSinceLastEventType`，**不需要**该权限，未授权不影响计时准确性，它只用于设置页状态显示（已写进文案，避免用户为「修好显示」折腾权限）。③ **updater 依赖钉死 `=2.12.0`**：实测版本边界 —— ≤2.12.0 只要 tauri 2.10 / Rust 1.77.2 / edition 2021，**2.13.0+ 要 Rust 1.90 + edition 2024**；裸写 `"2"` 会解析到 2.14.x 直接编不过，故显式 `=` 锁定。④ **CI 出 `latest.json`**：三个 `tauri-action` 步骤一律 `includeUpdaterJson: false` —— 该输入名**真实存在**（`action.yml`），而拟用的 `uploadUpdaterJson` **根本不存在**，Actions 对未知输入只 warning 不报错，会导致三平台各自生成、互相覆盖；改由独立 `updater-json` job（`needs: [windows, linux]`）汇总产物统一生成。`pub_date` 必须**严格 RFC3339**：`OffsetDateTime::parse(..., Rfc3339)` 的解析错误会变成 `DeError` **中断整个检查**，故用 `date -u +%Y-%m-%dT%H:%M:%SZ` 生成 + 正则守卫 + 空值直接省略（`github.event.repository.updated_at` **不是**严格 RFC3339，用它会让所有客户端检查更新全灭）。新增 `.github/scripts/gen_latest_json.py`（`pick_one()` 对 0 匹配 / 多匹配都报错，缺 `.sig` 直接 `::error::` + exit 1；URL 用固定 tag 而非 `/latest/download/`）。⑤ **`.gitignore` 的 `scripts/` 会匹配任意层级**，把 `.github/scripts/` 一起吞掉 —— 本地 `ls` 一切正常、CI 才报「文件不存在」，已锚定为 **`/scripts/`**；另加 `*.key` / `*.key.pub` / `.tauri/` 保护私钥（`~/.tauri/screentime-pro.key` 丢了 = 已安装用户**永久**收不到更新）。**验证**：`cargo check --lib` 零警告（本机 + 显式 `--target x86_64-pc-windows-msvc`）/ `cargo test --lib` **46 passed / 0 failed / 5 ignored** / `vue-tsc --noEmit` 零错误 / `vite build` 通过；**IPC 精确对账 89 = 89**（注册 / 定义 / 去重后各 89，无缺无多；本版新增 `take_capture_ready`）；i18n zh/en **360 = 360** 叶子键、差异 0。Linux 分支无法直接 `cargo check --target`（缺 pkg-config 会得到**假失败**），改走独立交叉探针（`#[path]` 引真实代码 + 等宽 shim + **反证**：注入 `BundleType::AppImageXXX` 得 E0599、类型错得 E0308，探针自身还踩过 E0107/E0599 两个坑 —— `BundleType` 只 derive `Clone` **无 `Copy`**，须 `RefCell` + `.borrow().clone()`）；`latest.json` 用**真实** `RemoteRelease` 反序列化验证 + 三组反证（坏 `pub_date` 被拒、缺平台被拦、`v` 前缀被 `parse_version` 正确 trim）；CI YAML 解析后三个既有 job 步骤数不变（6/7/8），三份 releaseBody SHA256 相同（`b7fd6b0ef1dc8e7e…` / 10,431 字节 / 96 行 —— 本版补入截图链路两 P0 后从 49 行扩写，用 YAML 解析器逐份比对 `with.releaseBody` 且与本地源文件逐字相同）。⚠️ **本版 macOS 侧改动仍未经真机目视复验**（授权提示状态与重置按钮实际落点）。⚠️ **首次启用前必做**：GitHub Secret `TAURI_SIGNING_PRIVATE_KEY` 未配 → CI 出包签名步骤失败；Gitee 的 `latest` Release 需手工上传 `latest.json`（CI 目前只传 GitHub）。⑥ **截图链路两个 P0 + 两个 P1（10-29 补入本版）**：**(a) 截完图进程直接消失** —— 下载校验在拉不到 `.sha256` 时 `return true` 放行、且只看 HTTP 200 不看字节数 → 残缺 dylib 被当成功；落盘非原子直写目标路径，半截文件被 `is_file()` 认定「已就绪」，**此后每次启动都崩**；`ort::setup_api()` 对 `OrtGetApiBase` 缺失 / `GetApi` 返 null 用内建 `expect`，而 release 是 `panic = "abort"` → `process::abort()`，无 Err 出口。修法四层：原子落盘（`.tmp` + 体积闸门 8MB + 摘要三态 + 回读长度复核 + `rename`）/ 新增 `looks_like_ort_lib`（体积 + 平台魔数 + **真 dlopen 调 `OrtGetApiBase`·`GetApi`**，按「路径,长度,mtime」缓存）/ `ensure_env` 先体检且失败不写 `ENV_READY` / `panic` 改回 **`unwind`** + 两个 ort 入口 `catch_unwind`；`strip` 改 `"debuginfo"` 保留行号。**(b) 第一次截图只有半个屏幕** —— 遮罩窗懒创建时 WebView 还在加载 SPA，`emit_to` 即发即弃而监听器未注册 → 事件丢弃 → `meta` 恒 null、`vw/vh` 停在 800×600 → 全选半屏、缩放比例错。修法：Rust 存载荷 + 新增 **`take_capture_ready`**、前端监听注册后主动拉一次兜底；`startSession` 单入口去重 + `sessionGeneration` 代际守卫（每个 `await` 后复查）；`nextTick` + 一帧 `rAF` 再取几何；`cw/ch` 由载荷宽高派生、`k` 用载荷 `scale_factor`。**(c) 两个 P1**：锁屏进程（`loginwindow` / `LockApp` / `LogonUI` / `gdm`·`sddm` 等）命中即结束会话并跳过本 tick（**精确名匹配**，不用 `contains("lock")` 以免误杀 `unlock-app`）；分类失败由「写入永久 LRU」改为**负缓存 + 10 分钟 TTL**（拿到确定分类即清除负缓存）。**验证**：`cargo test --lib` **46 passed**；`panic = "unwind"` 另做 **release 档实测**（`cargo test --release`，`lto=true` 全量重编 14 分 04 秒 → `1 passed`）—— dev 档默认即 unwind，只有这次是对着真正发布用的 profile 验的。**发布落点**：⏳ **待填**（v1.2.11 尚未打 tag —— 发版后回填 tag/commit、CI run、双端 Release id 与资产体积）。 |
 | **v1.2.10** | 2026-10-26 | 🐞 **修复版（macOS 交互体验专项；Windows / Linux 零功能改动）** | **六项修复 + 一项新增，全部落在 macOS 观感与授权体验**。① **浮窗浅色外观白字看不清（P0）**：CSS 全按深色背景定标、**未跟随 `prefers-color-scheme`**，浅色壁纸玻璃底上白字仅 **1.36:1**（AA 正文线 4.5:1）；**降 alpha 无解**（0.48 仍 3.40:1、0.80 也才 3.9，数学上过不了 4.5），**唯一出路是反色**。新增 light 档（白遮罩 + `#1c1c1e` = NSColor.labelColor 浅色值），**只挂 `.has-blur`（仅 macOS）**——Windows 无系统材质跟随 appearance，且反色在 Win11 Bloom `rgb(46,32,78)` 上从 16.78:1 掉到 **6.32:1**（净亏 10.5）并把胶囊变成 `srgb(161,155,175)` 灰白板。配色按 v1.2.8 深色真机实测**反推材质后底下界**（L≈95/71 ÷ 0.52 → 183/137，取 137 保守）扫 130~255 取最差：主数字 10.38 / 标签 5.16 / 网速↓ 4.74 / 网速↑ 4.82 / 截图 5.49，全过 AA（网速色因此加深 `#0a658c`→`#055a70`、`#8a4d08`→`#7a4405`）。② **浮窗高度/圆角两个源**：Rust `set_size` 下发 36/44 与 CSS 硬编码 `height:36px`/`.is-glass{height:44px}` 并存 → 冷启动与开关翻转时胶囊底部露 **8px 系统材质**、材质 radius 22 vs CSS 18 呈纵向双弧；改 `height:100%` + `border-radius:999px` 并删 `.is-glass` 里的 44/22，**高度只剩一处定义**（与 v1.2.8 对宽度的改造同构）。③ **菜单栏图标浅色栏显脏灰**：托盘取彩色 App 图标（alpha=255 占 90.6%），浅色栏 **1.91:1**；改 template 剪影图（纯黑 + alpha 圆环 + 圆心），系统按栏明暗染色。新增 `icons/trayTemplate.png`(22²)/`@2x`(44²)，4x 超采样 + LANCZOS，覆盖率 **25.0%/25.1%**（理论 24.8%，误差 <0.3%）；macOS 分支内嵌 **@2x**（`tray-icon 0.24.2` 的 macOS 实现是单张 `NSImage::initWithData`，无法表达 1x/2x；系统压到固定 18pt，44px 下采样更锐利）。④ **检测不到更新（三独立成因）**：**(a)** 前端只有一个 `setTimeout` → 常驻托盘等于「进程一生只查一次」，改 6h `setInterval`；**(b)** 时间戳在「抓取成功」后就写、**含「已是最新」**，烧掉接下来 24h → 改为「确认远端状态」后才写、节流 24h→6h；**(c)** `reqwest` 关掉 `default-features` **连带丢 `system-proxy`**（`reqwest-0.12.28/Cargo.toml:101-106`），只认 `HTTP_PROXY` 环境变量、**不读系统代理** —— Clash/Surge 默认改的正是系统代理，用户以为「开着代理」而进程直连出境 → 补回该 feature（`cargo tree -e features` 复核 `client-proxy-system` 已启用；代价 4 个纯系统绑定 crate，无新 TLS）。另：三通道抓取（GitHub atom → GitHub REST → **Gitee 镜像**）全失败才算失败；每条通道加 `is_version_tag` 校验（`ocr-runtime` 这类资源型 Release 会让前端弹「发现新版本 ocr-runtime」死链）；`semver_gt` 修正 dismissed 自愈（依赖「相等返回 false」）；错误正文按**字符**截断（`String::truncate` 按字节切非 char 边界会 panic）。⑤ **权限弹窗反复弹**：删启动 3 秒预请求（单信号 `CGPreflight` 判据，已授权者也被再弹），改首次截图由 `ensure_ready` 按需请求、启动只静默查询；`check_permissions` 屏幕录制改**双信号口径**（`CGPreflight` ∨ 窗口标题探针）与截图侧一致，修正「升级后失效」被误判成「从未授权」；横幅 dismiss 标记落盘 localStorage、focus 回调由「accessibility 为真就清标记」改**边沿触发**。⑥ **浮窗材质层只增不减**：`window-vibrancy 0.8.1` 的 `apply` **不去重**（每次新建 `NSVisualEffectView` + `addSubview`）、`clear` 走 `viewWithTag:` **一次只摘一层** → apply N 次 = N 层，关玻璃后剩余层永久留下（「擦不掉的灰板」）；改 apply 前循环清到干净、`!glass` 分支同样循环清，以 `Ok(false)` 收尾（**有界**）。**新增**：设置页**权限中心**（仅 macOS，只读）—— 屏幕录制/辅助功能真实状态 + 手动刷新 + 「授予」（跳系统设置）/「重置并重启」，刻意**不轮询**（未放行时 `check_permissions` 会 fork `codesign`/`xattr`，1Hz 代价过高），含 ad-hoc 签名专项提示（升级后授权失效的物理成因是 cdhash 每次构建都变）。**另**：`tauri.conf.json` 给 float 补 `x/y: 24`（`tao-0.35.3/platform_impl/macos/window.rs:331` 无 position 时兜底 `ns_window.center()`，而 float 340 / main 1040 且 main 自身 center → 首开残影压在主窗口正中）；`height`/`minHeight` **刻意维持 36**（`window.show()` @lib.rs:835 早于 webview `onMounted→fitWidth` @FloatBar.vue:545，conf 写 44 会让非玻璃用户看见一帧 44px；玻璃档 44 已由 setup 的 `set_size(cur_w,44)` 在 show 前落定）。**验证**：`cargo check` 零警告 / `cargo test --lib` **35 passed / 0 failed / 4 ignored**（本版新增 11 单测）/ `vue-tsc --noEmit` 零错误；macOS 代码经 `aarch64-apple-darwin` 交叉探针 + 双向反证（`new_owned`→`new_owned_XXX` E0599、`into_raw()`→`as_raw()` E0308）；CSS 特异性矩阵脚本核验 light 块 **9 条全挂 `.has-blur`**（Windows 零波及）且每条都赢过暗色档（含 2 条同特异性靠源码顺序取胜）；i18n zh/en 各 **444** 叶子键、差异 0（本版净增 14）。**IPC 总数 85**（本版未增减）。⚠️ **macOS 侧未经真机目视复验**（浅色档实际材质亮度 / 模板图观感 / 权限中心文案是否被截断）。**发布落点**：tag / commit `d473c0368e873bb0e234a247921578db404df328`（轻量 tag `v1.2.10`）；CI run `40303749634` 三平台 全 success；GitHub Release `424081976` **6 资产 / 195.94 MiB**（AppImage 99.16 / exe 21.70 / rpm 18.92 / deb 18.92 / dmg 18.92 / app.tar.gz 18.31）；Gitee Release `1242881` **5 附件 / 96.78 MiB**（+2 自动源码包；AppImage 超 Gitee 单文件 100 MB 上限，仅 GitHub 提供）；Gitee 按「只留最新一版 + ocr-runtime」约定已删旧版 v1.2.8（id 1241841，释放 96.75 MiB），现存 `ocr-runtime` + `v1.2.10`，配额 **166.27 / 1024 MiB（16.2%）**；5 个下载链接 HEAD 复核 HTTP 200 且 `Content-Length` 与本地字节逐项相符。 |
 | **v1.2.8** | 2026-10-26 | 🐞 **修复版（macOS 15 悬浮窗玻璃右端 3px + 双弧）** | **macOS 15 悬浮窗玻璃「右端溢 3px 灰边 + 右角双弧」P0 修复**。根因：**两层同尺寸且都带 `border-radius`** —— 外层 `.float-bar`（铺满窗口、画圆角 + 边框）与内层 `.f-content`（又画一次圆角）**曲率中心不重合** → 右端呈双弧；同时外层 `width:100%` 在全局 `box-sizing:border-box` 下把内容区撑得比窗口窄 2px，而 `NSVisualEffectView` 按**窗口矩形**绘制、CSS 只覆盖到内容区 → 右端露出一条约 3px **未被 CSS 覆盖的材质原色带**（浅色壁纸上是灰边，深色上不易察觉）。修法：① **双层职责分离** —— 外层只管铺满 + 居中（`width:100%` / `justify-content:center` / 不参与测量），内层只管真实尺寸（`width:max-content` / `flex:none` / 唯一被 `ResizeObserver` 测量的元素），**圆角与边框只保留外层一次**；② `WIDTH_SLACK = 2` 语义明确为「2 × 外层边框宽度」，窗口宽 = 内层实测宽 + 2，右端缝隙消失；③ 材质换档 `HudWindow`(13) → **`UnderWindowBackground`(21)** —— 前者本身偏灰、暗色遮罩重，浅色壁纸上呈「灰板」而非玻璃；④ 新增 `native_blur: bool` 做**配色分档**：原生模糊可用（Liquid / Vibrancy）时压低 CSS 背景不透明度、对比度交给系统材质，不可用（Acrylic / None）时由 CSS 全权承担（沿用 v1.2.2 结论：Windows 不调系统材质）；⑤ `translucency` 随 `FloatGlassSupport` 下发（Liquid 0.85 / Vibrancy 0.55 / 其余 0.0），**本版前端未消费**，留待 macOS 26 真机对比度数据到位后再接。IPC 总数 **85**（本版未增减；⚠️ 此前 `CONVENTIONS` 写的 84 是**错的**，已按 `generate_handler!` 实测校正）。**验证**：`cargo check` 零警告 / `vue-tsc --noEmit` 零错误；macOS 分支在本机（Windows）无法直接编译，另建 **`float-glass-probe` 交叉编译探针**（`cargo check --target aarch64-apple-darwin` + `#[path]` 引真实源文件）编译通过，并用两次**注入错误反向验证**确认探针确实在编译 macOS 分支而非跳过（`UnderWindowBackground`→`...XXX` 报 E0599；`Some(FLOAT_RADIUS_GLASS)`→`Some("22")` 报 E0308）。⚠️ **macOS 15 真机观感未复验**：右端灰边是否消失 / 玻璃通透度 / 13px 文字在浅色壁纸上的对比度（≥4.5:1），须在 Mac 上目视确认。**发布落点**：tag / commit `bd58503`（轻量 tag `v1.2.8`）；CI run `40266414622` 三平台全 success；GitHub Release `423843748` **6 资产 / 195.90 MiB**（AppImage 99.15 / exe 21.70 / rpm 18.92 / dmg 18.91 / deb 18.91 / app.tar.gz 18.30 MiB）；Gitee Release `1241841` **5 附件 / 96.75 MiB**（+2 自动源码包；AppImage 99.15 MiB 超 Gitee 单文件 100 MB 上限，仅 GitHub 提供）；Gitee 按「只留最新一版 + ocr-runtime」约定已删旧版 v1.2.7（id 1232618，释放 96.74 MiB），现存 `ocr-runtime` + `v1.2.8`，配额 **166.24 / 1024 MiB（16.2%）**。5 个下载链接 HEAD 复核 HTTP 200 且 `Content-Length` 与本地字节逐项相符。 |
 | **v1.2.7** | 2026-10-23 | 🐞 **累积修复版（v1.2.3 ~ v1.2.6 四版合并发布）** | **本版跳过 v1.2.3 ~ v1.2.6 四个中间版本号**（远端上一版为 v1.2.2），全部改动一次交付。**三类「静默失效」**：① **设置页初始化竞态（丢更新 + 反向数据损坏，三处同源）** —— `ref.value = await load()` 整体替换冲掉用户改动；提交时又发整个本地对象（初值全是默认值），把后端本是 `true` 的开关一并写成 `false` 并持久化（实测只点「显示网速」→ 另 4 个字段被静默关闭写库）。统一改 **「权威基线 + 用户差量」**（`baseline` + `dirty: Set<keyof T>`），覆盖状态栏（2 写入点 + 托盘推送）、截图配置（4 写入点 + 2 个 v-model 数值项）、通用设置表单、自动备份开关。② **截图遮罩窗抢前台致采集静默停止（P0）** —— `visible:false` + `focus:true` 的隐藏窗创建即成为前台且不让出，`GetForegroundWindow()` 恒返回它、采样每 tick 命中白名单跳过（修复前 6 分钟跳过 **833 次**、采集 **0 次**；修复后 40 秒跳过 **0 次**、采集 **32 次**）。修复：`focus` 改 `false` + 采集侧「前台不可见即跳过」兜底 + 收尾主动让出焦点。③ **OCR 行排序违反全序 panic** —— 成对阈值 `(a.h+b.h)/2×0.6` 致 A≈B、B≈C 却 A<C，改三段式（y 中心排 → 全局常量阈值归并行号 → 按 (行号,x) 排）。**其他修复**：液态玻璃浮窗中浅色壁纸对比度（2.69:1 → 逐像素定标压暗 0.48，四项全过 WCAG AA）；macOS 设置面板图标彩色噪点（`icp4/icp5`+PNG → `ic04/ic05`+ARGB，与 `iconutil` 字节级等价）；桌宠皮肤选择被静默改回默认（注册期误校验 `activeId`，非首张皮肤必丢）。**优化**：安装包 **23.31MB → 8.72MB（−62.6%）**（补 `[profile.release]`：lto/strip/opt-level=s/panic=abort）+ 桌宠图 PNG→WebP **5.30MB → 0.64MB（−88%，alpha MAE=0.000）**；WAL 稳态 **4.13MB → 1.05MB（−75%）**；写库失败不再静默丢弃；日志噪音治理（9376 条占 98% 的常态 WARN 降噪）；停写 `daily_summaries` 死表。**新增**：启动 15s 后自动检查更新 + 首页可关闭提示横条（24h 后端节流、失败全静默、同版本只提示一次；刻意**不做应用内自动升级** —— updater 需长期密钥托管，丢失即全体用户只能重装）。IPC 总数 **84**（本批未增减）。**验证**：`verify_v127_init_race.py` 18/18、`verify_v127_residual_race.py` 6/6、`verify_capture_no_focus.py` 4/4、`human_regression.py` 24/25（唯一失败 = QuickAssist 占前台锁的环境干扰，非产品缺陷）。**发布落点**：tag / commit `e704b2d`（轻量 tag `v1.2.7`）；CI run `39906361489` 三平台全 success；GitHub Release `421483547` **6 资产 / 195.89 MiB**（AppImage 99.15 / exe 21.69 / app.tar.gz 18.30 / deb 18.91 / dmg 18.91 / rpm 18.91 MiB）；Gitee Release `1232618` **7 附件**（exe 21.69 / dmg 18.91 / app.tar.gz 18.30 / deb 18.91 / rpm 18.91 MiB，合计 96.74 MiB + 2 自动源码包；AppImage 99.15 MiB 超 Gitee 单文件 100 MB 上限，仅 GitHub 提供）；Gitee 按「只留最新两版 + ocr-runtime」约定已删旧版 v1.2.1（id 1221109）与 v1.2.2（id 1225950），现存 ocr-runtime + v1.2.7，配额 166.23 / 1024 MiB（16.2%） |

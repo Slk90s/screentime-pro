@@ -10,16 +10,20 @@
 //! 修改历史：
 //!   - 2026-07-17 @v0.6.0-beta.1: 初始创建 - 桌宠窗口 Rust 端骨架
 //!   - 2026-09-16 @v0.8.0: 新增 hit_mask 子模块（按身体 alpha 命中，修「透明区点击死区」）
+//!   - 2026-10-29 @v1.2.12: 新增 drag 子模块（Rust 侧拖拽循环，批次 2）
 //!
 
-pub mod window;
 pub mod menu_window;
+pub mod window;
 // v0.8.0：鼠标穿透按身体形状命中（原 Phase 4 提前落地）
 pub mod hit_mask;
+// v1.2.12（批次 2）：Rust 侧拖拽循环，取代「每帧 IPC 搬窗」
+pub mod drag;
 
 // 重新导出 window 模块的全部 pub 项（含 #[tauri::command] 宏生成的 __cmd__* 同伴函数）。
 // 不能用 `pub use window::{...}` 具名导出——那只导出命令函数本体，
 // 漏掉 generate_handler! 必需的 `pet::__cmd__create_pet_window` 等宏产物，会导致 E0433。
-pub use window::*;
-pub use menu_window::*;
+pub use drag::*;
 pub use hit_mask::*;
+pub use menu_window::*;
+pub use window::*;

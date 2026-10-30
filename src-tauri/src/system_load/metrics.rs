@@ -21,10 +21,27 @@
 //! - Windows：GlobalMemoryStatusEx → used = ullTotalPhys - ullAvailPhys
 //! - Linux：/proc/meminfo → used = MemTotal - MemAvailable
 //!
-//! ## 磁盘口径（对齐 Finder「显示简介」/ Windows「此电脑」/ df）
-//! - macOS：statfs("/") → total = f_blocks × f_bsize（**macOS 没有 f_frsize**）
-//! - Windows：GetDiskFreeSpaceExW(系统盘) → used = total - totalFree
-//! - Linux：statvfs("/") → total = f_blocks × f_frsize，free 用 f_bavail（非 root 可用量）
+//! ## 磁盘口径（v1.2.12 起三端统一为「当前用户可用」）
+//!
+//! 统一公式：**`used = total - available_to_user`**，三平台取的都是
+//! 「我这个普通用户现在还能写多少」，而不是「物理上还剩多少空闲块」。
+//!
+//! | 平台 | total | available_to_user |
+//! | ---- | ----- | ----------------- |
+//! | Windows | `GetDiskFreeSpaceExW` 第 2 出参 `lpTotalNumberOfBytes` | **第 1 出参 `lpFreeBytesAvailableToCaller`**（已扣配额） |
+//! | macOS | `statfs` `f_blocks × f_bsize`（**macOS 无 f_frsize**） | `f_bavail × f_bsize` |
+//! | Linux | `statvfs` `f_blocks × f_frsize` | `f_bavail × f_frsize` |
+//!
+//! ⚠️ **v1.2.11 及以前三端口径不一致**——这是本版修掉的真实缺陷：
+//! - Linux 一直用 `f_bavail`（非特权可用），是对的；
+//! - macOS 用 `f_bfree`（**含 root 保留块**），比 Linux 少算占用；
+//! - Windows 用第 3 出参 `lpTotalNumberOfFreeBytes`（**全盘空闲**，未扣配额）。
+//!
+//! 后果：同一块 ext4（默认 5% root reserved）在 Linux 上会比另两端**显示得更满**，
+//! 用户对照 df / 资源管理器会认为数据错误。统一后三端对同一物理盘给出同一百分比。
+//!
+//! 副作用（**已知且接受**）：Windows 上以管理员身份运行、又启用磁盘配额时，
+//! 数值可能与「此电脑」略有差异（后者按配额口径）。普通用户无配额时两者相等。
 //!
 //! ## 平台支持矩阵（v0.7.7 起）
 //! | 指标 | macOS | Windows | Linux |
@@ -47,9 +64,9 @@
 //! ⚠️ v0.7.7 教训：托盘/浮窗显示的百分比，Rust 侧一律用 0.0~1.0 分数，
 //!    前端展示时必须 ×100。FloatBar.vue 曾漏乘导致「77% 显示成 1%」。
 
-use crate::system_load::CpuMonitor;
 use crate::system_load::network::NetworkSampler;
 use crate::system_load::platform::{Backend, MetricsBackend};
+use crate::system_load::CpuMonitor;
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Default)]
@@ -227,7 +244,10 @@ mod tests {
         };
         let (used, total) = Backend::sample_memory(&inner);
         assert!(total > 0, "GlobalMemoryStatusEx 应给出非零物理内存总量");
-        assert!(used <= total, "已用内存不应超过总量（used={used} total={total}）");
+        assert!(
+            used <= total,
+            "已用内存不应超过总量（used={used} total={total}）"
+        );
         // 物理内存不可能小于 256MB 或大于 4TB，越界说明字段读错
         assert!(
             (256 * 1024 * 1024..=4u64 * 1024 * 1024 * 1024 * 1024).contains(&total),
@@ -240,7 +260,10 @@ mod tests {
     fn windows_disk_is_physically_sane() {
         let (used, total) = Backend::read_disk_usage();
         assert!(total > 0, "GetDiskFreeSpaceExW 应给出非零系统盘容量");
-        assert!(used <= total, "已用不应超过总量（used={used} total={total}）");
+        assert!(
+            used <= total,
+            "已用不应超过总量（used={used} total={total}）"
+        );
     }
 
     #[cfg(target_os = "macos")]

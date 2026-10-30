@@ -13,12 +13,23 @@
 //!   - 2026-07-17 @v0.6.0-beta.1: 修复 - 创建时默认 set_ignore_cursor_events(false)，桌宠可交互
 //!   - 2026-09-16 @v0.8.0: hide_pet_window 补发 pet-hidden 事件（前端据此暂停气泡计时）；
 //!     鼠标穿透改由 pet/hit_mask.rs 按身体 alpha 网格动态管理（本文件只保留创建时默认值与手动开关）
+//!   - 2026-10-29 @v1.2.12: 修复 - `move_pet_window` 新增可选 `clamp` 参数接公共 util
+//!     `window_bounds`（整改 1.3）。桌宠位置与 v1.2.1 那次「状态栏消失」是同一根因
+//!     （localStorage 存的绝对坐标 + 拔副屏），但 pet 侧从来没防；默认 false 是为了
+//!     不让逐帧拖拽调用被中途纠偏，只有「恢复位置」这类调用显式传 true。
 //!
 
 use tauri::{AppHandle, Emitter, LogicalPosition, Manager, WebviewUrl, WebviewWindowBuilder};
 
 /// 桌宠窗口的固定 label（与 tauri.conf.json 的 windows[].label 一致）
 pub const PET_WINDOW_LABEL: &str = "pet";
+
+/// 离屏回落贴右下角时留的物理像素边距。
+///
+/// 量级对齐前端 `petStore.defaultPosition()`（那里是逻辑像素：右边内缩 60、下边内缩 100，
+/// 下边多留的是任务栏）。这里只需要「看得见、不被任务栏压住」，不必与前端逐像素一致，
+/// 取 64 折中；真要对齐得把窗口 scale factor 传进换算，收益不值这笔复杂度。
+const PET_OFFSCREEN_MARGIN: i32 = 64;
 
 /// 创建 pet 窗口（若已存在则忽略并返回 Ok，幂等）
 ///
@@ -32,22 +43,23 @@ pub async fn create_pet_window(app: AppHandle) -> Result<(), String> {
 
     // 初次创建时窗口位置用屏幕中央偏右下（QQ 企鹅常见位置），后续由前端持久化坐标控制
     // 用 index.html 共用主前端 dist，App.vue 通过 webview label 判断当前是主窗口还是 pet 窗口
-    let window = WebviewWindowBuilder::new(&app, PET_WINDOW_LABEL, WebviewUrl::App("index.html".into()))
-        .title("ScreenTime Pet")
-        .inner_size(140.0, 140.0)
-        .min_inner_size(140.0, 140.0)
-        // v0.6.2：移除 max_inner_size 死锁，允许前端按皮肤 preferredSize 用 setSize 动态放大窗口
-        // （resizable=false 仍禁止用户手动缩放，只有代码能 setSize；权限见 capabilities/pet.json 的 core:window:allow-set-size）
-        .resizable(false)
-        .decorations(false)
-        .transparent(true)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .shadow(false)
-        .focused(false)
-        .visible(false) // 默认隐藏，等前端 show_pet_window 才显示
-        .build()
-        .map_err(|e| format!("创建 pet 窗口失败: {e}"))?;
+    let window =
+        WebviewWindowBuilder::new(&app, PET_WINDOW_LABEL, WebviewUrl::App("index.html".into()))
+            .title("ScreenTime Pet")
+            .inner_size(140.0, 140.0)
+            .min_inner_size(140.0, 140.0)
+            // v0.6.2：移除 max_inner_size 死锁，允许前端按皮肤 preferredSize 用 setSize 动态放大窗口
+            // （resizable=false 仍禁止用户手动缩放，只有代码能 setSize；权限见 capabilities/pet.json 的 core:window:allow-set-size）
+            .resizable(false)
+            .decorations(false)
+            .transparent(true)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .shadow(false)
+            .focused(false)
+            .visible(false) // 默认隐藏，等前端 show_pet_window 才显示
+            .build()
+            .map_err(|e| format!("创建 pet 窗口失败: {e}"))?;
 
     // 初始鼠标穿透关闭：桌宠需接收拖拽/右键/点击事件（默认可交互）
     let _ = window.set_ignore_cursor_events(false);
@@ -61,7 +73,9 @@ pub async fn show_pet_window(app: AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window(PET_WINDOW_LABEL)
         .ok_or_else(|| "pet 窗口尚未创建，请先调用 create_pet_window".to_string())?;
-    window.show().map_err(|e| format!("显示 pet 窗口失败: {e}"))?;
+    window
+        .show()
+        .map_err(|e| format!("显示 pet 窗口失败: {e}"))?;
     // 通知 pet 窗口前端「已被显示」（用于触发入场动画等）
     let _ = app.emit_to(PET_WINDOW_LABEL, "pet-shown", ());
     Ok(())
@@ -73,7 +87,9 @@ pub async fn hide_pet_window(app: AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window(PET_WINDOW_LABEL)
         .ok_or_else(|| "pet 窗口尚未创建".to_string())?;
-    window.hide().map_err(|e| format!("隐藏 pet 窗口失败: {e}"))?;
+    window
+        .hide()
+        .map_err(|e| format!("隐藏 pet 窗口失败: {e}"))?;
     // v0.8.0：与 show 对称地广播 pet-hidden。
     // 用途：前端据此暂停随机气泡计时（旧实现隐藏后计时仍在跑，纯空耗），
     // 以及让「全屏隐藏」逻辑知道当前是否已隐藏（避免重复 show/hide）。
@@ -85,8 +101,20 @@ pub async fn hide_pet_window(app: AppHandle) -> Result<(), String> {
 ///
 /// 入参 x/y 是逻辑像素（LogicalPosition，即 CSS 像素），与前端 `clientX/screenX` 对齐，
 /// Tauri 内部按设备 scale factor 自动换算为设备像素，避免高 DPI（如 Retina scale=2）屏偏移。
+///
+/// `clamp`（v1.2.12 整改 1.3，默认 **false**）：位置来自 localStorage 恢复时传 `true`，
+/// 落点若已不在任何显示器上就贴回主屏右下角。为什么默认关：本命令在**拖拽回退路径**里
+/// 是逐帧调用的，每帧都纠偏会让窗口在用户手上「弹跳」回角落（v1.2.1 给 float 做同样
+/// 判定时也踩过这一点 —— float 的 `move_float_window` 只在拖拽结束时调用才没暴露）。
+/// 所以「恢复」与「拖拽」两类调用必须显式区分，不能靠 Rust 侧猜。
+/// 正常拖拽走 `begin_drag`（原生循环），其收尾自己调 `window_bounds`，不经过这里。
 #[tauri::command]
-pub async fn move_pet_window(app: AppHandle, x: f64, y: f64) -> Result<(), String> {
+pub async fn move_pet_window(
+    app: AppHandle,
+    x: f64,
+    y: f64,
+    clamp: Option<bool>,
+) -> Result<(), String> {
     let window = app
         .get_webview_window(PET_WINDOW_LABEL)
         .ok_or_else(|| "pet 窗口尚未创建".to_string())?;
@@ -94,6 +122,17 @@ pub async fn move_pet_window(app: AppHandle, x: f64, y: f64) -> Result<(), Strin
     window
         .set_position(pos)
         .map_err(|e| format!("移动 pet 窗口失败: {e}"))?;
+    if clamp.unwrap_or(false) {
+        // 纠偏结果不回传前端：前端那份 localStorage 仍是旧坐标，下次启动会再纠一次。
+        // 可接受的重复劳动 —— 想省掉它得让 Rust 反向通知前端改写持久化（批次 4.1 的账）。
+        if let Err(e) = crate::window_bounds::clamp_to_visible_area(
+            &window,
+            crate::window_bounds::FallbackCorner::BottomRight,
+            PET_OFFSCREEN_MARGIN,
+        ) {
+            tracing::warn!(error = %e, "桌宠离屏校验跳过（保持恢复位置）");
+        }
+    }
     Ok(())
 }
 

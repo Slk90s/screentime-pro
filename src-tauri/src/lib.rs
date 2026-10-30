@@ -68,6 +68,8 @@ mod tracker;
 mod screenshot;
 // v0.7.7：隐藏控制台窗口地创建子进程（修复 Windows 首次启动 reg 命令框闪烁）
 mod proc;
+// v1.2.12（2026-10-29）：「恢复位置还在不在可见区」的公共判定，float 与 pet 共用（整改 1.3）
+mod window_bounds;
 
 use std::sync::{Arc, Mutex};
 
@@ -418,6 +420,8 @@ pub fn run() {
             let screenshot_cfg = screenshot::ScreenshotConfig::load(&app_state.db);
             app.manage(screenshot::ScreenshotState::new(screenshot_cfg.clone()));
             app.manage(pet::PetHitState::default());
+            // v1.2.12（批次 2）：Rust 侧拖拽循环的会话状态（grab 偏移 / 会话号 / 最后落点）
+            app.manage(pet::PetDragState::default());
             // 注册截图全局快捷键。失败不致命：可能被系统/其他软件占用，
             // 用户仍可用托盘菜单「截图」或设置页按钮触发（此处只记日志；
             // 用户在设置页改键时由 screenshot_set_config 把失败原因带回 UI）。
@@ -963,6 +967,11 @@ pub fn run() {
             pet::set_pet_hit_mask,
             pet::set_pet_drag_lock,
             pet::clear_pet_hit_mask,
+            // v1.2.12（批次 2）：Rust 侧拖拽循环（macOS 主方案 / Win·Linux 兜底）
+            // IPC 实测 **91**（本文件 `generate_handler!` 内 `mod::cmd,` 行计数；v1.2.11 是 89，
+            // 本版 +begin_drag +end_drag。别照文档递推 —— 见本文件头 2026-10-25 那条记账纠正）
+            pet::begin_drag,
+            pet::end_drag,
             pet::create_pet_menu_window,
             pet::show_pet_menu_window,
             pet::hide_pet_menu_window,

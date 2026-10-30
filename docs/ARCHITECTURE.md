@@ -46,6 +46,15 @@
     同批合并进重切版：mac / Linux 取字**三重不可用**修复（运行库落盘路径曾返回目录而非文件名
     → 运行库永远落不了盘；下载超时过短；平台感知默认引擎 + 存量配置自愈）。
     **本版为同名 tag 重切**：v0.9.0 首发版对 macOS / Linux 的取字链路不可用，故修复后重切发布。
+  - 2026-10-29 @v1.2.12: 新增 - 桌宠整改批次 1/2 落地（`REMEDIATION-PLAN-2026-10-29.md`）。
+    §3.1 补 `pet/drag.rs`（macOS / 兜底路径的 Rust 侧拖拽循环）与 `window_bounds.rs`
+    （float 与 pet 共用的离屏几何 util）两行，并更新 `pet/hit_mask.rs` 行（Linux X 连接缓存 +
+    「`RustConnection` 无 `Clone`」这条探针实锤）；§5 补「桌宠拖拽（`pet::drag`）」IPC 行；
+    §9 加两条不变量（**非主线程循环只准投递不准查询窗口 getter**、拖拽期窗口保持静态）；
+    §11 文件树补 `window_bounds.rs` 与 capabilities 全部 5 个文件（旧文档只写了 capture.json）。
+    **IPC 89→91 是重新数出来的**（48+22+14+3+3+1），不是照文档递推 —— 本文件 2026-10-25
+    那条记账纠正讲的就是这件事。头部版本声明推进至 v1.2.12，v1.2.11 段按「只留当前版全量 +
+    上一版压缩」收成 6 行。
   - 2026-10-27 @v1.2.11: 新增 - 「应用内自动升级」子系统。新模块 `src-tauri/src/app_update.rs`
     （与 `commands::check_for_update` **并存不替代**：后者只告知新版本并跳浏览器，前者真的下装）；
     前端 `src/api/appUpdate.ts` + 设置页 `nativeUpdate` 分支；IPC 85→**88**
@@ -92,51 +101,72 @@
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-10-27（同步至 **v1.2.11**——应用内自动升级（Windows / Linux AppImage）+ macOS 授权误报三修复）——
-> 本版主题是「发现新版本」终于能在应用内升完，外加 macOS「辅助功能已授权却报未授权」的连环修复。
-> **总纲：凡是「只在某个时刻才成立」的状态，都必须留一个能重新求值的信号，不能只信一次快照。**
-> ① **应用内自动升级（新模块 `app_update.rs`，与既有 `commands::check_for_update` 并存不替代）**：
-> 后者是「查版本 + 给网页链接」，前者是「查 + 下 + 验签 + 装」。三平台分支**互不相同**：
-> **Windows**（NSIS / MSI）拉起安装包后**进程立即退出** —— `install_inner` 在 `ShellExecuteW`
-> 之后直接 `std::process::exit(0)`（updater.rs:876），`install()` **永不返回**，前端那条
-> 「安装完成」的 toast 在 Windows 上永远走不到（故刻意不写）；这不是崩溃，是安装器接管。
-> **Linux 仅 AppImage**：原地覆盖自身并重启（`app.restart()`）。**deb / rpm 明确不参与** ——
-> 它们走 `pkexec dpkg -i` / `rpm -U`，每次升级都要过一次系统授权框，本就该由包管理器接手；
-> 用 `bundle_type()`（`__TAURI_BUNDLE_TYPE` 二进制补丁的静态值，dev 下返回 `None`）识别自身包型，
-> deb/rpm 用户点「检查更新」仍只看到「前往下载」。**macOS 主动关闭**，两个独立理由：
-> (a) ad-hoc 签名让「升级后授权失效」每次都复发，自动升级等于把这个坑自动化；
-> (b) `latest.json` 缺 macOS 条目时 updater 返的是 `Err(TargetsNotFound)` 而非「无更新」，
-> 会让用户每次启动都刷一条错误日志。并发用 **RAII 闸门**（`BUSY.compare_exchange` +
-> `Drop` 复位），下载进度走 `tauri::ipc::Channel<DownloadProgress>`。IPC 85→**88**。
-> ② **「辅助功能已授权却报未授权」（P0）三层叠加**：**(a)** 设置页提示条件写反；
-> **(b)** 「重置并重启」只清 `ScreenCapture`、不清 `Accessibility`（`tccutil reset` 的**服务名
-> 按服务不同且大小写敏感**），文案与实际动作不符，用户白忙 → 按服务分流 + 辅助功能行补独立入口；
-> **(c)** 真因是 **TCC 授权按进程快照**（勾选时进程已在跑，拿不到新授权，必须重启进程）
-> **× ad-hoc 签名 cdhash 每次 CI 都变**（记录按「路径 + cdhash」绑定，升级后旧记录失效，
-> 而系统设置界面仍显示为开）。顺带确认**辅助功能对本应用并非功能必需** —— 空闲检测走
-> `CGEventSourceSecondsSinceLastEventType`，**不需要**该权限，未授权不影响计时准确性；
-> 它只用于设置页状态显示。这条写进文案，避免用户为「修好显示」去折腾权限。
-> ③ **updater 依赖钉死 `=2.12.0`**：实测版本边界 —— ≤2.12.0 只要 tauri 2.10 / Rust 1.77.2 /
-> edition 2021，2.13.0+ 要 **Rust 1.90 + edition 2024**。裸写 `"2"` 会解析到 2.14.x 直接编不过，
-> 故显式 `=` 锁定（升级此依赖前先确认工具链）。
-> ④ **CI 出 `latest.json`**：三个 `tauri-action` 步骤一律 `includeUpdaterJson: false` ——
-> 该输入名**真实存在**（`action.yml`），而上一轮拟用的 `uploadUpdaterJson` **根本不存在**，
-> Actions 对未知输入只 warning 不报错，会导致三平台各自生成、互相覆盖；改由独立 `updater-json`
-> job（`needs: [windows, linux]`）汇总产物统一生成。`pub_date` 必须**严格 RFC3339**：
-> `OffsetDateTime::parse(..., Rfc3339)` 的解析错误会变成 `DeError` **中断整个检查**，故用
-> `date -u +%Y-%m-%dT%H:%M:%SZ` 生成 + 正则守卫 + 空值直接省略（`github.event.repository.updated_at`
-> 不是严格 RFC3339，用它会让所有客户端检查更新全灭）。`.github/scripts/gen_latest_json.py` 里
-> `pick_one()` 对 0 匹配 / 多匹配都报错，缺 `.sig` 直接 `::error::` + exit 1。
-> ⑤ **`.gitignore` 的 `scripts/` 会匹配任意层级**，把 `.github/scripts/` 一起吞掉 ——
-> 本地 `ls` 一切正常、CI 才报「文件不存在」，已锚定为 **`/scripts/`**；另加 `*.key` /
-> `*.key.pub` / `.tauri/` 保护私钥（`~/.tauri/screentime-pro.key` 丢了 = 已安装用户永久收不到更新）。
-> **验证**：`cargo check --lib` 零警告（本机 + 显式 `--target x86_64-pc-windows-msvc`）/
-> `cargo test --lib` **35 passed / 0 failed / 4 ignored** / `vue-tsc --noEmit` 零错误 /
-> `vite build` 通过；**IPC 精确对账 88 = 88**（注册 / 定义 / 去重后各 88，无缺无多）。
-> Linux 分支无法直接 `cargo check --target`（缺 pkg-config 会得到**假失败**），改走独立交叉探针
-> （`#[path]` 引真实代码 + 等宽 shim + **三次反证**：注入 `BundleType::AppImageXXX` 得 E0599、
-> 类型错得 E0308）；`latest.json` 用**真实** `RemoteRelease` 反序列化验证，并做三组反证
-> （坏 `pub_date` 被拒、缺平台被拦、`v` 前缀被 `parse_version` 正确 trim）。
+> 最后更新：2026-10-30（同步至 **v1.2.12**——**一次交付 v1.2.11 + v1.2.12 两版内容**：
+> 截图链路两个 P0 + 应用内自动升级 + 桌宠拖拽重构 + 磁盘口径三端统一）。
+> v1.2.11 从未打过 tag，故合并出包；README 版本表已合并该行，`releaseBody` 同口径。
+> 本版主题是「桌宠拖拽终于跟手」，外加一件更值得记住的事：
+> 一条被文档写成「已根治」的路径，可能因为**少一个 ACL 权限**而从未真正跑过。
+> **总纲：凡是「只在某个时刻才成立」的状态，都必须留一个能重新求值的信号，不能只信一次快照；
+> 而凡是「声称已修」的结论，都要先问一句——它真的被执行过吗？**
+> ① **桌宠原生拖拽从未生效（整改 1.1，一行修复）**：`capabilities/pet.json` 缺
+> `core:window:allow-start-dragging` → 前端 `startDragging()` 每次被 ACL 拒 → catch → 回退到
+> 「每帧 `invoke('move_pet_window')` 搬窗」。v0.6.2-beta.28 那句「已根治」修的是**回退路径**的竞态，
+> 而入口一直是死的。对照证据：`float.json` 早已有同一权限、悬浮条原生拖拽一直可用；而
+> `gen/schemas/acl-manifests.json` 里 `core:window:default` 全 28 项**不含**它。
+> ② **macOS 走 Rust 侧拖拽循环（整改批次 2，新模块 `pet/drag.rs`）**：双轨 —— Win/Linux 用原生
+> （① 之后才真正生效），macOS 与「原生抛错」兜底走 8ms 循环读**全局光标**自己搬窗。
+> 不上 mac 原生的理由（读 tao 0.35.3）：mac 的 `start_dragging` 是**合成一个假 `LeftMouseDown`**
+> （`NSEventSubtype::WindowExposed`、pressure 硬编码 1.0）再调 `performWindowDragWithEvent:`，
+> 对无边框透明窗不稳定，且**异步返回** → Promise 在拖拽刚开始就 resolve，前端立刻读位置收尾，
+> 状态必然错乱。这套形态顺带解决旧手动路径的结构性缺陷：**没有 `setPointerCapture`、监听挂在
+> `window` 上**，光标一甩出宠物矩形就收不到 pointermove → 桌宠掉队、松手回跳。
+> ③ **线程约束（源码核实，非推测）**：tauri-runtime-wry 2.11.4 的 `send_user_message`
+> （lib.rs:235-255）在主线程**内联执行**、否则 `proxy.send_event` **fire-and-forget**，
+> `WindowMessage::SetPosition` 最终在主线程落地 ⇒ 循环里调 `set_position` 安全，
+> **不需要** `run_on_main_thread`；而 `getter!` / `window_getter!`（:197-211）一律
+> 「发事件 + `rx.recv()` 阻塞等回」⇒ **循环内零窗口 getter**，`end_drag` 回传的是循环自己记的
+> 最后一个目标值，不是 `outer_position()` 的查询结果（`set_position` 异步投递，刚投的几帧还没落到
+> NSWindow，去问会拿到历史值，写进持久化就是「拖完回跳」）。
+> ④ **离屏校验抽成公共 util（整改 1.3）**：新增 `window_bounds.rs`，float 与 pet 共用同一判据
+> ——**两轴各 ≥1/3 重叠**才算可见（旧 float 实现只有 `overlap_x`，竖着甩出屏外一路放行）。
+> `move_pet_window` 新增 `clamp` 参数且**默认 false**：拖拽每帧调用时纠偏会让窗口在用户手里弹跳，
+> 只有恢复 / 开关切换才传 true。
+> ⑤ **启动恢复桌宠（整改 1.2，⚠️ 与整改方案的字面写法有偏差）**：方案原写「`lib.rs` setup 读
+> 持久化 enabled」，实际做不到——桌宠开关只存在 localStorage `screentime-pet`（`PetWindow.vue`
+> 深看 + `persistSuspended`），Rust 侧读不到，故改为**前端驱动**：pet webview 的 `onMounted` 末尾
+> `restorePetOnStartup()`（enabled → setSize → `move_pet_window{clamp:true}` → show）。
+> 修前的现状是 `enabled:true` 但重启后窗口不出现、设置页开关还显示「开」。
+> ⑥ **Linux X 连接缓存（整改 1.4）**：`cursor_logical` 的 linux 分支旧写法每次
+> `x11rb::connect(None)` 新建 socket（被穿透轮询以 ~18Hz 调用，拖拽循环再加一条 125Hz 线程），
+> 改为 `thread_local!` + `Arc<RustConnection>`，读失败即弃缓存、下轮重连自愈。
+> ⚠️ 探针实锤一个坑：`RustConnection`（x11rb 0.13.2，`rust_connection/mod.rs:65` 是 socket +
+> 若干 Mutex）**没有实现 `Clone`**，首版 `conn.clone()` 在 Linux 上直接 E0599 编不过。这段
+> cfg 门控代码在 Windows 本机 `cargo check` **根本不编译**，整包交叉 check 又被 libdbus-sys 的
+> build.rs 假失败（LINUX_EXIT=101），只能靠独立探针 crate（`.tmp-probe-linux-cursor`，gitignored）
+> + 反证（注入 `conn.clone()` → 101 报 E0599）——**没有探针，这个 bug 会一路带到 Linux 发版**。
+> ⑦ **磁盘口径三端统一（v1.2.12 原生内容，不属桌宠整改）**：`system_load/` 三端一律
+> `used = total - available_to_user`。此前 Linux 用 `f_bavail`（对的）、macOS 用 `f_bfree`
+> （含 root 保留块）、Windows 用第 3 出参 `lpTotalNumberOfFreeBytes`（未扣配额），后果是同一块
+> 默认 5% root reserved 的 ext4 在 Linux 上会比另两端**显示得更满**。⚠️ 这是**用户可见数值变化**，
+> 也正是它不并入 v1.2.11 的原因（见 [`RELEASE.md`](RELEASE.md)）。多盘枚举（`DiskVolume` +
+> 三端 `ffi_read_disks`，macOS 侧靠 `getfsstat` + 「类型/挂载点/只读位」三重过滤避开 APFS 同容器子卷）
+> 已落在 Rust 侧，**前端消费方尚未接**，故带 `#[allow(dead_code)]`，接入时必须移除该 allow。
+> **验证**：`cargo test --lib` **61 passed / 0 failed / 5 ignored**（本批次 +10：`window_bounds` 7 例、
+> `pet/drag` 3 例）/ `vue-tsc --noEmit` 零错误 / `cargo fmt -- --check` 干净（本轮 fmt 只重写两个新文件，零附带改动）/
+> `cargo clippy --lib -- -D warnings` **62 条 = 批次 0 基线，本批次新增 0**（`drag.rs` 首版自带的 3 条已修）；
+> Linux 分支走上述探针（正证 exit 0 + 反证 exit 101）。
+> IPC 对账 **91 = 91**（48 commands + 22 screenshot + 14 pet〔窗口/菜单 9 + 命中 3 + 拖拽 2〕
+> + 3 float_window + 3 app_update + 1 float_glass）；⚠️ 89→91 是**重新数出来的**，不是照文档递推。
+> 真机验收（发版前必做）：Windows 拖动桌宠后运行日志 grep `原生拖拽不可用` **0 命中**；
+> 杀进程重启后桌宠按上次位置出现；把持久化位置手改 `(-5000,-5000)` 重启应落回可见区；
+> macOS 三条用例（快速横甩 400px 且光标一度离开宠物矩形 / 帧延迟对比 / 拖拽中光标出体后穿透态正确）。
+> 同批交付的 v1.2.11 内容（**该版号从未发布**，v1.2.12 是在其 WIP 之上继续改，两版合并出包）：
+> 应用内自动升级
+> （新模块 `app_update.rs`，仅 Windows NSIS / Linux AppImage；macOS 主动关闭、deb/rpm 不参与）
+> + 截图链路两个 P0（截完图进程消失 / 首次截图半屏，详见 RELEASE.md §3.4）
+> + macOS「辅助功能已授权却报未授权」三层修复 + updater 依赖钉 `=2.12.0` + CI 出 `latest.json`
+> （`includeUpdaterJson` 才是真实输入名，`uploadUpdaterJson` 不存在会被静默忽略）
+> + `.gitignore` 的 `scripts/` 锚定为 `/scripts/`；IPC 85→89。
 > 上一版 v1.2.10：macOS 交互体验专项（浮窗浅色反色 / 高度单一源 / 托盘 template 图 /
 > 更新检测三成因 / 权限弹窗 / 材质层泄漏 + 权限中心 + conf 补 x/y），Windows / Linux 零功能改动。
 
@@ -146,7 +176,7 @@
 
 跨平台应用使用时长追踪（macOS / Windows / Linux），对标 iOS「屏幕使用时间」。**数据 100% 本地（SQLite bundled），零上传，隐私优先**。
 
-栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v1.2.11**（详见 [`RELEASE.md`](RELEASE.md)）。
+栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v1.2.12**（详见 [`RELEASE.md`](RELEASE.md)）。
 
 > ⚠️ 本节版本号在 v0.7.0 → v0.7.5 期间**长期未更新**（曾停留在 v0.7.0），与 `tauri.conf.json` 脱节。
 > 版本号唯一真实来源是 **`src-tauri/tauri.conf.json` 的 `version`**，改版本时务必回来同步本节。
@@ -187,7 +217,7 @@
 ### 3.1 Rust 后端（src-tauri/src/）
 | 模块 | 职责 | 改我会影响 |
 |------|------|------------|
-| `commands.rs` (~1148 行) | 主 IPC 命令路由（48 个 `#[tauri::command]` 在本文件）；`lib.rs` 的 `generate_handler!` 合计注册 **88** 个 = 本文件 48 + `screenshot/` 21 + `pet/` 12（窗口/菜单 9 + 命中 3）+ `float_window.rs` 3 + `app_update.rs` 3 + `float_glass.rs` 1 | 前端 `api/*` 必须对齐字段名 |
+| `commands.rs` (~1148 行) | 主 IPC 命令路由（48 个 `#[tauri::command]` 在本文件）；`lib.rs` 的 `generate_handler!` 合计注册 **91** 个 = 本文件 48 + `screenshot/` 22 + `pet/` 14（窗口/菜单 9 + 命中 3 + 拖拽 2）+ `float_window.rs` 3 + `app_update.rs` 3 + `float_glass.rs` 1 | 前端 `api/*` 必须对齐字段名 |
 | `lib.rs` (~700 行) | Tauri Builder、插件注册（含 `tauri-plugin-global-shortcut`）、`generate_handler!` 命令注册、系统托盘（含「截图」菜单项） | **新命令必须在此注册**，否则 invoke 报不存在 |
 | `tracker/{macos,windows,linux}.rs` | 平台采样器（10s tick） | 跨平台数据一致性 |
 | `tracker/mod.rs` | trait 抽象 + 后台循环 | — |
@@ -197,7 +227,9 @@
 | **`classifier.rs`** (~181 行) | **分类规则引擎（纯逻辑，不依赖 DB）**：给定 `classification_rules` 规则 + 应用 → 分类 id。规则由上层内存缓存后传入 | 规则匹配语义。**`pattern` 与 `value` 两侧都必须小写化**，否则 `equals` 永不命中（v0.6.2-beta.17 踩坑） |
 | `categorizer.rs` (~347 行) | 兜底自动归类：本地字典（60+ 软件）+ Wikipedia API + LRU 缓存 → `other`。**同步实现！** | 采样循环性能 |
 | **`screenshot/`** | **v0.8.0 新增**：`ScreenshotState`（缓存帧 / 隐藏窗口记录 / 配置）+ `begin_capture`（隐自身→延时→`xcap` 抓主屏→显示 capture 窗）+ `screenshot_frame`（下发整屏 PNG 给遮罩窗）+ `screenshot_commit`（解码前端合成 PNG→剪贴板/保存→FIFO 清理→恢复窗口）+ `shortcut::apply`（`screenshot/mod.rs`）。**v0.8.1**：+`ocr.rs` 取字（Windows WinRT `Windows.Media.Ocr`，离线；`tidy_text()` 去中文单字间空格） | 截图主流程。**合成（裁剪/标注/圆角/阴影）已移交遮罩窗 canvas**，本模块只做编解码与落地；改这里不影响导出画质。**OCR 必须在 `spawn_blocking` 里跑**：COM 初始化与 WinRT 调用要求同线程 |
-| **`pet/hit_mask.rs`** | **v0.8.0 新增**：桌宠点击穿透。持 32×32 alpha 命中网格，55ms 轮询全局光标（Win `GetCursorPos` / macOS `CGEventGetLocation` / Linux `x11rb query_pointer`），仅命中状态翻转时切换 `set_ignore_cursor_events` | 桌宠点击可交互性；误改会导致「点不到 / 挡路」 |
+| **`pet/hit_mask.rs`** | **v0.8.0 新增**：桌宠点击穿透。持 32×32 alpha 命中网格，55ms 轮询全局光标（Win `GetCursorPos` / macOS `CGEventGetLocation` / Linux `x11rb query_pointer`），仅命中状态翻转时切换 `set_ignore_cursor_events`。**v1.2.12（整改 1.4）**：三平台 `cursor_logical` 改 `pub(crate)` 供拖拽循环复用；Linux 分支加 **X 连接缓存**（`thread_local!` + `Arc<RustConnection>`，失效即弃、下轮重连）—— 旧写法每次调用都新建连接，被轮询以 ~18Hz 触发。<br>⚠️ `RustConnection`（x11rb 0.13.2）**没有实现 `Clone`**，`conn.clone()` 在 Linux 上直接编不过；该分支只能靠 `.tmp-probe-linux-cursor` 探针交叉 check（整包交叉 check 会被 libdbus-sys 的 build.rs 假失败） | 桌宠点击可交互性；误改会导致「点不到 / 挡路」；拖拽循环的光标读取也走这里 |
+| **`pet/drag.rs`** | **v1.2.12 新增（整改批次 2）**：macOS / 兜底路径的桌宠拖拽循环。`begin_drag` 起一条 8ms 线程，读**全局光标**（不再依赖 webview 收到 pointermove）自己 `set_position`，两轴位移都 <4px 时不发；`end_drag` 停循环并回传最终逻辑位置给前端写持久化。会话号 `generation` 让新的 `begin_drag` **接管**旧循环 | 桌宠拖拽流畅性。<br>⚠️ 循环里**不得出现窗口 getter**（`outer_position()` 等）：getter 走「发事件 + 阻塞等回」，在非主线程上会把主线程拖住；`set_position` 则是投递到主线程执行，安全。详见本文件 §9 |
+| **`window_bounds.rs`** | **v1.2.12 新增（整改 1.3）**：跨窗口共用的离屏几何 util（`monitor_rects` / `rect_visible` / `offscreen_target` / `clamp_to_visible_area` / `rect_from_logical`）。判「可见」要**两轴各 ≥1/3 重叠**；`offscreen_target` 是纯函数，便于单测 | 悬浮指标条与桌宠的位置恢复；改阈值会让 v1.2.1 那类 `(-695,159)` 陈旧坐标重新放行 |
 | **`system_load/`** | **v0.7.5 新增**：`MetricsSampler` 统一指标采样器，产原始系统指标（CPU / 内存 / 磁盘 / 网速，1s 采样、磁盘 30s 缓存）。**三端统一**只由「悬浮指标条」展示（v0.7.11 起；原 macOS 菜单栏文字指标 `set_title` 已整体移除）。**v0.8.0**：`fullscreen.rs` 补 macOS 真全屏识别（`CGWindowListCopyWindowInfo` + `CGDisplayBounds`） | 只影响悬浮指标条与桌宠全屏隐藏，不影响采样主流程 |
 | `logging.rs` | 统一日志订阅器 | 日志路径 / 级别 |
 
@@ -325,7 +357,7 @@ PetSkinRenderer.watchEffect → skinTick++
 
 ---
 
-## 5. IPC 契约（当前 88 个命令）
+## 5. IPC 契约（当前 91 个命令）
 
 Rust 端在 `commands.rs` / `pet/` 定义，**在 `lib.rs` 的 `generate_handler!` 注册**；前端通过 `src/api/*` 调用。**改 IPC 必须同时改两端，并记得注册。**
 
@@ -343,7 +375,8 @@ Rust 端在 `commands.rs` / `pet/` 定义，**在 `lib.rs` 的 `generate_handler
 | 多设备 | `get_devices` / `list_devices_with_stats` | 多设备合并 |
 | 桌宠（`pet::`） | `create_pet_window` / `show_pet_window` / `hide_pet_window` / `move_pet_window` / `set_pet_cursor_passthrough` / `create_pet_menu_window` / `show_pet_menu_window` / `hide_pet_menu_window` / `move_pet_menu_window` | 桌宠窗口 + 右键菜单窗口（共 9 个） |
 | 桌宠命中（`pet::hit_mask`） | `set_pet_hit_mask` / `set_pet_drag_lock` / `clear_pet_hit_mask` | **v0.8.0**：32×32 alpha 命中网格上报 / 拖拽期锁定穿透 / 清空（共 3 个） |
-| 截图（`screenshot::`） | `screenshot_get_config` / `screenshot_set_config` / `screenshot_trigger` / `screenshot_frame` / `screenshot_commit` / `screenshot_cancel` / `screenshot_list` / `screenshot_delete` / `screenshot_reveal` / `screenshot_thumbnail` / `screenshot_dir` / `screenshot_ocr` / `screenshot_copy_text` | **v0.8.0**：配置 / 触发 / 取整屏帧（标注背景）/ 提交（收前端合成 PNG）/ 取消 / 历史增删查 + 缩略图 + 目录（共 11 个）。`set_config` 返回 `ApplyResult`（快捷键真实注册结果）。<br>**v0.8.1**：+`screenshot_ocr`（对缓存帧的指定**物理像素**矩形做本地离线 OCR，入参 `x/y/width/height`，返回 `OcrOut{text,width,height,language}`）/ `screenshot_copy_text`（走 `arboard` 写系统剪贴板，避开 WebView 剪贴板权限），合计 **13** 个 |
+| 桌宠拖拽（`pet::drag`，**v1.2.12**） | `begin_drag` / `end_drag` | macOS 与「原生拖拽不可用」兜底路径的**Rust 侧拖拽循环**：`begin_drag{grabDx,grabDy}` 记抓取偏移并起 8ms 循环（读全局光标搬窗），`end_drag` 停循环并回传**最终逻辑位置**（前端据此写持久化）。<br>⚠️ `end_drag` 回的是循环自己记的最后一个目标值，**不是** `outer_position()` 的查询结果 —— `set_position` 异步投递，刚投出去的几帧还没落到 NSWindow，去问会拿到历史值，写进持久化就是「拖完回跳」的老毛病。**入参是 camelCase**（Tauri v2 的 `snake_case` 参数 ↔ JS `grabDx`）。 |
+| 截图（`screenshot::`） | `screenshot_get_config` / `screenshot_set_config` / `screenshot_trigger` / `screenshot_frame` / `screenshot_commit` / `screenshot_cancel` / `screenshot_list` / `screenshot_delete` / `screenshot_reveal` / `screenshot_thumbnail` / `screenshot_dir` / `screenshot_ocr` / `screenshot_copy_text` / `take_capture_ready` | **v0.8.0**：配置 / 触发 / 取整屏帧（标注背景）/ 提交（收前端合成 PNG）/ 取消 / 历史增删查 + 缩略图 + 目录（共 11 个）。`set_config` 返回 `ApplyResult`（快捷键真实注册结果）。<br>**v0.8.1**：+`screenshot_ocr`（对缓存帧的指定**物理像素**矩形做本地离线 OCR，入参 `x/y/width/height`，返回 `OcrOut{text,width,height,language}`）/ `screenshot_copy_text`（走 `arboard` 写系统剪贴板，避开 WebView 剪贴板权限）。<br>**v1.2.11**：+`take_capture_ready`（`.take()` 取走并清空 `ScreenshotState.pending_capture`，返回 `Option<CaptureReadyPayload>`）—— **这不是可选的便利接口，而是首次截图半屏的修复本体**：遮罩窗 `visible(false)` 懒创建时 WebView 还在加载 SPA，`emit_to` 即发即弃而监听器未注册，事件会被静默丢弃；前端必须在 `listen` 注册完成后**主动拉一次**兜底。详见 [`RELEASE.md`](RELEASE.md) §3.4(c)。合计 **14** 个 |
 | 系统指标 | `get_system_metrics` / `get_system_metrics_enabled` / `set_system_metrics_enabled` / `get_status_bar_config` / `set_status_bar_config` | CPU/内存/磁盘/网速，三端统一由悬浮指标条展示（v0.7.11 起） |
 | 悬浮指标条（`float_window::`） | `create_float_window` / `show_float_window` / `hide_float_window` / `move_float_window` / `resize_float_window` | 悬浮窗生命周期与位置尺寸（共 5 个） |
 | 权限 | `check_permissions` / `open_privacy_settings` | macOS 辅助功能 + 屏幕录制。`check_permissions` 返回 `{ accessibility, screen_capture }`（`db/models.rs:107`），**v1.2.10 起屏幕录制改双信号口径**（`CGPreflight` ∨ 窗口标题探针）与截图侧一致 —— 单信号会把「升级后授权失效」误判成「从未授权」。设置页**权限中心**（仅 macOS）复用它，刻意不轮询（未放行时会 fork `codesign`/`xattr`，1Hz 代价过高） |
@@ -501,6 +534,8 @@ interface WidgetManifest {
 | 日志走 `logging.rs` + tauri-plugin-log | 散打日志抓不到；前后端同文件 |
 | `usePetSprites` 的 customCompositions **目前**未被 `PetCanvas` 消费 | v0.6.1-beta.1 已知断点（编辑器保存≠桌宠实际生效） |
 | 单一坐标数据源 `spriteLayout.ts` | 防止预览/实宠错位（v0.6.0-beta.1 editor bug 教训） |
+| 非主线程的循环里**只准投递、不准查询**窗口状态（`set_position` 可以，`outer_position()` 不行） | tauri-runtime-wry 2.11.4 `send_user_message`（lib.rs:235-255）在主线程**内联执行**、否则 `proxy.send_event` **fire-and-forget**；而 `getter!`/`window_getter!`（:197-211）一律「发事件 + `rx.recv()` 阻塞等回」。拖拽循环（`pet/drag.rs`）因此在 `set_position` 之后**绝不**回读窗口，收尾位置用循环自己记的目标值（v1.2.12） |
+| 桌宠拖拽期窗口保持 100% 静态（`.is-dragging :deep(*){animation:none}`） | v0.9.0 为 DWM 重合成抖动加的；为做拖拽动画拆它会当场复现「拖动时整窗抽搐」 |
 | 文件头部必带修改历史 (`- YYYY-MM-DD @vX.Y.Z: 类型 - 说明`) | 防 agent 幻视（CONVENTIONS §1.1, §2） |
 
 ---
@@ -533,8 +568,8 @@ src-tauri/
 └── src/
     ├── main.rs          ← App 入口（仅转调 lib）
     ├── lib.rs           ← Tauri Builder / 插件（含 global-shortcut）/ generate_handler! 命令注册 / 托盘
-    ├── commands.rs      ← 主 IPC 命令路由（48 个）+ float_window（3）+ pet/（12：窗口/菜单 9 + hit_mask 3）+ screenshot/（21）+ app_update（3）+ float_glass（1）= 88
-    ├── pet/             ← 桌宠 Rust 端（window / menu_window / hit_mask）
+    ├── commands.rs      ← 主 IPC 命令路由（48 个）+ float_window（3）+ pet/（14：窗口/菜单 9 + hit_mask 3 + drag 2）+ screenshot/（22）+ app_update（3）+ float_glass（1）= 91
+    ├── pet/             ← 桌宠 Rust 端（window / menu_window / hit_mask / drag）
     ├── screenshot/      ← v0.8.0 截图 Rust 端（mod：捕获 / 下发整屏帧 / 解码落库 / 快捷键；合成在前端 canvas）
     ├── tracker/         ← 平台采样（mod / platform / macos / windows / linux）
     ├── db/              ← SQLite（mod 1236 行 / models）
@@ -542,9 +577,14 @@ src-tauri/
     ├── categorizer.rs   ← 兜底归类：字典 + Wikipedia + LRU（必须同步实现）
     ├── system_load/     ← 系统指标采样（mod / macos / linux / windows / metrics / network / fullscreen），三端统一由悬浮指标条展示
     ├── logging.rs
+    ├── window_bounds.rs  ← v1.2.12 离屏几何 util（float_window 与 pet 共用；可见性判定 + 回落坐标）
     └── error.rs
 
 src-tauri/capabilities/
+├── default.json         ← 主窗口（main）权限集
+├── pet.json             ← 桌宠窗口；**v1.2.12 补 `core:window:allow-start-dragging`**（缺它时 `startDragging()` 被 ACL 拒，原生拖拽从未真正生效）
+├── pet-menu.json        ← 桌宠右键菜单窗权限集
+├── float.json           ← 悬浮指标条（`allow-start-dragging` 早已存在，故它的原生拖拽一直可用）
 └── capture.json         ← v0.8.0 截图窗口（capture）权限集
 
 src/

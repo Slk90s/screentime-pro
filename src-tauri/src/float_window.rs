@@ -36,11 +36,13 @@
 //!     ③ `ensure_float_window` 不负责材质：conf 已预创建 float 窗口，本函数开头的
 //!        `if exists { return Ok(()) }` 会早返回，材质若放这里永远不生效。
 //!        材质由调用方（commands / lib）在 ensure 之后经 `float_glass::apply_via_app` 应用。
+//!   - 2026-10-29 @v1.2.12: 重构 - 离屏纠偏判定搬到公共 util `window_bounds`（整改 1.3）。
+//!     桌宠的位置存在**同一类** localStorage 绝对坐标里、却完全没防，v1.2.1 那个根因在它身上
+//!     会原样复发；两处共用一套判定才不会各修各的。本文件保留同名私有函数作薄封装（只传
+//!     「右上角 + 24px 边距」两个 float 专属参数），三个调用点不动。判定顺带变严格：从只看
+//!     水平重叠改成两轴各 1/3，且枚举显示器失败时从静默 return 改成 warn 日志。
 
-use tauri::{
-    AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalPosition, WebviewUrl,
-    WebviewWindowBuilder,
-};
+use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::float_glass;
 
@@ -63,6 +65,9 @@ pub const FLOAT_INITIAL_WIDTH: f64 = 340.0;
 pub const FLOAT_HEIGHT: f64 = float_glass::FLOAT_HEIGHT_PLAIN;
 pub const FLOAT_MIN_WIDTH: f64 = 140.0;
 
+/// 离屏回落时贴角留的物理像素边距（v1.2.1 起就是这个值，搬进 `window_bounds` 时保持不变）
+const FLOAT_OFFSCREEN_MARGIN: i32 = 24;
+
 /// 从 AppState 读当前是否处于玻璃模式（读不到按 false，退回普通态最安全）
 ///
 /// 为什么经 AppHandle 读而不是加参数：`resize_float_window` 由前端 1Hz 调用，
@@ -83,7 +88,6 @@ fn current_glass(app: &AppHandle) -> bool {
 fn current_height(app: &AppHandle) -> f64 {
     float_glass::height_for(current_glass(app))
 }
-
 
 /// 幂等创建浮窗（已存在则直接复用）
 ///
@@ -121,65 +125,25 @@ pub fn ensure_float_window(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 窗口（物理像素矩形）与某显示器（物理像素矩形）的重叠宽度
-fn overlap_x(
-    win_l: i32,
-    win_r: i32,
-    mon_l: i32,
-    mon_r: i32,
-) -> i32 {
-    win_r.min(mon_r) - win_l.max(mon_l)
-}
-
 /// **离屏纠偏**（v1.2.1）：窗口若与所有显示器都「几乎不相交」，则移回主屏右上默认位。
 ///
-/// 背景：位置由前端 localStorage `float_pos` 恢复，保存的是**逻辑像素**绝对坐标。
-/// 当副屏被移除、显示器布局变化或在不同分辨率的机器间迁移后，旧坐标会落到已不存在
-/// 的屏幕上（实测：单屏 1536×864 机器上窗口被恢复到物理坐标 (-695,159)，整个在
-/// 屏幕左侧之外，用户看到的就是「状态栏没了」）。不做校验时，只要陈旧位置不覆盖屏内，
-/// 用户连拖回来的抓手都没有。
+/// v1.2.12 整改 1.3：判定逻辑整体搬到公共 util `window_bounds`（桌宠原来没防，同一个
+/// 根因会再犯一次）。本函数只剩 float 的两个参数：回落角 = 右上、边距 = 24 物理像素，
+/// 与 v1.2.1 起的既有行为一致。事故背景与判定口径见 `window_bounds.rs` 模块头。
 ///
-/// 判定与修正全部用**物理像素**，天然规避多屏混合 DPI 下逻辑/物理换算的歧义：
-/// - 枚举所有显示器，只要窗口与某一屏的水平重叠 ≥ 窗口宽度的 1/3（36px 高下垂直
-///   一般不会丢，只看水平即可），就认为仍在可见区域，不动用户位置；
-/// - 否则贴到主屏右上角（物理坐标，右侧/顶部各留 24px 物理像素的边距近似）。
+/// 与旧实现的差异（都是往严格方向走，不会把屏内窗口误挪走）：
+/// - 旧实现只查**水平**重叠（36px 高的条子垂直不会丢），新 util 两轴各要求 1/3 ——
+///   桌宠这种高窗口必须查垂直，float 顺带一起受益（比如被拖到已消失的上方副屏）；
+/// - 旧实现用 `inner_size`，新 util 用 `outer_size`（无边框透明窗两者相同）；
+/// - 旧实现枚举失败时静默 `return`，新 util 返回 `Err` → 这里降级成一条 warn 日志，
+///   可观测性补上（原来「为什么没纠偏」在日志里查不到）。
 fn clamp_to_visible_area(window: &tauri::WebviewWindow) {
-    let monitors: Vec<tauri::Monitor> = match window.available_monitors() {
-        Ok(list) if !list.is_empty() => list,
-        _ => match window.current_monitor() {
-            Ok(Some(m)) => vec![m],
-            _ => return,
-        },
-    };
-
-    if let Ok(pos) = window.outer_position() {
-        if let Ok(size) = window.inner_size() {
-            let win_l = pos.x;
-            let win_r = pos.x + size.width as i32;
-            let min_visible = (size.width as i32 / 3).max(1);
-            let on_any = monitors.iter().any(|m| {
-                overlap_x(win_l, win_r, m.position().x, m.position().x + m.size().width as i32)
-                    >= min_visible
-            });
-            if on_any {
-                return;
-            }
-            tracing::warn!(
-                saved_x = pos.x,
-                saved_y = pos.y,
-                "悬浮指标条恢复位置不在任何显示器上，回落到主屏右上角"
-            );
-            // 以主屏为基准放置（拿不到 primary 信息则用第一块显示器）
-            let primary = match window.primary_monitor() {
-                Ok(Some(m)) => m,
-                _ => monitors[0].clone(),
-            };
-            let margin = 24;
-            let target_x =
-                primary.position().x + primary.size().width as i32 - size.width as i32 - margin;
-            let target_y = primary.position().y + margin;
-            let _ = window.set_position(PhysicalPosition::new(target_x, target_y));
-        }
+    if let Err(e) = crate::window_bounds::clamp_to_visible_area(
+        window,
+        crate::window_bounds::FallbackCorner::TopRight,
+        FLOAT_OFFSCREEN_MARGIN,
+    ) {
+        tracing::warn!(error = %e, "悬浮指标条离屏校验跳过（保持当前位置）");
     }
 }
 
