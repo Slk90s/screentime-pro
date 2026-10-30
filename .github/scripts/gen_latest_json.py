@@ -97,6 +97,38 @@ def pick_one(pattern: str) -> str:
     return hits[0]
 
 
+def release_asset_name(local_name: str) -> str:
+    """把 artifact 里的本地文件名，转成 Release 上真实的资产名。
+
+    🔴 为什么需要这一步（v1.2.12 实测踩到，且后果是「升级必失败」）：
+
+    `productName` 是 `"ScreenTime Pro"`（**含空格**）。tauri-bundler 打包时
+    用这个原样拼接文件名，所以磁盘 / artifact 里是：
+
+        ScreenTime Pro_1.2.12_x64-setup.exe        ← 空格
+
+    但 `tauri-action` 把它上传到 GitHub Release 时会把空格替换成 `.`：
+
+        ScreenTime.Pro_1.2.12_x64-setup.exe        ← 点号
+
+    本脚本读的是 **artifact 里的本地文件名**，若直接拼进 url，就会得到
+    `…/download/v1.2.12/ScreenTime%20Pro_…` —— **实测 404**
+    （点号版 200）。而 updater 的下载失败发生在用户点「立即升级」之后，
+    表现是下载报错，不是「检查更新失败」，极难联想到文件名。
+
+    历史发布（v1.2.1 / v1.2.7 / v1.2.8 / v1.2.10）的资产名全部是点号形态，
+    说明这不是偶发，而是 tauri-action 的固定行为。
+
+    实现上只替换空格 → `.`，与观察到的行为严格一致；**不要顺手做别的
+    字符清洗**（比如把 `_` 也换掉），那会把名字改错。若将来 productName 改了，
+    这里要跟着改 —— 所以下面 runtime 校验一次预期形态，不符就 die。
+    """
+    name = local_name.replace(" ", ".")
+    if " " in name:
+        die(f"资产名归一化后仍含空格：{name!r}")
+    return name
+
+
 def main() -> int:
     if len(sys.argv) != 3:
         print(__doc__)
@@ -129,15 +161,20 @@ def main() -> int:
         if not signature:
             die(f"签名文件为空：{sig}")
 
-        name = os.path.basename(pkg)
+        local_name = os.path.basename(pkg)
+        # ⚠️ 必须用 Release 上的真实资产名拼 url，不能用本地文件名 ——
+        # 见 release_asset_name() 的说明：本地含空格、Release 上被换成点号，
+        # 直接拼本地名会 404（v1.2.12 实测）。
+        asset_name = release_asset_name(local_name)
         platforms[key] = {
             "signature": signature,
             # 用固定 tag 的直链而不是 /latest/download/：
             # latest.json 本身会被后续版本覆盖，它里面指向的安装包必须是**本版本**
             # 的固定地址，否则用户点升级会下到下一个版本的包（版本号还对不上）。
-            "url": f"https://github.com/{repo}/releases/download/{tag}/{name}",
+            "url": f"https://github.com/{repo}/releases/download/{tag}/{asset_name}",
         }
-        print(f"  {key}: {name} ({os.path.getsize(pkg)} bytes) — {label}")
+        note = "" if asset_name == local_name else f"  [url 用 {asset_name}]"
+        print(f"  {key}: {local_name} ({os.path.getsize(pkg)} bytes) — {label}{note}")
 
     # ⚠️ pub_date 一旦写了，就必须是**严格 RFC3339**，否则客户端反序列化会直接
     # 报错（updater.rs:1479-1484 用 `OffsetDateTime::parse(..., Rfc3339)` 且把
