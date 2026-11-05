@@ -6,6 +6,8 @@
   本文件为文档无 SemVer 版本号，版本声明跟随 tauri.conf.json）
 
 修改历史：
+  - 2026-11-04 @v1.2.13: 新增 - 桌宠状态 SQLite、多盘、窗口 conf 单源与当前 IPC 91；同步发布候选说明。
+  - 2026-11-02 @v1.2.12: 修正 - 全量按钮与死代码审计后重写 §3.3 当前模块树，移除已删除的 2D sprite 文件与旧拖拽描述。
   - 2026-09-04 @v0.7.5: 修复 - 头部版本声明由 v0.7.0 更新为 v0.7.5（实际代码已是 v0.7.5）
   - 2026-09-04 @v0.7.5: 修复 - §5 IPC 契约表命令名与实际代码不一致（list_rules→get_rules、
     get_today_summary→get_overview、get_app_summaries→get_app_ranking）
@@ -101,13 +103,11 @@
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-10-30（同步至 **v1.2.12**——**一次交付 v1.2.11 + v1.2.12 两版内容**：
-> 截图链路两个 P0 + 应用内自动升级 + 桌宠拖拽重构 + 磁盘口径三端统一）。
-> v1.2.11 从未打过 tag，故合并出包；README 版本表已合并该行，`releaseBody` 同口径。
-> 本版主题是「桌宠拖拽终于跟手」，外加一件更值得记住的事：
-> 一条被文档写成「已根治」的路径，可能因为**少一个 ACL 权限**而从未真正跑过。
-> **总纲：凡是「只在某个时刻才成立」的状态，都必须留一个能重新求值的信号，不能只信一次快照；
-> 而凡是「声称已修」的结论，都要先问一句——它真的被执行过吗？**
+> 最后更新：2026-11-04（同步至 **v1.2.13**，当前工作区 IPC **91**）。
+> 本版覆盖：三端统一 Rust 拖拽与离屏回落、跨 DPI 终点持久化、会话接管、桌宠状态 SQLite 备份、
+> 多盘指标、窗口 conf 单源、截图/设置稳定性、macOS 多显示器全屏，以及无消费 IPC 与 Clippy 清零。
+> Windows 独立开发版已完成真实拖拽/离屏/松手验收；混合 DPI 双屏、macOS/Linux 实机与 CI/DMG
+> 重传仍是发版前验收项，不在本文中提前宣称通过。
 > ① **桌宠原生拖拽从未生效（整改 1.1，一行修复）**：`capabilities/pet.json` 缺
 > `core:window:allow-start-dragging` → 前端 `startDragging()` 每次被 ACL 拒 → catch → 回退到
 > 「每帧 `invoke('move_pet_window')` 搬窗」。v0.6.2-beta.28 那句「已根治」修的是**回退路径**的竞态，
@@ -228,7 +228,8 @@
 | `categorizer.rs` (~347 行) | 兜底自动归类：本地字典（60+ 软件）+ Wikipedia API + LRU 缓存 → `other`。**同步实现！** | 采样循环性能 |
 | **`screenshot/`** | **v0.8.0 新增**：`ScreenshotState`（缓存帧 / 隐藏窗口记录 / 配置）+ `begin_capture`（隐自身→延时→`xcap` 抓主屏→显示 capture 窗）+ `screenshot_frame`（下发整屏 PNG 给遮罩窗）+ `screenshot_commit`（解码前端合成 PNG→剪贴板/保存→FIFO 清理→恢复窗口）+ `shortcut::apply`（`screenshot/mod.rs`）。**v0.8.1**：+`ocr.rs` 取字（Windows WinRT `Windows.Media.Ocr`，离线；`tidy_text()` 去中文单字间空格） | 截图主流程。**合成（裁剪/标注/圆角/阴影）已移交遮罩窗 canvas**，本模块只做编解码与落地；改这里不影响导出画质。**OCR 必须在 `spawn_blocking` 里跑**：COM 初始化与 WinRT 调用要求同线程 |
 | **`pet/hit_mask.rs`** | **v0.8.0 新增**：桌宠点击穿透。持 32×32 alpha 命中网格，55ms 轮询全局光标（Win `GetCursorPos` / macOS `CGEventGetLocation` / Linux `x11rb query_pointer`），仅命中状态翻转时切换 `set_ignore_cursor_events`。**v1.2.12（整改 1.4）**：三平台 `cursor_logical` 改 `pub(crate)` 供拖拽循环复用；Linux 分支加 **X 连接缓存**（`thread_local!` + `Arc<RustConnection>`，失效即弃、下轮重连）—— 旧写法每次调用都新建连接，被轮询以 ~18Hz 触发。<br>⚠️ `RustConnection`（x11rb 0.13.2）**没有实现 `Clone`**，`conn.clone()` 在 Linux 上直接编不过；该分支只能靠 `.tmp-probe-linux-cursor` 探针交叉 check（整包交叉 check 会被 libdbus-sys 的 build.rs 假失败） | 桌宠点击可交互性；误改会导致「点不到 / 挡路」；拖拽循环的光标读取也走这里 |
-| **`pet/drag.rs`** | **v1.2.12 新增（整改批次 2）**：macOS / 兜底路径的桌宠拖拽循环。`begin_drag` 起一条 8ms 线程，读**全局光标**（不再依赖 webview 收到 pointermove）自己 `set_position`，两轴位移都 <4px 时不发；`end_drag` 停循环并回传最终逻辑位置给前端写持久化。会话号 `generation` 让新的 `begin_drag` **接管**旧循环 | 桌宠拖拽流畅性。<br>⚠️ 循环里**不得出现窗口 getter**（`outer_position()` 等）：getter 走「发事件 + 阻塞等回」，在非主线程上会把主线程拖住；`set_position` 则是投递到主线程执行，安全。详见本文件 §9 |
+| **`pet/drag.rs`** | **v1.2.12 新增（整改批次 2）**：三平台统一的桌宠拖拽循环。`begin_drag` 起一条 8ms 线程，读**全局光标**（不再依赖 webview 收到 pointermove）自己 `set_position`，两轴位移都 <4px 时不发；`end_drag` 停循环并回传最终逻辑位置给前端写持久化。会话号 `generation` 让新的 `begin_drag` **接管**旧循环 | 桌宠拖拽流畅性。<br>⚠️ 循环里**不得出现窗口 getter**（`outer_position()` 等）：getter 走「发事件 + 阻塞等回」，在非主线程上会把主线程拖住；`set_position` 则是投递到主线程执行，安全。详见本文件 §9 |
+| **`pet/state.rs`** | 桌宠状态 SQLite 单键 JSON 持久化。`load_pet_state` 在缺行时校验并幂等插入旧 localStorage 快照；`save_pet_state` 校验后 UPSERT。备份 DTO 增加可选 `pet_state` | 解决桌宠开关/位置/喂食记录不进备份的问题；跨窗口实时同步仍走 localStorage，避免事件早于 SQLite 写入 |
 | **`window_bounds.rs`** | **v1.2.12 新增（整改 1.3）**：跨窗口共用的离屏几何 util（`monitor_rects` / `rect_visible` / `offscreen_target` / `clamp_to_visible_area` / `rect_from_logical`）。判「可见」要**两轴各 ≥1/3 重叠**；`offscreen_target` 是纯函数，便于单测 | 悬浮指标条与桌宠的位置恢复；改阈值会让 v1.2.1 那类 `(-695,159)` 陈旧坐标重新放行 |
 | **`system_load/`** | **v0.7.5 新增**：`MetricsSampler` 统一指标采样器，产原始系统指标（CPU / 内存 / 磁盘 / 网速，1s 采样、磁盘 30s 缓存）。**三端统一**只由「悬浮指标条」展示（v0.7.11 起；原 macOS 菜单栏文字指标 `set_title` 已整体移除）。**v0.8.0**：`fullscreen.rs` 补 macOS 真全屏识别（`CGWindowListCopyWindowInfo` + `CGDisplayBounds`） | 只影响悬浮指标条与桌宠全屏隐藏，不影响采样主流程 |
 | `logging.rs` | 统一日志订阅器 | 日志路径 / 级别 |
@@ -250,42 +251,33 @@
 
 ### 3.3 桌宠子系统（src/pet/）
 
-桌宠是独立透明置顶 webview，与 `main` 主窗口经 Tauri 全局事件 + `localStorage` 跨窗口同步（见 §7.4）。当前共 4 个窗口：`main`（设置）、`pet`（桌宠本体）、`pet-menu`（右键菜单，v0.6.2-beta.17 起独立窗口）、`capture`（截图遮罩，v0.8.0 新增）。
+桌宠是独立透明置顶 webview，与 `main` 主窗口经 Tauri 全局事件 + `localStorage` 跨窗口同步（见 §7.4）。当前共 5 个窗口：`main`、`pet`、`pet-menu`、`float`、`capture`。
 ```
 src/pet/
-├── PetWindow.vue          ← 桌宠 webview 根：拖拽 / 交互 / 监听 / 路由（381 行；v0.8.0 接入命中网格）
-├── PetMenuWindow.vue      ← 右键菜单**独立窗口**根（v0.6.2-beta.17 起独立成窗，119 行）
+├── PetWindow.vue               ← 桌宠根：启动恢复 / 交互 / 皮肤路由 / 命中网格
+├── PetMenuWindow.vue           ← 独立右键菜单窗口根
 ├── components/
-│   ├── PetSkinRenderer.vue      （皮肤路由器：:is 动态组件 + :key 强制重建）
-│   ├── PetContextMenu.vue        （右键菜单主体：皮肤切换 / 喂食 / 状态，855 行最重）
-│   ├── PetCanvas.vue             （原 2D 渲染，150 行）
-│   ├── PetBody.vue / PetLayer.vue（部件叠加层）
-│   ├── PetBubble.vue             （气泡对话，104 行）
-│   ├── PetSpriteEditor.vue       （部件编辑器，546 行）
-│   └── PetPreviewStage.vue       （编辑器预览，63 行）
+│   ├── PetSkinRenderer.vue      （皮肤路由器）
+│   ├── PetContextMenu.vue       （状态 / 喂食 / 皮肤 / 菜单拖动）
+│   ├── PetBubble.vue            （气泡）
+│   └── PetSpriteEditor.vue      （表情与皮肤编辑器）
 ├── composables/
-│   ├── usePetDrag.ts             （拖拽：越 4px 阈值才交 OS startDragging）
-│   ├── usePetCursorPassthrough.ts（透明背景 + 屏蔽原生右键 + 初始 passthrough；整窗穿透开关部分 v0.8.0 起由 usePetHitMask 接管）
-│   ├── usePetHitMask.ts          （v0.8.0 新增：合成 32×32 alpha 命中网格上报 Rust，透明区自动穿透）
-│   ├── usePetInteractions.ts     （点击：跳跃 / 压扁 / 抖动）
-│   ├── useForegroundWatcher.ts   （每 1s 轮询 tracker.current()，v0.8.0 由 2s 提速）
-│   ├── usePetSprites.ts          （自定义部件合成）
-│   ├── usePetBadges.ts           （徽章状态）
-│   ├── usePetBubble.ts           （气泡文案 / 随机弹出）
-│   └── useSystemOverloadWatcher.ts（系统过载 → 桌宠升温抖动，v0.7.0 阈值已上调）
-├── engine/                     （未改动）
-│   ├── stateMachine.ts          （16 状态 → 四元组）
-│   ├── appToState.ts
-│   ├── stateIcons.ts
-│   └── spriteLayout.ts          （部件坐标唯一数据源）
-├── config/bubble-phrases.json   （气泡台词词条）
-├── assets/sprites/              （23 个旧版部件精灵：eye_* / mouth_* / brow_* / 装饰）
-├── stores/petStore.ts          （状态 + localStorage 持久化，289 行）
+│   ├── usePetDrag.ts            （越阈值后交 Rust 全局光标拖拽循环）
+│   ├── usePetCursorPassthrough.ts（透明背景与初始穿透态）
+│   ├── usePetHitMask.ts         （32×32 alpha 命中网格）
+│   ├── usePetInteractions.ts    （单击 / 双击 / 长按）
+│   ├── useForegroundWatcher.ts  （前台应用 → 自动状态）
+│   ├── usePetBadges.ts          （自定义表情跨窗口同步）
+│   ├── usePetBubble.ts          （气泡文案与随机间隔）
+│   └── useSystemOverloadWatcher.ts（系统过载 → 升温）
+├── engine/                     （stateMachine / appToState / stateIcons）
+├── config/                     （中英文气泡词条）
+├── stores/petStore.ts          （状态 + localStorage 持久化）
 ├── types.ts
-└── skins/                      ← 解耦皮肤层（注册表模式，即插即用）
-    ├── types.ts                （PetSkinManifest 接口）
-    ├── registry.ts             （注册表 + 持久化 + 订阅，137 行）
-    ├── index.ts                （引导：注册内置皮肤）
+└── skins/                      ← 注册表模式：内置 popmart3d / spiderman
+    ├── types.ts
+    ├── registry.ts
+    ├── index.ts
     ├── popmart3d/              （Pop Mart 3D 熊猫）
     │   ├── PopMartPandaPet.vue
     │   └── assets/            （14 个文件：single / transparent / body / eyes / mouth /
@@ -357,13 +349,13 @@ PetSkinRenderer.watchEffect → skinTick++
 
 ---
 
-## 5. IPC 契约（当前 91 个命令）
+## 5. IPC 契约（当前工作区 91 个命令；v1.2.12 发布版 91 个）
 
 Rust 端在 `commands.rs` / `pet/` 定义，**在 `lib.rs` 的 `generate_handler!` 注册**；前端通过 `src/api/*` 调用。**改 IPC 必须同时改两端，并记得注册。**
 
 | 类别 | 命令 | 说明 |
 |------|------|------|
-| 追踪 | `start_tracking` / `stop_tracking` / `is_tracking` | 启动/停止/查询采样循环 |
+| 追踪 | `start_tracking` | 启动采样循环（启动后由应用生命周期托管） |
 | 实时 | `get_current_foreground` | 当前前台应用（v0.5→v0.6.1 字段名 bug 已修） |
 | 数据 | `get_overview` / `get_daily_summaries` / `get_daily_categories` / `get_month_summary` / `get_hourly_buckets` / `get_app_ranking` / `get_sessions` | Dashboard / Trends 用 |
 | 趋势 | `get_trends` | 周 / 月同比 |
@@ -374,8 +366,9 @@ Rust 端在 `commands.rs` / `pet/` 定义，**在 `lib.rs` 的 `generate_handler
 | 数据管理 | `export_all` / `export_data` / `import_data` / `prune_data` / `backup_and_prune_device` / `get_backup_config` / `save_backup_config` / `run_backup_now` | 导出导入、清理、本地自动备份 |
 | 多设备 | `get_devices` / `list_devices_with_stats` | 多设备合并 |
 | 桌宠（`pet::`） | `create_pet_window` / `show_pet_window` / `hide_pet_window` / `move_pet_window` / `set_pet_cursor_passthrough` / `create_pet_menu_window` / `show_pet_menu_window` / `hide_pet_menu_window` / `move_pet_menu_window` | 桌宠窗口 + 右键菜单窗口（共 9 个） |
-| 桌宠命中（`pet::hit_mask`） | `set_pet_hit_mask` / `set_pet_drag_lock` / `clear_pet_hit_mask` | **v0.8.0**：32×32 alpha 命中网格上报 / 拖拽期锁定穿透 / 清空（共 3 个） |
-| 桌宠拖拽（`pet::drag`，**v1.2.12**） | `begin_drag` / `end_drag` | macOS 与「原生拖拽不可用」兜底路径的**Rust 侧拖拽循环**：`begin_drag{grabDx,grabDy}` 记抓取偏移并起 8ms 循环（读全局光标搬窗），`end_drag` 停循环并回传**最终逻辑位置**（前端据此写持久化）。<br>⚠️ `end_drag` 回的是循环自己记的最后一个目标值，**不是** `outer_position()` 的查询结果 —— `set_position` 异步投递，刚投出去的几帧还没落到 NSWindow，去问会拿到历史值，写进持久化就是「拖完回跳」的老毛病。**入参是 camelCase**（Tauri v2 的 `snake_case` 参数 ↔ JS `grabDx`）。 |
+| 桌宠命中与全局鼠标（`pet::hit_mask`） | `set_pet_hit_mask` / `set_pet_drag_lock` / `clear_pet_hit_mask` / `primary_button_down` | 32×32 alpha 命中网格 / 拖拽锁 / 清空 / 全局左键状态（共 4 个）。最后一个用于悬浮条等待原生拖拽真正松手。 |
+| 桌宠状态（`pet::state`） | `load_pet_state` / `save_pet_state` | SQLite 单键 JSON 持久化；缺行时幂等迁移 localStorage，导出/导入包含 `pet_state`。 |
+| 桌宠拖拽（`pet::drag`，**v1.2.12**） | `begin_drag` / `end_drag` | 三平台统一的 **Rust 侧拖拽循环**：`begin_drag{grabDx,grabDy}` 记抓取偏移并起 8ms 循环（读全局光标搬窗），`end_drag` 停循环并回传**最终逻辑位置**（前端据此写持久化）。<br>⚠️ `end_drag` 回的是循环自己记的最后一个目标值，**不是** `outer_position()` 的查询结果 —— `set_position` 异步投递，刚投出去的几帧还没落到 NSWindow，去问会拿到历史值，写进持久化就是「拖完回跳」的老毛病。**入参是 camelCase**（Tauri v2 的 `snake_case` 参数 ↔ JS `grabDx`）。 |
 | 截图（`screenshot::`） | `screenshot_get_config` / `screenshot_set_config` / `screenshot_trigger` / `screenshot_frame` / `screenshot_commit` / `screenshot_cancel` / `screenshot_list` / `screenshot_delete` / `screenshot_reveal` / `screenshot_thumbnail` / `screenshot_dir` / `screenshot_ocr` / `screenshot_copy_text` / `take_capture_ready` | **v0.8.0**：配置 / 触发 / 取整屏帧（标注背景）/ 提交（收前端合成 PNG）/ 取消 / 历史增删查 + 缩略图 + 目录（共 11 个）。`set_config` 返回 `ApplyResult`（快捷键真实注册结果）。<br>**v0.8.1**：+`screenshot_ocr`（对缓存帧的指定**物理像素**矩形做本地离线 OCR，入参 `x/y/width/height`，返回 `OcrOut{text,width,height,language}`）/ `screenshot_copy_text`（走 `arboard` 写系统剪贴板，避开 WebView 剪贴板权限）。<br>**v1.2.11**：+`take_capture_ready`（`.take()` 取走并清空 `ScreenshotState.pending_capture`，返回 `Option<CaptureReadyPayload>`）—— **这不是可选的便利接口，而是首次截图半屏的修复本体**：遮罩窗 `visible(false)` 懒创建时 WebView 还在加载 SPA，`emit_to` 即发即弃而监听器未注册，事件会被静默丢弃；前端必须在 `listen` 注册完成后**主动拉一次**兜底。详见 [`RELEASE.md`](RELEASE.md) §3.4(c)。合计 **14** 个 |
 | 系统指标 | `get_system_metrics` / `get_system_metrics_enabled` / `set_system_metrics_enabled` / `get_status_bar_config` / `set_status_bar_config` | CPU/内存/磁盘/网速，三端统一由悬浮指标条展示（v0.7.11 起） |
 | 悬浮指标条（`float_window::`） | `create_float_window` / `show_float_window` / `hide_float_window` / `move_float_window` / `resize_float_window` | 悬浮窗生命周期与位置尺寸（共 5 个） |
@@ -532,8 +525,7 @@ interface WidgetManifest {
 | 所有 `Mutex::lock()` → `unwrap_or_else(|e| e.into_inner())` | poison 雪崩 |
 | macOS 权限用 `AXIsProcessTrustedWithOptions({prompt:false})` | ad-hoc 签名下 `AXIsProcessTrusted` 因 identifier 漂移永远返回 false |
 | 日志走 `logging.rs` + tauri-plugin-log | 散打日志抓不到；前后端同文件 |
-| `usePetSprites` 的 customCompositions **目前**未被 `PetCanvas` 消费 | v0.6.1-beta.1 已知断点（编辑器保存≠桌宠实际生效） |
-| 单一坐标数据源 `spriteLayout.ts` | 防止预览/实宠错位（v0.6.0-beta.1 editor bug 教训） |
+| 自定义表情统一走 `usePetBadges` + `pet-custom-updated` | 多 webview 各自持有独立 JS 状态，必须显式跨窗重读；旧 2D sprite 链路已移除 |
 | 非主线程的循环里**只准投递、不准查询**窗口状态（`set_position` 可以，`outer_position()` 不行） | tauri-runtime-wry 2.11.4 `send_user_message`（lib.rs:235-255）在主线程**内联执行**、否则 `proxy.send_event` **fire-and-forget**；而 `getter!`/`window_getter!`（:197-211）一律「发事件 + `rx.recv()` 阻塞等回」。拖拽循环（`pet/drag.rs`）因此在 `set_position` 之后**绝不**回读窗口，收尾位置用循环自己记的目标值（v1.2.12） |
 | 桌宠拖拽期窗口保持 100% 静态（`.is-dragging :deep(*){animation:none}`） | v0.9.0 为 DWM 重合成抖动加的；为做拖拽动画拆它会当场复现「拖动时整窗抽搐」 |
 | 文件头部必带修改历史 (`- YYYY-MM-DD @vX.Y.Z: 类型 - 说明`) | 防 agent 幻视（CONVENTIONS §1.1, §2） |

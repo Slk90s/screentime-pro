@@ -14,6 +14,7 @@
 //!
 
 pub mod menu_window;
+pub mod state;
 pub mod window;
 // v0.8.0：鼠标穿透按身体形状命中（原 Phase 4 提前落地）
 pub mod hit_mask;
@@ -26,4 +27,5 @@ pub mod drag;
 pub use drag::*;
 pub use hit_mask::*;
 pub use menu_window::*;
+pub use state::*;
 pub use window::*;

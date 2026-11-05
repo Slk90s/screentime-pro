@@ -6,7 +6,7 @@
 //!   - 内存：GlobalMemoryStatusEx（比读 WMI/perf counter 快且零依赖）
 //!   - 磁盘：GetDiskFreeSpaceExW 取**系统盘**（%SystemDrive%，通常 C:）
 //!   - 多盘（v1.2.12）：GetLogicalDrives + GetDriveTypeW 过滤固定盘，逐盘取容量
-//! 两者都属 Win32 系统调用，无需 proc::hidden（不创建进程，不会有黑框）。
+//!     两者都属 Win32 系统调用，无需 proc::hidden（不创建进程，不会有黑框）。
 //!
 //! Windows 由系统调用直接给出 used/total，不需要 inner 里的常量，故后端方法为 no-op 忽略 inner。
 //!
@@ -15,6 +15,10 @@
 //! （`lpTotalNumberOfFreeBytes`，磁盘**物理**空闲），导致「已用」比资源管理器偏小。
 //! 本版改用第 1 个 `lpFreeBytesAvailableToCaller`（**当前用户**可用，已扣配额），
 //! 与 macOS/Linux 的 `f_bavail` 对齐。资源管理器「此电脑」显示的也是这个值。
+//!
+//! 修改历史：
+//!   - 2026-09-23 @v0.9.7: 重构 - 从 metrics.rs 拆出 Windows 内存与磁盘采样。
+//!   - 2026-10-29 @v1.2.12: 新增 - 枚举本地固定盘，并按当前用户可用空间计算已用量。
 
 use super::{DiskVolume, MetricsBackend};
 use crate::system_load::metrics::MetricsInner;
@@ -104,7 +108,6 @@ fn ffi_read_disk_usage() -> (u64, u64) {
 /// - `DRIVE_CDROM` / `DRIVE_RAMDISK` / `DRIVE_NO_ROOT_DIR`：无意义或不可用
 /// - **未就绪的卷**（`GetDiskFreeSpaceExW` 失败）：直接跳过而非记 0，
 ///   否则会显示「0/0」这种假数据
-#[allow(dead_code)] // v1.2.13 接入多盘调用方后删除（详见 platform/mod.rs 的 DiskVolume 文档）
 fn ffi_read_disks() -> Vec<DiskVolume> {
     use windows::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives};
 
@@ -155,7 +158,7 @@ fn ffi_read_disks() -> Vec<DiskVolume> {
         });
     }
     // 大容量优先，前端取第一项做「主盘」时结果稳定
-    out.sort_by(|a, b| b.total_bytes.cmp(&a.total_bytes));
+    out.sort_by_key(|a| std::cmp::Reverse(a.total_bytes));
     out
 }
 
@@ -176,11 +179,12 @@ mod tests {
         assert!(!vols.is_empty(), "至少应枚举出系统盘");
         let sys: Vec<_> = vols.iter().filter(|v| v.is_system).collect();
         assert_eq!(sys.len(), 1, "系统盘应恰好 1 个，实际 {sys:?}");
-        // 两个 API 的必然一致性：read_disk_usage 就是系统盘那一项
-        assert_eq!(
-            (sys[0].used_bytes, sys[0].total_bytes),
-            (used, total),
-            "read_disk_usage 与 read_disks 的系统盘项必须一致"
+        // 总量必须一致；已用量允许两次采样之间的真实写入（这里给 16MiB 余量）。
+        assert_eq!(sys[0].total_bytes, total, "两次采样的系统盘总量不一致");
+        assert!(
+            sys[0].used_bytes.abs_diff(used) <= 16 * 1024 * 1024,
+            "两次采样的系统盘已用量偏差异常：{} vs {used}",
+            sys[0].used_bytes
         );
     }
 

@@ -8,7 +8,7 @@
  * - 只读命令（配置/列表/缩略图）在非 Tauri 环境返回空值；写命令（提交/删除）在非 Tauri 抛错，
  *   避免预览环境静默「假成功」。
  * - 参数命名遵循 Tauri v2 约定：Rust 侧 snake_case 形参，JS 侧传 camelCase（如 maxWidth / pngBase64）。
- * - **合成在前端**（v0.8.0 修订）：遮罩窗 canvas 把裁剪/标注/圆角/投影画好后整体交给
+ * - **合成在前端**（v0.8.0 修订）：遮罩窗 canvas 把裁剪/标注/圆角画好后整体交给
  *   `screenshot_commit`，Rust 不再做像素加工 → 预览与导出逐像素一致。
  *
  * 修改历史：
@@ -48,13 +48,11 @@ export const DEFAULT_SCREENSHOT_CONFIG: ScreenshotConfig = {
   auto_save: false,
   corner_radius: 8,
   max_count: 200,
-  // v0.9.0：仅预览兜底。真实默认按平台定（Rust `default_engine()`：
-  // Windows = "system"；macOS / Linux 无系统引擎 → "enhanced"），
-  // 进入应用后立刻被 `screenshot.getConfig()` 的真值覆盖。
+  // 仅预览兜底；真实默认由 Rust 按平台能力决定，进入应用后立即读取真值。
   ocr_engine: "system",
 };
 
-/** 提交参数：一张已经合成好的 PNG（含裁剪 / 标注 / 圆角 / 投影） */
+/** 提交参数：一张已经合成好的 PNG（含裁剪 / 标注 / 圆角） */
 export interface CommitArgs {
   /** PNG data URL 或裸 base64（Rust 侧两种都容忍） */
   pngBase64: string;
@@ -187,7 +185,4 @@ export const screenshot = {
   /** 打开「系统设置 → 隐私与安全性 → 屏幕录制」面板 */
   openPermissionSettings: (): Promise<void> =>
     invoke<void>("screenshot_open_permission_settings"),
-
-  /** 重启应用（TCC 新授权只对新进程生效 —— 轮询发现授权翻转后引导用户点这个） */
-  restartApp: (): Promise<void> => invoke<void>("screenshot_restart_app"),
 };

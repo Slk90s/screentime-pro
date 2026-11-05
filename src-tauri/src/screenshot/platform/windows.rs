@@ -1,5 +1,8 @@
 //! Windows 实现：reveal 走 `explorer /select,`；TCC 授权是 macOS 专属概念，
 //! 这里给安全兜底值；抓屏直走 xcap（Windows 无 SCK）。
+//!
+//! 修改历史：
+//!   - 2026-09-24 @v0.9.7: 重构 - 收口 Windows 截图文件定位、权限兜底与 xcap 抓屏实现。
 
 use super::{CaptureBackend, PermissionBackend, RevealBackend};
 

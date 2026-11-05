@@ -198,8 +198,3 @@ function persist(id: string): void {
     log.warn('[pet-skin] 持久化 active id 失败', e);
   }
 }
-
-/** 调试用：暴露当前活跃 id（响应式） */
-export function activeSkinId(): string {
-  return state.activeId;
-}

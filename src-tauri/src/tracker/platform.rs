@@ -6,6 +6,9 @@
 //!
 //! 注意：分类逻辑已迁移到 `classifier` 模块（基于数据库可配置规则），
 //! 本文件只保留「原始数据」定义与平台标识。
+//!
+//! 修改历史：
+//!   - 2026-07-08 @v0.2.0: 新增 - 定义 PlatformTracker 与 RawApp，隔离平台采集实现。
 
 use crate::error::TrackerError;
 

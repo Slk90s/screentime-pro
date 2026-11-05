@@ -9,6 +9,10 @@
 //! - `ExportBundle` 三件套（`ExportApp` / `ExportSession` / `ExportBundle`）是备份 JSON 的
 //!   对外契约，字段增删需同步 `commands::import_data` 的解析逻辑与 `docs/`。
 //! - `MetricsOut` 的百分比字段是 **0.0~1.0 分数**，前端展示须 ×100（见 metrics.rs 教训）。
+//!
+//! 修改历史：
+//!   - 2026-07-08 @v0.2.0: 新增 - 定义 IPC 与备份导出 DTO，统一 snake_case 数据契约。
+//!   - 2026-11-03 @v1.2.12: 新增 - 备份包增加可选桌宠状态，保持旧备份兼容。
 
 use serde::{Deserialize, Serialize};
 
@@ -92,7 +96,7 @@ pub struct ExportResult {
     pub path: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct RuleOut {
     pub id: i64,
     pub field: String,
@@ -182,12 +186,16 @@ pub struct ExportBundle {
     pub version: u32,
     pub exported_at: String,
     pub devices: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub pet_state: Option<String>,
     pub apps: Vec<ExportApp>,
     pub sessions: Vec<ExportSession>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MetricsOut {
+    #[serde(default)]
+    pub disk_volumes: Vec<crate::system_load::platform::DiskVolume>,
     pub supported: bool,
     pub enabled: bool,
     pub cpu_usage: f32,

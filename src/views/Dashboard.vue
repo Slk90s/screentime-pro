@@ -1,6 +1,12 @@
+<!--
+  设计思路：组合统计、趋势、规则和设置视图，集中管理日期范围、设备筛选及各统计组件的数据加载。
+  修改历史：2026-11-03 @v1.2.12: 新增 - 补充文件头设计说明与修改历史。
+-->
 <template>
   <!--
     Dashboard 主视图：组合总览卡片、柱状图、堆叠图、排行榜、趋势、设置
+
+    2026-11-02 @v1.2.12: 修复 - detailDays 独立于图表 range，单日详情不再误标为范围；今天按钮每次只加载一次。
 
     v1.2.4（2026-10-22）：新增「自动检查更新」的首页提示横条。
       - 位置：统计概览页工具栏之下、所选日期之上（扫一眼能看到，且不遮挡图表）
@@ -69,14 +75,14 @@
         <span class="tip">{{ t("dashboard.clickBarTip") }}</span>
       </div>
 
-      <OverviewCard :overview="overview" :range="range" />
+      <OverviewCard :overview="overview" :range="detailDays" />
 
       <div class="row">
         <DailyBarChart :summaries="daily" :by-category="dayCats" :categories="categories" @select="onPickDay" />
         <HourlyStackedChart :buckets="hourly" :categories="categories" />
       </div>
 
-      <AppRanking :ranking="ranking" :categories="categories" :range="range" />
+      <AppRanking :ranking="ranking" :categories="categories" :range="detailDays" />
     </div>
 
     <!-- 标签页二：周/月同比分析 -->
@@ -132,6 +138,8 @@ const tab = ref<"stats" | "trends" | "rules" | "settings">("stats");
 
 // 时间范围（天）
 const range = ref(7);
+// 详情实际聚合口径：范围图表与单日详情可以并存。
+const detailDays = ref(7);
 // 当前选中的设备（"" = 合并全部设备）
 const device = ref<string>("");
 // 已知设备列表（供切换器与趋势页使用）
@@ -171,6 +179,7 @@ async function loadDetails(opts?: { days?: number; date?: string }) {
   const days = opts?.days ?? range.value;
   const date = opts?.date ?? selectedDate.value;
   const dev = device.value;
+  detailDays.value = days;
   overview.value = await tracker.overview(days, date, dev);
   hourly.value = await tracker.hourly(date, dev);
   ranking.value = await tracker.ranking(days, date, dev);
@@ -203,9 +212,10 @@ function backToToday() {
 // 注意：range 已是 0（单日）时 watch([range, device]) 不会触发，必须显式刷新，
 // 否则「切到历史日期后再点今天」页面仍停留在历史那天（与 backToToday 对齐）。
 function selectToday() {
+  const needsExplicitLoad = range.value === 0;
   range.value = 0;
   selectedDate.value = todayStr();
-  loadDetails({ days: 0, date: selectedDate.value });
+  if (needsExplicitLoad) loadDetails({ days: 0, date: selectedDate.value });
 }
 
 // v0.7.9（2026-09-12）加固：
@@ -480,15 +490,6 @@ watch([range, device], () => {
   color: var(--text);
   font-weight: 500;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-}
-.export {
-  margin-left: auto;
-  border: 1px solid var(--border);
-  background: var(--card);
-  padding: 7px 14px;
-  border-radius: 8px;
-  font-size: 13px;
-  cursor: pointer;
 }
 /* 所选日期指示条 */
 .seldate {

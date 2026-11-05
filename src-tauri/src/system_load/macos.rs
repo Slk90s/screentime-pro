@@ -27,6 +27,10 @@
 //!   Mach VM 内存，调用方必须 `vm_deallocate`**，漏掉就泄漏（本项目早期代码隐患）。
 //! - `host_statistics(HOST_CPU_LOAD_INFO)` 一次性给出**全机汇总**，写进调用方栈上
 //!   结构体，零分配、零泄漏，正好满足「差分求总使用率」的需求。
+//!
+//! 修改历史：
+//!   - 2026-07-28 @v0.6.2-beta.25: 新增 - 采集 macOS CPU ticks 并差分计算使用率。
+//!   - 2026-09-11 @v0.7.8: 修复 - 改用 Mach host_statistics，解决 CPU 使用率恒为零。
 
 #![cfg(target_os = "macos")]
 

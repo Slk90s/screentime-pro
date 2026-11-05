@@ -1,5 +1,8 @@
 //! Linux 实现：reveal 退化为「打开所在目录」（无跨 DE 的选中文件标准）；
 //! 权限三件套给安全兜底（TCC 是 macOS 概念）；WebView2 是 Windows 概念，给兜底。
+//!
+//! 修改历史：
+//!   - 2026-09-24 @v0.9.7: 重构 - 收口 Linux 文件打开、权限兜底与 WebView2 兼容实现。
 
 use super::{OsOpenBackend, PermissionBackend, Webview2Backend};
 

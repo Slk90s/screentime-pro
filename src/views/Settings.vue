@@ -1,7 +1,12 @@
+<!--
+  设计思路：按功能卡片组织设置项，统一处理配置读写、备份、桌宠、截图和应用更新等操作。
+  修改历史：2026-11-03 @v1.2.12: 新增 - 补充文件头设计说明与修改历史。
+-->
 <template>
   <!-- 设置页（v0.6.2-beta.19 重构）
        视觉：每功能一卡片，head 区域 圆角色块图标 + 标题/副标题，body 区域放交互控件。
        功能不裁：原 Settings 全部功能（设备名/空闲阈值/保留天数/语言/自启/备份导入/日志/危险区/桌宠/皮肤/编辑器/检查更新/关于）全部保留。 -->
+  <!-- 2026-11-02 @v1.2.12: 修复 - 所有配置提交前先取得权威基线，读取失败不得写入；截图多选阻止冒泡并在单删后清理已选 ID。 -->
   <div class="settings">
     <!-- ============ 顶部品牌色横条 + 标题 ============ -->
     <div class="settings-header">
@@ -178,6 +183,15 @@
               :disabled="statusBarChildrenDisabled"
               @change="onStatusBarItem($event, 'show_disk')"
             />
+          </div>
+          <div class="form-row">
+            <label>{{ t("settings.diskScope") }}</label>
+            <select v-model="diskMode" class="text-input" :disabled="statusBarChildrenDisabled">
+              <option value="system">{{ t("settings.diskScopeSystem") }}</option>
+              <option value="all">{{ t("settings.diskScopeAll") }}</option>
+              <option v-for="v in diskVolumes" :key="v.mount" :value="v.mount">{{ v.mount }}</option>
+            </select>
+            <p class="field-hint">{{ t("settings.diskScopeHint") }}</p>
           </div>
           <div class="form-row row between">
             <label>{{ t("settings.statusBarShowNet") }}</label>
@@ -417,7 +431,7 @@
               :class="{ selected: shotSelecting && selectedShotIds.includes(s.id), selectable: shotSelecting }"
               @click="shotSelecting && toggleShotSelect(s.id)"
             >
-              <label v-if="shotSelecting" class="shot-check" @click.prevent="toggleShotSelect(s.id)">
+              <label v-if="shotSelecting" class="shot-check" @click.prevent.stop="toggleShotSelect(s.id)">
                 <input type="checkbox" :checked="selectedShotIds.includes(s.id)" />
               </label>
               <img v-if="shotThumbs[s.id]" class="shot-img" :src="shotThumbs[s.id]" :alt="s.file_name" />
@@ -426,8 +440,8 @@
                 <span class="shot-meta">{{ s.width }}×{{ s.height }} · {{ formatBytes(s.bytes) }}</span>
                 <span class="shot-meta shot-date">{{ s.created_at.slice(0, 16).replace("T", " ") }}</span>
                 <span class="shot-actions">
-                  <button class="ghost-btn" @click="revealShot(s.id)">{{ t("settings.shotReveal") }}</button>
-                  <button class="danger-btn" @click="deleteShot(s.id)">{{ t("settings.shotDelete") }}</button>
+                  <button class="ghost-btn" @click.stop="revealShot(s.id)">{{ t("settings.shotReveal") }}</button>
+                  <button class="danger-btn" @click.stop="deleteShot(s.id)">{{ t("settings.shotDelete") }}</button>
                 </span>
               </figcaption>
             </figure>
@@ -639,7 +653,7 @@
               min="1"
               max="3650"
               class="text-input narrow"
-              @change="persistBackupConfig"
+              @change="onBackupKeepDays"
             />
             <p class="field-hint" v-html="t('settings.backupKeepHint')" />
           </div>
@@ -1022,15 +1036,15 @@
 //     式初始化，若该 ref 也能被用户即时编辑，必须沿用同一保护。
 // 2026-10-22 @v1.2.5：液态玻璃（v1.2.2）之后无改动，仅体积优化涉及构建产物。
 
-import { ref, onMounted, onBeforeUnmount, computed, nextTick } from "vue";
+import { ref, onMounted, onBeforeUnmount, computed, nextTick, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import Modal from "../components/Modal.vue";
 import AppIcon from "../components/AppIcon.vue";
-import { tracker } from "../api/tracker";
+import { tracker, isTauri } from "../api/tracker";
 // v1.2.11：应用内自动升级（Windows / AppImage 启用；macOS / deb / rpm 由后端判为不支持）
 import * as appUpdate from "../api/appUpdate";
 import { screenshot, DEFAULT_SCREENSHOT_CONFIG } from "../api/screenshot";
@@ -1038,6 +1052,7 @@ import { i18n, setLocale, type Locale } from "../i18n";
 import type {
   BackupConfig,
   DeviceStats,
+  DiskVolume,
   SettingsOut,
   StatusBarConfig,
   UpdateInfo,
@@ -1104,6 +1119,7 @@ let disposed = false;
 // ③ 版本 + 通用设置 + 备份配置 + 状态栏配置
 // ④ 日志大小
 onMounted(async () => {
+  void petStore.init();
   // v1.2.11：先问后端本平台能否应用内升级，决定「发现新版本」时给「一键升级」还是「去下载」。
   // 故意**不**在失败时抛错：这只是决定 UI 形态，拿不到就当不支持（退回浏览器下载）。
   try {
@@ -1112,45 +1128,48 @@ onMounted(async () => {
     log.error("[Settings] 查询应用内升级支持情况失败", e);
     nativeUpdate.value = false;
   }
-  try {
-    const un = await listen("pet-skin-changed", () => {
-      skinRegistry.reloadActive();
-    });
-    if (disposed) un();
-    else unlistenSkin = un;
-  } catch (e) {
-    log.error("[Settings] 监听 pet-skin-changed 失败", e);
-  }
-  try {
-    const un = await listen("pet-enabled-changed", () => {
-      petStore.reload();
-    });
-    if (disposed) un();
-    else unlistenPetEnabled = un;
-  } catch (e) {
-    log.error("[Settings] 监听 pet-enabled-changed 失败", e);
-  }
-  // 托盘菜单勾选后后端 emit 此事件，设置页卡片即时反映（避免两处状态不一致）
-  // v1.2.7：仍要保留「用户刚改、尚在提交中」的差量 —— 托盘事件可能在用户点击
-  // 之后、IPC 返回之前到达，此时整体覆盖会把乐观更新的值冲掉（同上 lost update）。
-  try {
-    const un = await listen<StatusBarConfig>(
-      "status-bar-config-changed",
-      (e) => {
-        statusBarBaseline = e.payload;
-        statusBarConfig.value =
-          statusBarDirty.size > 0
-            ? { ...e.payload, ...statusBarDelta() }
-            : e.payload;
-      },
-    );
-    if (disposed) un();
-    else unlistenStatusBarCfg = un;
-  } catch (e) {
-    log.error("[Settings] 监听 status-bar-config-changed 失败", e);
+  if (isTauri) {
+    try {
+      const un = await listen("pet-skin-changed", () => {
+        skinRegistry.reloadActive();
+      });
+      if (disposed) un();
+      else unlistenSkin = un;
+    } catch (e) {
+      log.error("[Settings] 监听 pet-skin-changed 失败", e);
+    }
+    try {
+      const un = await listen("pet-enabled-changed", () => {
+        petStore.reload();
+      });
+      if (disposed) un();
+      else unlistenPetEnabled = un;
+    } catch (e) {
+      log.error("[Settings] 监听 pet-enabled-changed 失败", e);
+    }
+    // 托盘菜单勾选后后端 emit 此事件，设置页卡片即时反映（避免两处状态不一致）
+    // v1.2.7：仍要保留「用户刚改、尚在提交中」的差量 —— 托盘事件可能在用户点击
+    // 之后、IPC 返回之前到达，此时整体覆盖会把乐观更新的值冲掉（同上 lost update）。
+    try {
+      const un = await listen<StatusBarConfig>(
+        "status-bar-config-changed",
+        (e) => {
+          statusBarBaseline = e.payload;
+          statusBarConfig.value =
+            statusBarDirty.size > 0
+              ? { ...e.payload, ...statusBarDelta() }
+              : e.payload;
+        },
+      );
+      if (disposed) un();
+      else unlistenStatusBarCfg = un;
+    } catch (e) {
+      log.error("[Settings] 监听 status-bar-config-changed 失败", e);
+    }
   }
   void initScreenshot();
   void initSettings();
+  void loadDiskVolumes();
   void refreshLogSize();
   // v1.2.10：权限状态只查这一次（+ 卡片上的手动刷新），不轮询 —— 见 loadPermissions 说明
   void loadPermissions();
@@ -1255,6 +1274,20 @@ const autostart = ref(false);
 
 const fileInput = ref<HTMLInputElement>();
 
+const DISK_MODE_KEY = "screentime-disk-mode";
+const diskMode = ref(localStorage.getItem(DISK_MODE_KEY) || "system");
+const diskVolumes = ref<DiskVolume[]>([]);
+watch(diskMode, (value) => localStorage.setItem(DISK_MODE_KEY, value));
+
+async function loadDiskVolumes() {
+  try {
+    const m = await tracker.getSystemMetrics();
+    diskVolumes.value = m.disk_volumes ?? [];
+  } catch (err) {
+    log.warn("[Settings] 读取磁盘卷失败", err);
+  }
+}
+
 // ============ v0.7.2 本地自动备份（微信桌面版式）============
 const backupConfig = ref<BackupConfig>({
   enabled: false,
@@ -1298,8 +1331,8 @@ async function onToggleAutoBackup(e: Event) {
     await persistBackupConfig();
     if (backupBaseline) backupBaseline = { ...backupConfig.value };
     backupDirty.delete("enabled");
-  } catch {
-    // persistBackupConfig 内部已提示；dirty 保留，等下一次加载以用户意图为准
+  } catch (err) {
+    showAlert("warn", t("settings.saveFailed"), t("settings.saveFailedMsg", { err: err instanceof Error ? err.message : String(err) }));
   }
 }
 
@@ -1319,12 +1352,27 @@ async function chooseBackupFolder() {
 }
 
 async function persistBackupConfig() {
+  if (!backupBaseline) backupBaseline = await tracker.getBackupConfig();
+  const base = backupBaseline;
+  const payload = {
+    enabled: base.enabled,
+    path: base.path,
+    keepDays: base.keep_days,
+  };
+  for (const k of backupDirty) {
+    if (k === "enabled") payload.enabled = backupConfig.value.enabled;
+    if (k === "path") payload.path = backupConfig.value.path;
+    if (k === "keep_days") payload.keepDays = backupConfig.value.keep_days;
+  }
+  await tracker.saveBackupConfig(payload);
+}
+
+async function onBackupKeepDays() {
+  backupDirty.add("keep_days");
   try {
-    await tracker.saveBackupConfig({
-      enabled: backupConfig.value.enabled,
-      path: backupConfig.value.path,
-      keepDays: backupConfig.value.keep_days,
-    });
+    await persistBackupConfig();
+    if (backupBaseline) backupBaseline = { ...backupConfig.value };
+    backupDirty.delete("keep_days");
   } catch (err) {
     showAlert("warn", t("settings.saveFailed"), t("settings.saveFailedMsg", { err: err instanceof Error ? err.message : String(err) }));
   }
@@ -1550,6 +1598,7 @@ async function ensureStatusBarBaseline() {
     statusBarLoaded.value = true;
   } catch (err) {
     log.warn("[Settings] 提交前获取状态栏权威配置失败", err);
+    throw err;
   }
 }
 
@@ -1688,6 +1737,7 @@ async function ensureShotBaseline() {
     shotConfigBaseline = await screenshot.getConfig();
   } catch (err) {
     log.warn("[Settings] 提交前获取截图权威配置失败", err);
+    throw err;
   }
 }
 
@@ -1794,13 +1844,14 @@ async function onOcrEngine(kind: OcrEngineKind) {
  * 否则用户在加载窗口内拖滑块，会被晚到的 `getConfig()` 整体覆盖（+= 丢更新）。
  */
 async function persistShotConfig() {
-  for (const k of ["corner_radius", "max_count"] as const) {
-    if (shotConfigBaseline && shotConfig.value[k] !== shotConfigBaseline[k]) {
-      shotConfigDirty.add(k);
-    }
-  }
-  const snapshot = shotPayload();
   try {
+    await ensureShotBaseline();
+    for (const k of ["corner_radius", "max_count"] as const) {
+      if (shotConfigBaseline && shotConfig.value[k] !== shotConfigBaseline[k]) {
+        shotConfigDirty.add(k);
+      }
+    }
+    const snapshot = shotPayload();
     const res = await screenshot.setConfig(snapshot);
     shotConfigBaseline = snapshot;
     shotConfigDirty.clear();
@@ -2125,6 +2176,7 @@ async function deleteShot(id: number) {
   try {
     await screenshot.remove(id);
     shotHistory.value = shotHistory.value.filter((s) => s.id !== id);
+    selectedShotIds.value = selectedShotIds.value.filter((selectedId) => selectedId !== id);
     delete shotThumbs.value[id];
   } catch (err) {
     showAlert("warn", t("settings.shotTitle"), err instanceof Error ? err.message : String(err));
@@ -2310,6 +2362,18 @@ function collectSettingsDirty(prev: typeof settingsBaseline) {
   if (autostart.value !== base.autostart) settingsDirty.add("autostart");
 }
 
+async function ensureSettingsBaseline() {
+  if (settingsBaseline) return;
+  const s = await tracker.getSettings();
+  collectSettingsDirty(null);
+  settingsBaseline = s;
+  settings.value = s;
+  if (!settingsDirty.has("device_name")) deviceName.value = s.device_name;
+  if (!settingsDirty.has("idle_threshold")) idleMin.value = Math.max(1, Math.round(s.idle_threshold / 60));
+  if (!settingsDirty.has("data_retention_days")) retention.value = s.data_retention_days;
+  if (!settingsDirty.has("autostart")) autostart.value = s.autostart;
+}
+
 async function initSettings() {
   try {
     version.value = await getVersion();
@@ -2317,28 +2381,7 @@ async function initSettings() {
     /* 浏览器预览模式忽略 */
   }
   try {
-    const prev = settingsBaseline; // 必须在覆盖前取旧基线
-    const s = await tracker.getSettings();
-    collectSettingsDirty(prev); // 用旧基线判断用户是否在等待期间改过
-    settingsBaseline = s;
-    settings.value = s;
-    if (settingsDirty.size > 0) {
-      // 加载值打底，用户改过的字段保留用户值（方向不能反）
-      if (!settingsDirty.has("device_name")) deviceName.value = s.device_name;
-      if (!settingsDirty.has("idle_threshold")) {
-        idleMin.value = Math.max(1, Math.round(s.idle_threshold / 60));
-      }
-      if (!settingsDirty.has("data_retention_days")) retention.value = s.data_retention_days;
-      if (!settingsDirty.has("autostart")) autostart.value = s.autostart;
-      log.info(
-        `[Settings] 通用设置加载晚于用户操作，已保留改动字段：${[...settingsDirty].join(",")}`,
-      );
-    } else {
-      deviceName.value = s.device_name;
-      idleMin.value = Math.max(1, Math.round(s.idle_threshold / 60));
-      retention.value = s.data_retention_days;
-      autostart.value = s.autostart;
-    }
+    await ensureSettingsBaseline();
   } catch {
     /* 浏览器预览模式忽略 */
   }
@@ -2376,12 +2419,13 @@ async function onAutostart(e: Event) {
 }
 
 async function onSave() {
-  // 实际生效值：设备名为空时后端回落旧名（见 save_settings 语义），
-  // 保存成功后用真实生效值回写，避免「输入框空、实际用旧名」的不一致。
-  const effectiveName = deviceName.value.trim() || settings.value.device_name;
-  const effectiveIdle = idleMin.value * 60;
-  const effectiveRetention = retention.value;
   try {
+    await ensureSettingsBaseline();
+    // 实际生效值：设备名为空时后端回落旧名（见 save_settings 语义），
+    // 保存成功后用真实生效值回写，避免「输入框空、实际用旧名」的不一致。
+    const effectiveName = deviceName.value.trim() || settings.value.device_name;
+    const effectiveIdle = idleMin.value * 60;
+    const effectiveRetention = retention.value;
     await tracker.saveSettings({
       idleThreshold: effectiveIdle,
       deviceName: effectiveName,
@@ -2443,6 +2487,10 @@ function formatBytes(bytes: number): string {
 }
 
 async function refreshLogSize() {
+  if (!isTauri) {
+    logSize.value = 0;
+    return;
+  }
   try {
     const size = await invoke<number>("get_log_size");
     logSize.value = size;
@@ -2484,6 +2532,9 @@ async function onImport(e: Event) {
   try {
     const text = await file.text();
     const n = await tracker.importData(text);
+    await petStore.init();
+    await emit("pet-store-updated");
+    await emit("pet-enabled-changed");
     showAlert("info", t("settings.importSuccess"), t("settings.importedMsg", { n }));
   } catch (err) {
     log.error("导入失败", err);

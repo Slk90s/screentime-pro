@@ -1,5 +1,9 @@
 //! macOS 实现：reveal / open_url 走 `open`；权限三件套委托 `tracker::macos` 与
 //! `screenshot::macos`；WebView2 是 Windows 概念，这里给「可用 / 无需安装」兜底。
+//!
+//! 修改历史：
+//!   - 2026-09-24 @v0.9.7: 重构 - 收口 macOS 文件打开、TCC 权限与 WebView2 兼容实现。
+//!   - 2026-10-26 @v1.2.10: 修复 - 屏幕录制状态改用双信号快照，避免预检误报未授权。
 
 use super::{OsOpenBackend, PermissionBackend, Webview2Backend};
 

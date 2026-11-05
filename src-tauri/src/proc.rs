@@ -12,7 +12,7 @@
 //!   1. `commands::check_webview2()` → `read_webview2_version()`：`reg query` **最多 3 次**
 //!      （WOW6432Node ClientState / ClientState / Edge BLBeacon）
 //!   2. `lib.rs::windows_machine_guid()`：`reg query MachineGuid` **1 次**
-//! → 用户看到 3~4 个黑框接连闪现，观感极差（像在跑脚本）。
+//!      → 用户看到 3~4 个黑框接连闪现，观感极差（像在跑脚本）。
 //!
 //! ## 解法
 //! 创建进程时带 `CREATE_NO_WINDOW`（0x08000000）创建标志：子进程不分配控制台窗口，

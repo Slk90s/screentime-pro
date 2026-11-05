@@ -20,6 +20,9 @@
 //!   这些方法返回 `Option<Impl Iterator>`（format 不匹配时返回 None）
 //! - 所有请求函数（get_property / intern_atom / xss_query_info）返回 `Result<Cookie, E>`
 //!   需先解开 Result 再调用 cookie.reply()
+//!
+//! 修改历史：
+//!   - 2026-07-08 @v0.2.0: 新增 - 通过 X11 与 procfs 采集前台应用、窗口标题和空闲时长。
 
 use std::fs;
 use std::path::Path;

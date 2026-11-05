@@ -1,3 +1,7 @@
+/**
+ * 设计思路：在非 Tauri 环境提供模拟统计与配置数据，支撑界面和图表脱离 Rust 独立调试。
+ * 修改历史：2026-11-03 @v1.2.12: 新增 - 补充文件头设计说明与修改历史。
+ */
 // 浏览器预览模式下的模拟数据
 //
 // 当应用以普通网页方式打开（非 Tauri 运行时）时，前端 API 层会自动调用这里的
@@ -60,7 +64,6 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
     case "delete_rule":
     case "set_autostart":
     case "start_tracking":
-    case "stop_tracking":
       return true;
     case "reclassify_all":
       return 0;
@@ -168,8 +171,6 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
         busiest_seconds: Math.floor(9 * 3600),
       } as import("../types").MonthSummaryOut;
     }
-    case "is_tracking":
-      return false;
     case "get_current_foreground":
       return {
         name: "微信",
@@ -178,8 +179,44 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
         idle_seconds: 0,
         tracking: false,
         window_title: "文件传输助手",
+        bundle_id: null,
         session_seconds: 1830,
       };
+    case "check_permissions":
+      return { accessibility: true, screen_capture: true };
+    case "get_status_bar_config":
+      return {
+        enabled: true,
+        show_cpu: true,
+        show_mem: true,
+        show_disk: false,
+        show_net: true,
+        float_enabled: true,
+        screenshot_enabled: true,
+        float_glass: false,
+      };
+    case "get_system_metrics":
+      return {
+        supported: true,
+        enabled: true,
+        cpu_usage: 0.23,
+        memory_usage: 0.61,
+        memory_used_bytes: 10_000_000_000,
+        memory_total_bytes: 16_000_000_000,
+        disk_usage: 0.55,
+        disk_used_bytes: 110_000_000_000,
+        disk_total_bytes: 200_000_000_000,
+        disk_volumes: [
+          { mount: "C:", total_bytes: 200_000_000_000, used_bytes: 110_000_000_000, avail_bytes: 90_000_000_000, is_system: true },
+          { mount: "D:", total_bytes: 400_000_000_000, used_bytes: 100_000_000_000, avail_bytes: 300_000_000_000, is_system: false },
+        ],
+        net_rx_bps: 125_000,
+        net_tx_bps: 42_000,
+      };
+    case "get_system_metrics_enabled":
+      return true;
+    case "get_log_size":
+      return 1024 * 1024;
     // ⚠️ v1.1.1 删除 `case "get_idle_threshold"`：该 command 已由工作区他人改动移除，
     // 残留会让 mock 与真实命令列表漂移（生产不走 mock，运行时无害）。
     // ===== 周/月同比分析 =====

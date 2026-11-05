@@ -7,7 +7,7 @@
 //!   桌面图 + 标注画布」，而不是「透出实时桌面的透明窗」——这是能做标注（文字 / 马赛克 / 箭头 /
 //!   画笔）与圆角实时预览的前提。**旧版透明遮罩窗没有图像，标注根本无从下手**（画笔/OCR 只能是
 //!   灰掉的占位按钮），这是"想加文字只能关掉重截"的根因。
-//! - **合成在前端**：裁剪、标注、圆角、投影统一由遮罩窗的 canvas 画好后，以 PNG(dataURL) 交回
+//! - **合成在前端**：裁剪、标注、圆角统一由遮罩窗的 canvas 画好后，以 PNG(dataURL) 交回
 //!   本模块，本模块只负责「进剪贴板 / 落盘 / 入库 / FIFO 清理」。好处是所见即所得——屏幕上预览
 //!   到的就是导出的那张图，不存在「预览一套、Rust 再算一套」的偏差。
 //! - **剪贴板优先**：确认（✓ / Enter）的默认动作是「把 PNG 写入系统剪贴板」，落盘是可选项。
@@ -26,12 +26,12 @@
 //!     `screenshot_copy_text`）。裁剪用缓存帧在 Rust 侧做，前端只传**物理像素**矩形。
 //!   - 2026-09-17 @v0.9.0: 新增 - 取字「引擎调度」（`ocr_engine.rs`）：
 //!     ① `ScreenshotConfig` 增第 8 个键 `ocr_engine`（`system` / `enhanced`，脏值一律回 `system`）；
-//!        ⚠️ 归一化**只有一个口径** `normalized_engine()`，`load` / `save` /
-//!        `screenshot_set_config` 三处共用 —— 真机验证曾抓到：只归一化 DB 而把**原始入参**
-//!        放进内存缓存时，`screenshot_get_config`（读缓存）会把脏值漏回前端，
-//!        造成「接口报的值 ≠ 实际生效的值」。改动此处务必保持三处口径一致。
+//!     ⚠️ 归一化**只有一个口径** `normalized_engine()`，`load` / `save` /
+//!     `screenshot_set_config` 三处共用 —— 真机验证曾抓到：只归一化 DB 而把**原始入参**
+//!     放进内存缓存时，`screenshot_get_config`（读缓存）会把脏值漏回前端，
+//!     造成「接口报的值 ≠ 实际生效的值」。改动此处务必保持三处口径一致。
 //!     ② `screenshot_ocr` 改经 `ocr_engine::recognize()` 分发，返回体增 `engine` / `lines`
-//!        （同一结构承载两个引擎的输出，前端据 `engine` 显示真正生效的引擎）；
+//!     （同一结构承载两个引擎的输出，前端据 `engine` 显示真正生效的引擎）；
 //!     ③ 新增 IPC `ocr_engine_info`（截图上交 14 个、全项目 80→**81**）；
 //!     ④ 打开遮罩即后台预热增强引擎，把 ~2.5s 模型加载摊到用户框选的那几秒里。
 //!     ⚠️ 增强引擎资源（`ort/onnxruntime.dll` + `models/*.onnx`，共 ~33MB）由
@@ -50,13 +50,13 @@
 //!   - 2026-09-20 @v0.9.3: 重构 - macOS 授权逻辑整体迁出到 **`screenshot/macos.rs`**，
 //!     `begin_capture_inner` 只调 `macos::ensure_ready()`。三处实质改变：
 //!     ① **修掉「授权了还报没权限」**：此前只用 `CGPreflightScreenCaptureAccess()` 当唯一闸门，
-//!        而它有 Apple 已知行为 —— 一旦返回 false，**在同一进程内可能一直返回 false**
-//!        （真正的抓屏其实已经生效）。现新增独立第二信号「窗口标题探针」（窗口标题与窗口内容
-//!        同属一张 TCC 授权，读得到标题 = 抓得到内容），两信号**取或**放行，不再被过期预检卡死。
+//!     而它有 Apple 已知行为 —— 一旦返回 false，**在同一进程内可能一直返回 false**
+//!     （真正的抓屏其实已经生效）。现新增独立第二信号「窗口标题探针」（窗口标题与窗口内容
+//!     同属一张 TCC 授权，读得到标题 = 抓得到内容），两信号**取或**放行，不再被过期预检卡死。
 //!     ② 失败文案按**实际查到的证据**分档：运行路径 / App Translocation / 下载隔离标记
-//!        （com.apple.quarantine）/ 代码签名状态（ad-hoc 或未签名 = 授权反复失效的根因）。
+//!     （com.apple.quarantine）/ 代码签名状态（ad-hoc 或未签名 = 授权反复失效的根因）。
 //!     ③ 新增 IPC `reset_screen_capture_permission`（`tccutil reset ScreenCapture <bundle id>`，
-//!        只清本应用条目），配合界面「重置权限并重启」一键清掉指向旧指纹的脏授权记录。
+//!     只清本应用条目），配合界面「重置权限并重启」一键清掉指向旧指纹的脏授权记录。
 //!   - 2026-10-27 @v1.2.11: 修复 - `reset_permission` 支持指定 TCC 服务。
 //!     新增 `macos::reset_permission_for(pane)`：`"accessibility"` → `tccutil reset
 //!     Accessibility`，其余 → `ScreenCapture`。原实现把服务名硬编码，导致权限中心
@@ -66,11 +66,11 @@
 //!     保留为别名（全项目 IPC **84 → 85**）。
 //!   - 2026-09-20 @v0.9.4: 改造 - 授权 UX 重做（用户反馈弹窗「太多太丑」）：
 //!     ① `ensure_ready` 失败文案精简为一句话 + 结构化原因码（`__PERM__:<reason>`），
-//!        完整证据只进日志；② 新增权限 IPC 四件套 `screenshot_permission_status` /
-//!        `screenshot_request_permission` / `screenshot_open_permission_settings` /
-//!        `screenshot_restart_app`（全项目 IPC 84→**88**），前端紧凑弹窗轮询 status、
-//!        发现翻转后引导重启；③ `begin_capture_inner` 识别原因码，权限类失败**不再发**
-//!        `screenshot-error`（改由前端主动轮询引导），非权限失败照旧。
+//!     完整证据只进日志；② 新增权限 IPC 四件套 `screenshot_permission_status` /
+//!     `screenshot_request_permission` / `screenshot_open_permission_settings` /
+//!     `screenshot_restart_app`（全项目 IPC 84→**88**），前端紧凑弹窗轮询 status、
+//!     发现翻转后引导重启；③ `begin_capture_inner` 识别原因码，权限类失败**不再发**
+//!     `screenshot-error`（改由前端主动轮询引导），非权限失败照旧。
 //!   - 2026-10-17 @v1.1.1: 废弃 - **移除滑动截长图**（`long.rs` 全文 + 4 个 IPC +
 //!     前端面板），截图 IPC 26→**22**。
 //!     **全项目 IPC 95 → 84**（净减 11 = 长图 4 + `commands.rs` 清理 7；
@@ -151,7 +151,7 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager};
 
 /// 遮罩窗固定 label（同时声明在 tauri.conf.json 的 windows[]，保证权限与幂等复用）
 pub const CAPTURE_WINDOW_LABEL: &str = "capture";
@@ -427,28 +427,8 @@ pub fn restore_self(app: &AppHandle, state: &ScreenshotState) {
 // ===== 遮罩窗 =====
 
 fn ensure_capture_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
-    if let Some(w) = app.get_webview_window(CAPTURE_WINDOW_LABEL) {
-        return Ok(w);
-    }
-    WebviewWindowBuilder::new(
-        app,
-        CAPTURE_WINDOW_LABEL,
-        WebviewUrl::App("index.html".into()),
-    )
-    .title("ScreenTime Capture")
-    .decorations(false)
-    .transparent(true)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .shadow(false)
-    .resizable(false)
-    .maximizable(false)
-    .minimizable(false)
-    .closable(false)
-    .focused(true)
-    .visible(false)
-    .build()
-    .map_err(|e| format!("创建截图遮罩窗失败: {e}"))
+    app.get_webview_window(CAPTURE_WINDOW_LABEL)
+        .ok_or_else(|| "capture 窗口未由 tauri.conf.json 预创建".to_string())
 }
 
 fn hide_capture_window(app: &AppHandle) {
@@ -619,8 +599,8 @@ static CANCEL_COUNTDOWN: std::sync::atomic::AtomicBool = std::sync::atomic::Atom
 /// 「倒计时正在进行」标记（审计新增）。区分重入该取消还是该忽略：
 /// - true  → 倒计时中，重入触发 = 取消（快捷键全局可达，见函数头）；
 /// - false → 抓屏/框选进行中或无会话，重入维持旧行为（忽略）。
-/// 与 CANCEL_COUNTDOWN 分开：取消标志每轮倒计时先清零，若复用它判断会
-/// 把「上一轮已取消」误判为「本轮倒计时中」。
+///   与 CANCEL_COUNTDOWN 分开：取消标志每轮倒计时先清零，若复用它判断会
+///   把「上一轮已取消」误判为「本轮倒计时中」。
 static COUNTDOWN_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// 取消进行中的延时截图倒计时（v0.10.0）。没有倒计时时是 no-op。
@@ -842,7 +822,7 @@ async fn begin_capture_inner(app: &AppHandle) -> Result<(), String> {
     //
     // 🔴 真机 bug（macOS 2026-10-28）：**第一次截图只有半个屏幕，第二次才正常**。
     // 根因不是抓屏（日志证明两次都是 2560×1440、完全正确），而是事件丢了：
-    //   遮罩窗是 `visible(false)` **懒创建**的（`ensure_capture_window`），
+    //   遮罩窗由 conf 以 `visible(false)` 预创建，
     //   首次截图时 WebView 要从头加载整个 SPA。`emit_to` 是**即发即弃**的，
     //   前端此时监听器还没注册（`onMounted` 里的 `await listen(...)` 尚未完成），
     //   事件被直接丢弃 → `meta` 一直是 null、`imgUrl` 为空 →
@@ -957,8 +937,8 @@ pub struct CaptureReadyPayload {
 ///     恰好反证了 width 是点）
 ///   - Linux：`X11Monitor` 的 mm→点后**再除以 scale_factor** = **逻辑像素**
 ///     （`linux/impl_monitor.rs:301`）
-/// 旧代码把 `m.width()` 与物理像素的 `img` 塞进同一个元组，在 macOS 上构成
-/// 混口径几何（遮罩窗按点数布局、冻结帧是物理像素）→ 窗口与冻结帧对不上。
+///     旧代码把 `m.width()` 与物理像素的 `img` 塞进同一个元组，在 macOS 上构成
+///     混口径几何（遮罩窗按点数布局、冻结帧是物理像素）→ 窗口与冻结帧对不上。
 ///
 /// 注意事项：`img` 是 `m.capture_image()` 的返回，就是**这块显示器**的完整抓屏，
 /// 尺寸与该屏天然自洽 —— 用它做宽高，三平台都正确且无需任何换算。
@@ -1058,7 +1038,7 @@ pub struct ScreenshotResult {
 
 /// 确认截图：解码前端合成好的 PNG → 复制剪贴板 / 落盘归档 → 收遮罩 → 恢复自家窗
 ///
-/// 入参是遮罩窗 canvas 合成后的**最终图**（已含裁剪、标注、圆角、投影），
+/// 入参是遮罩窗 canvas 合成后的**最终图**（已含裁剪、标注、圆角），
 /// 本模块不再做任何像素加工——保证「屏幕上预览到的」与「导出的」逐像素一致。
 #[tauri::command]
 pub async fn screenshot_commit(
@@ -1526,13 +1506,6 @@ pub async fn screenshot_request_permission() -> Result<ScreenshotPermissionStatu
 #[tauri::command]
 pub fn screenshot_open_permission_settings() {
     crate::screenshot::platform::Backend::open_settings();
-}
-
-/// ④ 重启应用（TCC 新授权只对新进程生效 —— 轮询发现授权翻转后引导用户点这个）
-#[tauri::command]
-pub fn screenshot_restart_app(app: AppHandle) {
-    tracing::info!("用户从截图授权弹窗触发应用重启（TCC 新授权需要新进程才生效）");
-    app.restart();
 }
 
 /// 把取字结果写进系统剪贴板（复用截图同一条 arboard 路径，不额外引剪贴板插件）

@@ -9,6 +9,9 @@
 //! - `OsOpenBackend`：在系统壳里打开文件 / URL（reveal 与 open_url，命令路径不同）
 //! - `PermissionBackend`：macOS TCC 权限查询 / 打开隐私面板 / 重置屏幕录制授权
 //! - `Webview2Backend`：WebView2 运行时检测（仅 Windows 有意义）
+//!
+//! 修改历史：
+//!   - 2026-09-24 @v0.9.7: 重构 - 以 trait 统一命令层文件打开、权限与 WebView2 平台分支。
 
 use tauri::AppHandle;
 

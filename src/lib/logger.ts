@@ -14,6 +14,7 @@
  * - 不依赖 Vue 插件，全局可用
  * - 自动捕获未处理的 Promise rejection / window error → ERROR
  * - 失败时静默降级到 console.*（日志系统初始化失败不能影响 UI）
+ * 修改历史：2026-11-03 @v1.2.12: 新增 - 补充文件头修改历史。
  */
 
 import {

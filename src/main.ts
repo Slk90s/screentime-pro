@@ -1,4 +1,4 @@
-// 前端入口：创建 Vue 应用并挂载到 #app
+/** main.ts — Vue 入口：挂载 #app、初始化日志/图标/i18n。修改历史：2026-11-03 @v1.2.12: 新增 - 合规头注。 */
 import { createApp } from "vue";
 import App from "./App.vue";
 import AppIcon from "@/components/AppIcon.vue";

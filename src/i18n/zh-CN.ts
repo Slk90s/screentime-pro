@@ -1,3 +1,7 @@
+/**
+ * 设计思路：以语义化英文键组织中文词条，作为默认语言及缺失翻译的回退词表。
+ * 修改历史：2026-11-03 @v1.2.12: 新增 - 补充文件头设计说明与修改历史。
+ */
 // 中文词条（默认 / fallback）
 // key 为语义化英文，便于跨语言维护；值即界面展示文案。
 export default {
@@ -276,6 +280,10 @@ export default {
     statusBarShowMem: "显示内存占用",
     // v0.7.7（2026-09-10）：磁盘占用（取系统盘）
     statusBarShowDisk: "显示磁盘占用",
+    diskScope: "磁盘统计范围",
+    diskScopeSystem: "仅系统盘",
+    diskScopeAll: "全部本地磁盘汇总",
+    diskScopeHint: "选择悬浮条显示系统盘、全部盘汇总或指定挂载点；选盘不可用时回退系统盘。",
     statusBarShowNet: "显示网速",
     statusBarOn: "已开启",
     statusBarOff: "已关闭",

@@ -5,9 +5,10 @@
   设计思路：
   - 组件在 Dashboard 中**无条件渲染**（仅内部浮层用 v-if="visible" 控制显隐），
     setup/onMounted 只跑一次——依赖 onMounted 拉数据的功能在「重开日历」时不会刷新。
-  - 数据刷新锚点：visible watch（打开即拉 + 开启 60s 静默定时器，关闭即清）+ 切月 watch。
+  - 数据刷新锚点：visible watch（打开即拉 + 开启 60s 静默定时器，关闭及卸载即清）+ 切月 watch。
 
   修改历史：
+  - 2026-11-02 @v1.2.12: 修复 - onBeforeUnmount 停止月度概况定时器。
   - 2026-10-12 @v1.1.0: 修复 - 活跃天数/月概况不刷新（常驻实例只拉一次）；visible watch + 60s 定时器
   - 2026-09-14 @v0.7.0: 初始 - 日历选择器 + 本月概况卡片
 -->
@@ -102,7 +103,7 @@
  *           ② 打开日历或外部切到某日期时，视图自动跳到对应月份；点「今天」视图同步跳到今天所在月。
  */
 
-import { ref, computed, watch, onMounted } from "vue";
+import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
 import { useI18n } from "vue-i18n";
 import { i18n } from "../i18n";
 import { tracker } from "../api/tracker";
@@ -346,6 +347,7 @@ onMounted(() => {
   syncViewToValue();
   void loadMonthSummary();
 });
+onBeforeUnmount(stopSummaryRefresh);
 </script>
 
 <style scoped>

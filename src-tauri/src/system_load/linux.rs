@@ -2,6 +2,9 @@
 //!
 //! 从 /proc/stat 第一行（cpu aggregate）取 user/nice/system/idle/iowait/irq/softirq/steal ticks，
 //! 差分即得使用率。
+//!
+//! 修改历史：
+//!   - 2026-07-28 @v0.6.2-beta.25: 新增 - 基于 /proc/stat 差分计算 Linux CPU 使用率。
 
 #![cfg(target_os = "linux")]
 

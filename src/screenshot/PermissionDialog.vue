@@ -17,12 +17,12 @@
   - **技术详情折叠**：默认收起，点开才显示（给愿意深究的用户，不糊普通用户的脸）；
   - **不自动消失**：授权是用户要主动完成的动作，弹窗保持到用户处理或手动关闭。
 
-  ## 事件来源（两条链路都会打开本弹窗）
-  1. Rust `screenshot-permission-blocked` 事件（截图被闸门拦下，带原因码）；
-  2. Rust `screenshot-permission-changed` 事件（启动预请求后仍未授权）。
-  两条链路都由 App.vue 监听并控制本组件的 v-if。
+  ## 事件来源
+  仅 Rust `screenshot-permission-blocked`（截图被闸门拦下）会打开本弹窗；
+  启动预请求与 `screenshot-permission-changed` 监听均已移除。
 
   修改历史：
+    2026-11-02 @v1.2.12: 修复 - 已授权后的重启不再撤销权限。
     2026-09-20 @v0.9.4: 初始创建。
 -->
 <script setup lang="ts">
@@ -75,14 +75,15 @@ async function openSettings() {
   }
 }
 
-// 重置授权 + 重启（与 v0.9.3 语义一致：先 tccutil 再重启，两步缺一不可）
-async function resetAndRestart() {
+async function resetAndRestart(resetPermission: boolean) {
   if (resetting.value) return;
   resetting.value = true;
-  try {
-    await tracker.resetScreenCapturePermission();
-  } catch {
-    /* tccutil 失败（个别系统需 sudo）不阻断重启 */
+  if (resetPermission) {
+    try {
+      await tracker.resetScreenCapturePermission();
+    } catch {
+      /* tccutil 失败（个别系统需 sudo）不阻断重启 */
+    }
   }
   try {
     await tracker.restartApp();
@@ -152,7 +153,7 @@ onBeforeUnmount(stopPoll);
           <button class="perm-btn perm-btn--primary" @click="openSettings">
             {{ t("settings.shotPermOpen") }}
           </button>
-          <button class="perm-btn" :disabled="resetting" @click="resetAndRestart">
+          <button class="perm-btn" :disabled="resetting" @click="resetAndRestart(true)">
             {{ t("settings.shotPermFix") }}
           </button>
         </template>
@@ -161,7 +162,7 @@ onBeforeUnmount(stopPoll);
             <AppIcon name="checkCircle" :size="14" />
             {{ t("settings.shotPermGranted") }}
           </div>
-          <button class="perm-btn perm-btn--primary" @click="resetAndRestart" :disabled="resetting">
+          <button class="perm-btn perm-btn--primary" @click="resetAndRestart(false)" :disabled="resetting">
             {{ t("settings.shotPermRestart") }}
           </button>
         </template>

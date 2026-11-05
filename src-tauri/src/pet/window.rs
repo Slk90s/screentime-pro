@@ -3,10 +3,8 @@
 //! 桌宠窗口的创建、显示、隐藏、移动、鼠标穿透控制。
 //!
 //! 设计思路：
-//! - 窗口在 Tauri Builder.setup() 中**按需创建**（用户首次开启桌宠时），而非启动即创建，避免无桌宠用户多占一个 webview 进程的内存。
-//! - 位置/可见性状态持久化由前端 localStorage 管理（PetStore），Rust 端只管"做动作"，不维护状态。
-//! - 鼠标穿透用 `set_ignore_cursor_events(bool)`：true=鼠标穿透到下层、false=当前窗口接收事件。
-//!   默认 false（桌宠需接收点击/拖拽），后续 Phase 4 可按身体 alpha 通道做精确命中。
+//! - `tauri.conf.json` 预创建隐藏 pet 窗，创建命令幂等复用；显隐与位置由前端持久化状态驱动。
+//! - 鼠标穿透由 `pet/hit_mask.rs` 按身体 alpha 网格动态管理，本文件只保留手动开关与创建默认值。
 //!
 //! 修改历史：
 //!   - 2026-07-17 @v0.6.0-beta.1: 初始创建 - 创建/显示/隐藏/移动/鼠标穿透 5 个命令
@@ -19,7 +17,7 @@
 //!     不让逐帧拖拽调用被中途纠偏，只有「恢复位置」这类调用显式传 true。
 //!
 
-use tauri::{AppHandle, Emitter, LogicalPosition, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, LogicalPosition, Manager};
 
 /// 桌宠窗口的固定 label（与 tauri.conf.json 的 windows[].label 一致）
 pub const PET_WINDOW_LABEL: &str = "pet";
@@ -31,40 +29,12 @@ pub const PET_WINDOW_LABEL: &str = "pet";
 /// 取 64 折中；真要对齐得把窗口 scale factor 传进换算，收益不值这笔复杂度。
 const PET_OFFSCREEN_MARGIN: i32 = 64;
 
-/// 创建 pet 窗口（若已存在则忽略并返回 Ok，幂等）
-///
-/// 由前端开启桌宠时调用。第一次创建后窗体常驻，仅切换可见性。
+/// 幂等复用 `tauri.conf.json` 预创建的 pet 窗口；不存在时明确报错。
 #[tauri::command]
 pub async fn create_pet_window(app: AppHandle) -> Result<(), String> {
-    if app.get_webview_window(PET_WINDOW_LABEL).is_some() {
-        // 已存在则直接复用，避免重复创建 webview 进程
-        return Ok(());
-    }
-
-    // 初次创建时窗口位置用屏幕中央偏右下（QQ 企鹅常见位置），后续由前端持久化坐标控制
-    // 用 index.html 共用主前端 dist，App.vue 通过 webview label 判断当前是主窗口还是 pet 窗口
-    let window =
-        WebviewWindowBuilder::new(&app, PET_WINDOW_LABEL, WebviewUrl::App("index.html".into()))
-            .title("ScreenTime Pet")
-            .inner_size(140.0, 140.0)
-            .min_inner_size(140.0, 140.0)
-            // v0.6.2：移除 max_inner_size 死锁，允许前端按皮肤 preferredSize 用 setSize 动态放大窗口
-            // （resizable=false 仍禁止用户手动缩放，只有代码能 setSize；权限见 capabilities/pet.json 的 core:window:allow-set-size）
-            .resizable(false)
-            .decorations(false)
-            .transparent(true)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .shadow(false)
-            .focused(false)
-            .visible(false) // 默认隐藏，等前端 show_pet_window 才显示
-            .build()
-            .map_err(|e| format!("创建 pet 窗口失败: {e}"))?;
-
-    // 初始鼠标穿透关闭：桌宠需接收拖拽/右键/点击事件（默认可交互）
-    let _ = window.set_ignore_cursor_events(false);
-    tracing::info!("pet 窗口创建成功");
-    Ok(())
+    app.get_webview_window(PET_WINDOW_LABEL)
+        .map(|_| ())
+        .ok_or_else(|| "pet 窗口未由 tauri.conf.json 预创建".to_string())
 }
 
 /// 显示桌宠窗口（不改变位置）

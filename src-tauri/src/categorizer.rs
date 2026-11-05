@@ -261,7 +261,7 @@ pub struct CategoryCache {
 /// 负缓存有效期。取 10 分钟的理由：
 /// - 太短（如 1 分钟）→ 断网期间仍会频繁发起 8s 超时请求；
 /// - 太长（如 1 小时）→ 网络恢复后分类长时间停在 other，用户感知为「分类坏了」。
-/// 采样粒度是 2s，10 分钟内最多重试 1 次，代价可忽略。
+///   采样粒度是 2s，10 分钟内最多重试 1 次，代价可忽略。
 const NEGATIVE_TTL: Duration = Duration::from_secs(600);
 
 impl CategoryCache {

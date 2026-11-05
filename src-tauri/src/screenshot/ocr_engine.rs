@@ -44,6 +44,7 @@
 //!     ③SHA256 校验加状态码与摘要格式判断（.sha256 缺失/404 不再误判为损坏）；
 //!     ④`recognize_enhanced` 移除同步下载（改由后台预热下载），并修正其重解析
 //!     `EnginePaths::resolve(None)` 会丢 macOS `Contents/Resources/models` 的问题。
+//!   - 2026-10-29 @v1.2.11: 修复 - 增加运行库完整性探测与下载校验，避免残缺库进入识别流程。
 //!
 
 use super::{ocr, ocr_onnx};

@@ -1,21 +1,10 @@
 <!--
   PetContextMenu.vue
-  桌宠右键菜单（v0.6.0-beta.1 UI 重写版）。
-  
-  关键变更（UI优化版）：
-  - 通过 Teleport 渲染到 body，不再受 pet 窗口 overflow:hidden 裁剪
-  - 接收屏幕绝对坐标（outerPosition + clientX*scaleFactor）
-  - 圆角毛玻璃卡片风格，机械师橙主题
-  - 15 状态分 3 组：常用 / 情绪 / 特殊动作
-  - 当前状态高亮 + ✓ 标识
-  - 喂食 + 操作 分区
-
-  功能：
-  1. 手动切换 15 状态（覆盖自动监听）
-  2. 喂食（竹叶/苹果/糖果，3 种食物）
-  3. 重置位置 / 关闭桌宠
+  独立 pet-menu 窗口的菜单内容：16 个状态、皮肤、喂食、重置与关闭。
+  窗口模式拖动以按下时的 basePos 为基准，松手后一次性合并最终位移。
 
   修改历史：
+    - 2026-11-02 @v1.2.12: 修复 - 菜单拖动不再逐帧重复累计位移。
     - 2026-07-17 @v0.6.0-beta.1: 初始创建 - 右键菜单 + 喂食入口
     - 2026-07-17 @v0.6.0-beta.1: UI重写 - Teleport适配+分组美化+橙色主题+屏幕坐标
     - 2026-07-24 @v0.6.2: 解耦 - 加皮肤切换段（持久化由 skinRegistry 负责）
@@ -222,7 +211,7 @@ const feedToast = ref(0);
 // ---- 状态分组 ----
 const coreStates: PetState[] = ['idle', 'working', 'developing', 'designing', 'gaming'];
 const emotionStates: PetState[] = ['happy', 'sad', 'angry', 'surprised', 'slacking'];
-const specialStates: PetState[] = ['chatting', 'meeting', 'listening', 'eating', 'sleeping'];
+const specialStates: PetState[] = ['chatting', 'meeting', 'listening', 'shopping', 'eating', 'sleeping'];
 
 function isActive(s: PetState): boolean {
   return store.override === s || (store.override === null && store.state === s);
@@ -413,8 +402,7 @@ function onPointerMove(e: PointerEvent): void {
     // 不再叠加 translate3d（窗口移动已带动菜单，叠加会导致双倍位移/抖动）。
     const nextX = basePos.value.x + dx;
     const nextY = basePos.value.y + dy;
-    basePos.value = { x: nextX, y: nextY };
-    dragDelta.value = { x: 0, y: 0 };
+    dragDelta.value = { x: dx, y: dy };
     invoke('move_pet_menu_window', { x: nextX, y: nextY }).catch(() => {});
   } else {
     // 嵌入模式：改 transform: translate3d

@@ -1,21 +1,10 @@
 <!--
   PetWindow.vue
-  桌宠窗口根容器（v0.6.0-beta.1 UI优化版）：
-  - 透明背景 + 置顶（JS 覆盖全局 style.css body 背景）
-  - PointerEvents rAF 拖拽（丝滑）
-  - 鼠标穿透默认关闭（桌宠可交互）
-  - 右键菜单 → Teleport 到 body 避免被 overflow:hidden 裁剪
-  - 点击交互（单击/双击/长按 → 临时状态）
-  - 前台应用轮询 → 自动状态（useForegroundWatcher）
-
-  设计思路：
-  - 容器 background transparent，JS 强制覆盖 html/body/#app 背景
-  - 整个 140×140 区域响应 pointerdown（拖拽 + 点击交互）
-  - overflow:hidden 防止内容溢出出滚动条
-  - 右键菜单必须 Teleport 到 body（否则被 hidden 裁剪看不到）
-  - 桌宠默认接收鼠标事件（passthrough:false）
+  桌宠窗口根容器：透明置顶、动态皮肤尺寸、Rust 全局光标拖拽。
+  设计：独立 pet-menu 窗口承载右键菜单；alpha 命中控制穿透；点击与前台应用驱动状态。
 
   修改历史：
+    - 2026-11-02 @v1.2.12: 修复 - pet-anim-web 显式映射为 spidey-action-web，避免角色被隐藏。
     - 2026-07-17 @v0.6.0-beta.1: 完整版 - 拖拽 + 菜单 + 交互 + 自动联动
     - 2026-07-17 @v0.6.0-beta.1: 修复 - 穿透死锁、working状态、HiDPI坐标
     - 2026-07-17 @v0.6.0-beta.1: UI优化 - 全局body背景/滚动条/Toggle/rAF拖拽
@@ -53,11 +42,14 @@
     <div v-if="petStore.isHeating" class="pet-overheat-badge" aria-hidden="true">
       <AppIcon name="flame" :size="16" />
     </div>
-    <!-- v0.6.2：渲染协议改用 PetSkinRenderer 路由，按 skinRegistry.active() 动态挂载皮肤；
-         桌宠现仅 Pop Mart 3D 皮肤（v0.6.2-beta.5 移除 panda-2d）；渲染器按 skinRegistry.active() 动态挂载 -->
-    <!-- v0.7.2：拖拽期间不再挂 is-walking walk-cycle。透明置顶窗下每帧 transform 动画会强迫 DWM 整窗重合成，
-         与 OS 原生拖拽叠加后呈现「抖动/卡顿」观感；原生拖拽本身已平滑移动整窗，无需额外行走动画。 -->
-    <PetSkinRenderer :state="effectiveState" :is-dragging="isDragging" :class="[animClass, { 'is-heating': petStore.isHeating, 'is-fed': justFed }]" />
+    <!-- PetSkinRenderer 按 skinRegistry.active() 挂载当前内置或第三方皮肤。 -->
+    <!-- 拖拽期间保持窗口内容静态，避免 transform 动画触发 DWM 整窗重合成抖动。 -->
+    <PetSkinRenderer
+      :state="effectiveState"
+      :is-dragging="isDragging"
+      :preview-action="animClass === 'pet-anim-web' ? 'spidey-action-web' : ''"
+      :class="[animClass, { 'is-heating': petStore.isHeating, 'is-fed': justFed }]"
+    />
   </div>
 
   <!-- v0.6.2-beta.17：菜单不再在本 webview 渲染，改在独立 pet-menu Tauri 窗口
@@ -78,10 +70,9 @@ import { useForegroundWatcher } from './composables/useForegroundWatcher';
 import { usePetInteractions } from './composables/usePetInteractions';
 import PetSkinRenderer from './components/PetSkinRenderer.vue';
 import PetBubble from './components/PetBubble.vue';
-import { usePetSprites } from './composables/usePetSprites';
 import { usePetBadges } from './composables/usePetBadges';
 import { useSystemOverloadWatcher } from './composables/useSystemOverloadWatcher';
-import { pickBubble, nextGapMs, reloadBubbleConfig } from './composables/usePetBubble';
+import { pickBubble, nextGapMs } from './composables/usePetBubble';
 // v0.6.2：副作用导入，触发两个内置皮肤注册到 skinRegistry
 import './skins';
 // v0.6.2：皮肤自描述窗口尺寸（2D 140×140；Pop Mart 等竖图皮肤更高窗）
@@ -253,14 +244,12 @@ async function onContextMenu(_e: MouseEvent): Promise<void> {
     const win = getCurrentWindow();
     const petOuter = await win.outerPosition();
     const sf = await win.scaleFactor();
-    const MENU_W = 300;
     // 注意：这里直接走逻辑像素入参（move_pet_menu_window 内部 LogicalPosition）
     const x = petOuter.x / sf + 8;
     const y = petOuter.y / sf - 8; // 菜单在 pet 上方一点点
     await invoke('move_pet_menu_window', { x, y });
     // 3) 显示菜单窗口（Rust 端 emit_to 'pet-menu' 'pet-menu-shown' 触发 PetMenuWindow 渲染）
     //    上方 await 串行避免竞态（先定位再 show，否则菜单可能瞬间出现在默认位置）
-    void MENU_W; // 防止 unused
     await invoke('show_pet_menu_window');
   } catch (e) {
     log.warn('[pet] 打开菜单失败', e);
@@ -270,7 +259,6 @@ async function onContextMenu(_e: MouseEvent): Promise<void> {
 // 点击外部关闭菜单（v0.6.2-beta.17 移除）：菜单由独立 pet-menu 窗口托管，
 // 该窗口自身的「外部点击」关闭逻辑见 PetMenuWindow.vue
 
-const { reloadConfig } = usePetSprites();
 const { reloadConfig: reloadBadges } = usePetBadges();
 let unlistenShown: (() => void) | null = null;
 let unlistenCustom: (() => void) | null = null;
@@ -320,10 +308,9 @@ async function restorePetOnStartup(): Promise<void> {
 }
 
 onMounted(async () => {
+  await petStore.init();
   try {
     unlistenShown = await listen('pet-shown', () => {
-      // pet 重新显示时重读 localStorage，反映编辑器保存的自定义素材/组合
-      reloadConfig();
       // v0.8.0：显示时恢复气泡调度（与下方 pet-hidden 对称）
       resumeBubble();
     });
@@ -333,9 +320,7 @@ onMounted(async () => {
     });
     // 编辑器保存/重置/导入自定义后即时同步到实时桌宠（无需重开关窗口）
     unlistenCustom = await listen('pet-custom-updated', () => {
-      reloadConfig(); // 2D 自定义素材（遗留，无害）
-      reloadBadges(); // 3D 表情 emoji
-      reloadBubbleConfig(); // 自定义气泡短语
+      reloadBadges();
     });
     // v0.6.2-beta.3：Settings 切皮后通过 Tauri 全局广播通知所有窗口，桌宠收到后
     // 把本地 skinRegistry 副本对齐到持久化值（多窗口 JS 上下文隔离，模块级 reactive 不共享）
@@ -363,7 +348,6 @@ onMounted(async () => {
     unlistenFsExit = await listen('pet-fullscreen-exit', () => {
       void onFullscreenExit();
     });
-    reloadConfig(); // 初次创建窗口时也读一次（保险）
   } catch (e) {
     log.error('[pet] 监听 pet 事件失败', e);
   }

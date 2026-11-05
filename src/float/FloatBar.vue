@@ -8,11 +8,12 @@
     只动本 webview 文档，绝不用全局 CSS，避免污染主窗口——见 beta.17 回归根因）
   - 数据：1Hz invoke get_status_bar_config + get_system_metrics（与托盘采样独立，
     多一组轻量 IPC，代价可忽略）；show_cpu / show_mem / show_disk / show_net 与托盘共用配置
-  - 拖拽：整条都是拖拽区，指针按下即 startDragging()（OS 接管零延迟）；结束后读
+  - 拖拽：整条都是拖拽区，OS 原生移动；等系统左键释放后读
     outerPosition/scaleFactor 换算逻辑坐标写 localStorage（float_pos），下次挂载恢复
   - 显隐由 Rust 侧管理（托盘菜单/设置页开关 + 全屏自动隐藏），本组件只负责渲染与位置
 
   修改历史：
+  - 2026-11-02 @v1.2.12: 修复 - 原生拖拽等待系统左键释放后再持久化，不再把 startDragging 返回当松手。
   - 2026-09-10 @v0.7.6: 初始创建
   - 2026-09-10 @v0.7.7: ① 修 bug——cpu_usage / memory_usage 后端返回的是 0~1 分数，
       旧代码 Math.round(x) 直接当百分比，导致 77% 显示成 1%（漏乘 100）；
@@ -182,7 +183,7 @@
         <i>MEM</i><b>{{ pct(metrics?.memory_usage) }}</b>
       </span>
       <span v-if="cfg.show_disk" class="f-item">
-        <i>DSK</i><b>{{ pct(metrics?.disk_usage) }}</b>
+        <i>DSK</i><b>{{ pct(diskPct) }}</b>
       </span>
       <template v-if="cfg.show_net">
         <span v-if="hasAnyBefore" class="f-sep"></span>
@@ -266,6 +267,7 @@ const cfg = ref<StatusBarConfig>({
   float_glass: false,
 });
 const metrics = ref<MetricsOut | null>(null);
+const diskMode = ref(localStorage.getItem("screentime-disk-mode") || "system");
 let timer: number | null = null;
 /** 上次已应用的内容宽度，避免每秒无谓 IPC */
 let appliedW = 0;
@@ -315,6 +317,23 @@ function pct(v: number | undefined): string {
   const n = Math.round((v ?? 0) * 100);
   return `${Math.max(0, Math.min(100, n))}%`;
 }
+
+const diskPct = computed(() => {
+  const m = metrics.value;
+  if (!m) return 0;
+  const mode = diskMode.value;
+  const volumes = m.disk_volumes ?? [];
+  if (mode === "all") {
+    const total = volumes.reduce((sum, v) => sum + v.total_bytes, 0);
+    const used = volumes.reduce((sum, v) => sum + v.used_bytes, 0);
+    return total > 0 ? used / total : m.disk_usage;
+  }
+  if (mode !== "system") {
+    const selected = volumes.find((v) => v.mount === mode);
+    if (selected && selected.total_bytes > 0) return selected.used_bytes / selected.total_bytes;
+  }
+  return m.disk_usage;
+});
 
 /**
  * 状态灯档位（v1.2.0 引入，v1.2.2 重新定标）：负载「空闲 → 过载」5 档 + 未知兜底。
@@ -433,26 +452,44 @@ async function onShot(): Promise<void> {
  * 前者是 border-box 宽度（内层用 max-content，即内容固有宽度），
  * 后者在「被父级挤压」时给出内容实际需要宽度——两者取大最稳，不会漏算。
  */
+let fitInFlight: Promise<void> | null = null;
+let fitQueued = false;
+
 async function fitWidth(): Promise<void> {
+  if (dragging) return;
+  if (fitInFlight) {
+    fitQueued = true;
+    return fitInFlight;
+  }
+  fitInFlight = runFitWidth();
+  try {
+    await fitInFlight;
+  } finally {
+    fitInFlight = null;
+    if (fitQueued) {
+      fitQueued = false;
+      void fitWidth();
+    }
+  }
+}
+
+function persistPosition(x: number, y: number): void {
+  localStorage.setItem(POS_KEY, JSON.stringify({ x: Math.round(x), y: Math.round(y) }));
+}
+
+async function runFitWidth(): Promise<void> {
   if (dragging) return;
   await nextTick();
   if (dragging) return;
   const el = contentRef.value;
   if (!el) return;
   const need = Math.max(el.getBoundingClientRect().width, el.scrollWidth);
-  // 窗口宽 = 内容宽 + 外层左右描边（WIDTH_SLACK，见常量注释）。
-  // ceil 而非 round：宁可多给内层零点几像素余量，也不要把描边或末位字符裁掉。
   const w = Math.ceil(need) + WIDTH_SLACK;
   if (Math.abs(w - appliedW) < 1) return;
-  // ⚠️ appliedW 只在 invoke **成功之后**才更新（2026-10-25 复查修正）。
-  // 原实现先赋值再 invoke：若这次 resize 因窗口未创建/退出中失败，
-  // appliedW 已被改成 w，后续每秒的 fitWidth 都会因 |w-appliedW|<1 直接早退，
-  // 宽度就永久卡在"以为已经设过"的错误值上，直到内容再变化才恢复。
-  // 注：这个错误会被 1Hz tick 的自愈性掩盖大半（内容一变就会重试），
-  // 属于坏味道而非致命缺陷，但代价极低，顺手改对。
   try {
-    await invoke("resize_float_window", { width: w });
+    const [x, y] = await invoke<[number, number]>("resize_float_window", { width: w });
     appliedW = w;
+    persistPosition(x, y);
   } catch {
     /* 窗口尚未创建 / 退出中，忽略；不更新 appliedW，下次 tick 会重试 */
   }
@@ -464,7 +501,8 @@ async function applyPosition(): Promise<void> {
   if (raw) {
     try {
       const p = JSON.parse(raw) as { x: number; y: number };
-      await invoke("move_float_window", { x: p.x, y: p.y });
+      const [x, y] = await invoke<[number, number]>("move_float_window", { x: p.x, y: p.y });
+      persistPosition(x, y);
       return;
     } catch {
       /* 恢复失败落默认位 */
@@ -474,16 +512,23 @@ async function applyPosition(): Promise<void> {
     const mon = await currentMonitor();
     const sf = mon?.scaleFactor ?? 1;
     const logicalW = (mon?.size.width ?? 1920) / sf;
-    await invoke("move_float_window", {
+    const [x, y] = await invoke<[number, number]>("move_float_window", {
       x: Math.max(0, logicalW - BAR_W - 24),
       y: 24,
     });
+    persistPosition(x, y);
   } catch {
     /* 保持创建默认位置 */
   }
 }
 
-/** 整条拖拽：按下即交给 OS（跟手），结束后读窗口位置持久化 */
+async function waitPrimaryRelease(): Promise<void> {
+  while (await invoke<boolean>("primary_button_down")) {
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+}
+
+/** 原生拖拽只负责移动；startDragging 返回不代表松手，必须等系统按键释放再收尾。 */
 async function onPointerDown(e: PointerEvent): Promise<void> {
   if (e.button !== 0) return;
   e.preventDefault();
@@ -497,15 +542,14 @@ async function onPointerDown(e: PointerEvent): Promise<void> {
     return;
   }
   try {
+    await waitPrimaryRelease();
     const phys = await win.outerPosition();
     const sf = await win.scaleFactor();
-    const pos = { x: Math.round(phys.x / sf), y: Math.round(phys.y / sf) };
-    localStorage.setItem(POS_KEY, JSON.stringify(pos));
-  } catch {
-    /* 拖拽成功但记录失败：下次拖动会再写 */
+    persistPosition(phys.x / sf, phys.y / sf);
+  } catch (err) {
+    log.warn("[float] 拖拽收尾失败", err);
   } finally {
     dragging = false;
-    // 拖拽期间跳过了 resize（避免与 OS 拖拽循环抢窗口状态），结束后补测一次
     await fitWidth();
   }
 }
@@ -558,6 +602,7 @@ onMounted(async () => {
   }
   const tick = async () => {
     try {
+      diskMode.value = localStorage.getItem("screentime-disk-mode") || "system";
       cfg.value = await tracker.getStatusBarConfig();
       metrics.value = await tracker.getSystemMetrics();
     } catch {
@@ -666,11 +711,8 @@ onBeforeUnmount(() => {
  * `set_size` 下发，CSS 用 `height:100%` 跟随；圆角用 `border-radius:999px`
  * 恒取半高。原来「两处必须同步」的约定已失效（同步这件事本身被结构性消除）。
  *
- * 背景：几乎全透明。模糊与折射由**操作系统合成器**在窗口背后绘制
- * （macOS NSGlassEffectView / Windows DWM Acrylic）；CSS `backdrop-filter`
- * 采样不到窗口外的桌面（只采样同文档 DOM 背景，而本窗口的 html/body/#app
- * 全是 transparent），留着既是空转又会盖住系统材质，故明确关闭。
- * 只保留极淡的白色底和细描边，模拟玻璃自身的乳白与高光边缘。
+ * macOS 的模糊与折射由系统合成器绘制；Windows 仅用 CSS 高透光，无系统模糊。
+ * `backdrop-filter` 只采样同文档背景，本窗口背景全透明，因此明确关闭。
  */
 .float-bar.is-glass {
   /* v1.2.10（2026-10-26）：**删掉原来的 `height: 44px` 与 `border-radius: 22px`**。

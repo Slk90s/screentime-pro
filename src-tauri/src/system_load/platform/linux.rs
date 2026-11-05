@@ -11,6 +11,10 @@
 //! Linux 端**本来就**用 f_bavail，本版只是把 Windows / macOS 拉齐到这里 —— 所以
 //! Linux 用户看到的数字不会变，变了的是另外两端。这一点在发版说明里要讲清楚，
 //! 否则 Linux 用户会以为「这版没改 Linux」，而 Windows/macOS 用户会以为「数字怎么变小了」。
+//!
+//! 修改历史：
+//!   - 2026-09-23 @v0.9.7: 重构 - 从 metrics.rs 拆出 Linux 内存与磁盘采样。
+//!   - 2026-10-29 @v1.2.12: 新增 - 枚举本地块设备挂载卷并保持 f_bavail 可用量口径。
 
 use super::{DiskVolume, MetricsBackend};
 use crate::system_load::metrics::MetricsInner;
@@ -150,7 +154,6 @@ const SKIP_MOUNT_PREFIX: &[&str] = &[
 ///
 /// **同设备去重**：bind mount（`mount --bind`）会让同一设备出现多次，
 /// 用设备名去重后只保留首个（通常是真实挂载点而非 bind 视图）。
-#[allow(dead_code)] // v1.2.13 接入多盘调用方后删除（详见 platform/mod.rs 的 DiskVolume 文档）
 fn ffi_read_disks() -> Vec<DiskVolume> {
     let text = match std::fs::read_to_string("/proc/mounts") {
         Ok(t) => t,

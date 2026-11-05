@@ -13,6 +13,9 @@
 //! ⚠️ `begin_capture_inner` 的「权限闸门」与「抓屏」两块原本各有一段 macos cfg，
 //! 现在由 `CaptureBackend::ensure_ready` / `capture` 顶替；宿主负责在阻塞线程里
 //! 调它们（首次授权要弹系统框并同步等用户点击，不能占 async runtime 线程）。
+//!
+//! 修改历史：
+//!   - 2026-09-24 @v0.9.7: 重构 - 以 trait 统一截图文件定位、权限闸门与抓屏平台分支。
 
 use image::RgbaImage;
 

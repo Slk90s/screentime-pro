@@ -55,6 +55,7 @@
 //!     **新约定**：启动阶段只做静默查询（`status_snapshot`），不 request、不 emit；
 //!     真正的授权请求一律由 `ensure_ready()` 在用户**首次截图**时发起。
 //!     `screenshot-permission-changed` 事件因此不再有发出方（旧约定失效）。
+//!   - 2026-10-26 @v1.2.10: 废弃 - 移除启动期权限预请求，避免已授权设备重复弹窗。
 //!
 
 use core_foundation_sys::array::{CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef};

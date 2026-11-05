@@ -3,9 +3,8 @@
  * 桌宠状态机（v0.6.0-beta 引入）。
  *
  * 设计思路：
- * - 15 个状态（idle + working + 13 表情/行为）→ (eye, mouth, brow, decorations[]) 四元组部件组合
- * - 纯数据驱动，组件层只负责按 spriteId 找 PNG 并定位
- * - appToState 映射规则放独立文件（Phase 3 实现前台应用监听时接入）
+ * - 16 个状态 → (eye, mouth, brow, decorations[]) 四元组部件组合
+ * - 纯数据驱动；前台应用映射由 appToState.ts 与 useForegroundWatcher 接入
  *
  * 修改历史：
  *   - 2026-07-17 @v0.6.0-beta.1: 初始创建 - 15 状态 + 部件组合表
@@ -27,7 +26,7 @@ export interface PetComposition {
   decorations: PetDecoration[];
 }
 
-// 15 个状态的部件组合表（一个数据驱动，少一个 bug 源）
+// 16 个状态的部件组合表
 const COMPOSITIONS: Record<PetState, PetComposition> = {
   idle: { eye: 'eye_open_normal', mouth: 'mouth_smile', brow: 'brow_normal', decorations: ['none'] },
   working: { eye: 'eye_open_normal', mouth: 'mouth_smile', brow: 'brow_normal', decorations: ['none'] },
@@ -52,13 +51,7 @@ export function getComposition(state: PetState): PetComposition {
   return COMPOSITIONS[state] ?? COMPOSITIONS.idle;
 }
 
-/** 装饰 ID → PNG 文件名 */
-export function decorationToSpriteId(d: PetDecoration): string | null {
-  if (d === 'none') return null;
-  return d; // glasses / headphone / controller / pencil / speech_bubble / heart / zzz / sweat
-}
-
-/** 所有 15 状态列表（按 i18n key 顺序） */
+/** 全部 16 状态（按 i18n key 顺序） */
 export const ALL_STATES: PetState[] = [
   'idle', 'working', 'developing', 'designing', 'gaming', 'chatting',
   'meeting', 'listening', 'shopping', 'eating', 'sleeping',

@@ -63,9 +63,14 @@
 //!
 //! ⚠️ v0.7.7 教训：托盘/浮窗显示的百分比，Rust 侧一律用 0.0~1.0 分数，
 //!    前端展示时必须 ×100。FloatBar.vue 曾漏乘导致「77% 显示成 1%」。
+//!
+//! 修改历史：
+//!   - 2026-08-24 @v0.7.5: 新增 - 引入统一系统指标采样与磁盘缓存调度。
+//!   - 2026-09-23 @v0.9.7: 重构 - 内存与磁盘平台实现迁移到 MetricsBackend。
+//!   - 2026-10-29 @v1.2.12: 修复 - 统一三端磁盘用户可用量口径并接入多盘快照。
 
 use crate::system_load::network::NetworkSampler;
-use crate::system_load::platform::{Backend, MetricsBackend};
+use crate::system_load::platform::{Backend, DiskVolume, MetricsBackend};
 use crate::system_load::CpuMonitor;
 use std::sync::{Arc, Mutex};
 
@@ -78,6 +83,7 @@ pub struct MetricsSnapshot {
     pub disk_usage: f32,
     pub disk_used_bytes: u64,
     pub disk_total_bytes: u64,
+    pub disk_volumes: Vec<DiskVolume>,
     /// v0.7.6 新增：网络接收速率（bytes/sec）
     pub net_rx_bps: f64,
     /// v0.7.6 新增：网络发送速率（bytes/sec）
@@ -101,6 +107,8 @@ pub(crate) struct MetricsInner {
     pub(crate) memory_total: u64,
     pub(crate) last_disk: Option<(u64, u64)>,
     pub(crate) last_disk_secs: u64,
+    pub(crate) last_disk_volumes: Option<Vec<DiskVolume>>,
+    pub(crate) last_disk_volumes_secs: u64,
 }
 
 impl MetricsSampler {
@@ -115,6 +123,8 @@ impl MetricsSampler {
                 memory_total: 0,
                 last_disk: None,
                 last_disk_secs: 0,
+                last_disk_volumes: None,
+                last_disk_volumes_secs: 0,
             }),
         }
     }
@@ -134,6 +144,7 @@ impl MetricsSampler {
             0.0
         };
         let (disk_used, disk_total) = self.sample_disk_cached();
+        let disk_volumes = self.sample_disk_volumes_cached();
         let disk_pct = if disk_total > 0 {
             (disk_used as f64 / disk_total as f64).clamp(0.0, 1.0) as f32
         } else {
@@ -148,6 +159,7 @@ impl MetricsSampler {
             disk_usage: disk_pct,
             disk_used_bytes: disk_used,
             disk_total_bytes: disk_total,
+            disk_volumes,
             net_rx_bps: net.rx_bps,
             net_tx_bps: net.tx_bps,
         }
@@ -200,6 +212,35 @@ impl MetricsSampler {
         (used, total)
     }
 
+    fn sample_disk_volumes_cached(&self) -> Vec<DiskVolume> {
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        {
+            let inner = match self.inner.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if let (Some(volumes), last_secs) = (
+                inner.last_disk_volumes.as_ref(),
+                inner.last_disk_volumes_secs,
+            ) {
+                if now_secs.saturating_sub(last_secs) < 30 {
+                    return volumes.clone();
+                }
+            }
+        }
+        let volumes = Backend::read_disks();
+        if !volumes.is_empty() {
+            if let Ok(mut inner) = self.inner.lock() {
+                inner.last_disk_volumes = Some(volumes.clone());
+                inner.last_disk_volumes_secs = now_secs;
+            }
+        }
+        volumes
+    }
+
     /// v0.7.5 公开 `new` 时一次性初始化内存常量；v0.7.6 改为在首次 sample_all 之前调用 init
     /// （仅 macOS 有实际工作，其余平台为 no-op）
     pub fn init(&self) {
@@ -241,6 +282,8 @@ mod tests {
         let inner = super::MetricsInner {
             last_disk: None,
             last_disk_secs: 0,
+            last_disk_volumes: None,
+            last_disk_volumes_secs: 0,
         };
         let (used, total) = Backend::sample_memory(&inner);
         assert!(total > 0, "GlobalMemoryStatusEx 应给出非零物理内存总量");

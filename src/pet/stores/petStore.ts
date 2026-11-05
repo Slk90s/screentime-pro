@@ -8,6 +8,7 @@
  * - 直接导出 reactive 对象 + 操作函数；模板里 `petStore.enabled` 自动响应追踪，script 里读 `petStore.enabled` 也直接是值
  *
  * 修改历史：
+ *   - 2026-11-02 @v1.2.12: 修复 - 跨日先允许喂食，由 feed() 清零日期与计数，避免按钮永久禁用。
  *   - 2026-07-17 @v0.6.0-beta.1: 初始创建 - reactive + localStorage 持久化
  *   - 2026-08-07 @v0.6.2-33: 修复 - reload() 扩展同步 override + 喂食字段
  *     （菜单独立窗口 setOverride/feed 后需经 pet-store-updated 事件触发本函数，才能同步到桌宠窗口）
@@ -16,6 +17,7 @@
  *   - 2026-08-13 @v0.7.3: 修复 - setEnabled 广播 pet-enabled-changed，桌宠开关三窗口状态同步
  */
 import { reactive, computed, watch } from 'vue';
+import { invoke } from '@tauri-apps/api/core';
 import { emit } from '@tauri-apps/api/event';
 import type { PetState } from '../types';
 import { log } from "@/lib/logger";
@@ -95,22 +97,65 @@ function loadInitial(): RawState {
 // 模块级 reactive 单例（所有 PetWindow / Settings 共享同一份状态）
 const _state = reactive<RawState>(loadInitial());
 
-// 持久化挂起标志：拖拽期间置 true，避免 deep watch 每帧写 localStorage 导致卡顿
+let ready = false;
+let initPromise: Promise<void> | null = null;
+let dbWriteQueue: Promise<void> = Promise.resolve();
 let persistSuspended = false;
 
-// 任何字段变化都自动持久化（deep watch 覆盖嵌套字段）
-watch(
-  _state,
-  (v) => {
-    if (persistSuspended) return; // 拖拽中：跳过每帧写盘
+function persist(): void {
+  if (persistSuspended) return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(_state));
+  } catch (e) {
+    log.error('[pet] 持久化失败', e);
+  }
+  if (!ready || !isTauriEnv) return;
+  const json = JSON.stringify(_state);
+  dbWriteQueue = dbWriteQueue.then(async () => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(v));
+      await invoke('save_pet_state', { json });
     } catch (e) {
-      log.error('[pet] 持久化失败', e);
+      log.error('[pet] SQLite 持久化失败', e);
     }
-  },
-  { deep: true },
-);
+  });
+}
+
+async function init(): Promise<void> {
+  if (initPromise) return initPromise;
+  ready = false;
+  initPromise = (async () => {
+    try {
+      const legacy = localStorage.getItem(STORAGE_KEY) ?? JSON.stringify(_state);
+      const json = isTauriEnv
+        ? await invoke<string>('load_pet_state', { legacyJson: legacy })
+        : legacy;
+      const p = JSON.parse(json) as Partial<RawState>;
+      const base = loadInitial();
+      _state.enabled = p.enabled ?? base.enabled;
+      _state.position = p.position ?? base.position;
+      _state.scale = typeof p.scale === 'number' ? Math.min(2, Math.max(0.5, p.scale)) : base.scale;
+      _state.state = p.state ?? base.state;
+      _state.override = p.override ?? null;
+      _state.fullness = p.fullness ?? base.fullness;
+      _state.feedCount = p.feedCount ?? base.feedCount;
+      _state.level = p.level ?? base.level;
+      _state.todayFeedCount = p.todayFeedCount ?? base.todayFeedCount;
+      _state.todayFeedDate = p.todayFeedDate ?? base.todayFeedDate;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(_state));
+      ready = true;
+    } catch (e) {
+      log.error('[pet] SQLite 初始化失败，保留 localStorage 现场', e);
+    }
+  })();
+  try {
+    await initPromise;
+  } finally {
+    initPromise = null;
+  }
+}
+
+// 任何字段变化都自动持久化（deep watch 覆盖嵌套字段）
+watch(_state, persist, { deep: true });
 
 // v0.6.2-33 (BUG-2): 跨天重置从 computed 副作用移到 watch，保证 pure computed
 const todayFeedDateRef = reactive({ value: _state.todayFeedDate });
@@ -126,8 +171,8 @@ watch(
 const canFeedToday = computed(() => {
   const today = todayStr();
   if (todayFeedDateRef.value !== today) {
-    // 跨天重置（在 watch 里改原始 _state 会造成循环，这里只返回 false）
-    return false;
+    // 新的一天尚未重置时视为可喂；feed() 会先清零日期与计数再校验上限。
+    return true;
   }
   // 同步实际计数（日常使用场景 computed 自动响应）
   return todayFeedCountRef.value < 5;
@@ -218,13 +263,7 @@ function setHeating(on: boolean, load: number | null): void {
  */
 function setPersistSuspended(v: boolean): void {
   persistSuspended = v;
-  if (!v) {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(_state));
-    } catch (e) {
-      log.error('[pet] 持久化失败', e);
-    }
-  }
+  if (!v) persist();
 }
 function setState(s: PetState): void {
   _state.state = s;
@@ -273,6 +312,7 @@ export const petStore = {
   get todayFeedDate() { return _state.todayFeedDate; },
   get isHeating() { return !!_state.isHeating; },
   get lastSystemLoad() { return _state.lastSystemLoad ?? null; },
+  get ready() { return ready; },
   // computed
   canFeedToday,
   isHungry,
@@ -288,4 +328,6 @@ export const petStore = {
   feed,
   tickFullness,
   reload,
+  init,
+  persist,
 };

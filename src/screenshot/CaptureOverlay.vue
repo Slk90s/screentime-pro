@@ -7,17 +7,15 @@
     屏幕上是「被冻住的桌面」而不是「透出实时桌面的透明窗」——这是能做标注与圆角实时预览的前提。
     ⚠️ v0.8.0 初版是纯透明遮罩（没有图像），所以画笔/OCR 只能是灰掉的占位按钮，
     「想加文字只能关掉重截」就是这么来的。
-  - **合成在本地 canvas**：裁剪 → 标注 → 圆角 → 投影 全部在本窗画好后整体交给 Rust 落剪贴板/磁盘，
-    保证「预览到的」与「导出的」逐像素一致。
-  - **两层画布**：`base`（离屏，只画一次背景图）供马赛克/模糊取样；`anno`（可见）按顺序重放所有标注。
-    马赛克从 base 取样 → 每次重绘结果稳定，不受先前标注影响。
-  - **QQ 式工具栏**：尺寸胶囊只显示选区尺寸；**圆角与投影收进工具栏的「圆角」按钮浮层**
-    （初版把圆角滑杆直接摊在选区上方，看起来像「一截图就让你选圆角」）。
+  - **合成在本地 canvas**：裁剪 → 标注 → 圆角，画好后整体交给 Rust 落剪贴板/磁盘。
+  - **两层画布**：`base`（离屏背景）供马赛克取样；`anno`（可见）按顺序重放标注。
+  - **QQ 式工具栏**：尺寸胶囊只显示选区尺寸；圆角收进工具栏浮层。
   - **剪贴板优先**：✓ / Enter 的默认动作是把 PNG 写进系统剪贴板，落盘是可选项。
   - **坐标换算**：前端拿到的是 CSS 像素，canvas 用物理像素（= CSS × k，k = 物理宽 / 窗口 CSS 宽），
     高 DPI（125%/Retina）下标注与文字不会偏移或发虚。
 
   修改历史：
+    - 2026-11-02 @v1.2.12: 修复 - 提交失败保留现场；图片 decode 与 OCR 增加会话/选区守卫，旧结果不得覆盖新状态。
     - 2026-09-16 @v0.8.0: 初始创建 - 透明遮罩 / 框选 / 尺寸 / 圆角 / 阴影 / 工具栏
     - 2026-09-16 @v0.8.0: 重写 - 改冻结帧编辑器；标注（矩形/箭头/画笔/马赛克/模糊/文字）+ 撤销；
       圆角与阴影移入工具栏浮层；选区支持 8 手柄缩放与整体拖动
@@ -98,15 +96,26 @@
           @click="color = c"
         ></button>
         <span class="tb-sep"></span>
-        <button
-          v-for="w in WIDTHS"
-          :key="w"
-          class="wbtn"
-          :class="{ on: strokeWidth === w }"
-          @click="strokeWidth = w"
-        >
-          <span class="wdot" :style="{ width: `${w + 2}px`, height: `${w + 2}px` }"></span>
-        </button>
+        <template v-if="tool === 'text'">
+          <button
+            v-for="s in TEXT_SIZES"
+            :key="s"
+            class="wbtn"
+            :class="{ on: textSize === s }"
+            @click="textSize = s"
+          >{{ s }}</button>
+        </template>
+        <template v-else>
+          <button
+            v-for="w in WIDTHS"
+            :key="w"
+            class="wbtn"
+            :class="{ on: strokeWidth === w }"
+            @click="strokeWidth = w"
+          >
+            <span class="wdot" :style="{ width: `${w + 2}px`, height: `${w + 2}px` }"></span>
+          </button>
+        </template>
       </template>
       <template v-else>
         <span class="sb-label">{{ t("shot.strength") }}</span>
@@ -181,6 +190,8 @@
       </button>
     </div>
 
+    <div v-if="commitError" class="commit-error" role="alert" @pointerdown.stop>{{ commitError }}</div>
+
     <!-- 圆角浮层（v1.2.2：投影开关已移除，只留圆角滑杆） -->
     <div v-if="box && activePanel === 'radius'" class="panel" :style="panelStyle" @pointerdown.stop>
       <div class="panel-row">
@@ -216,7 +227,7 @@
         :value="ocrText"
       ></textarea>
       <div class="ocr-actions">
-        <button class="mini" :disabled="ocrBusy || !ocrText" @click="copyOcr">
+        <button class="mini" :disabled="ocrBusy || !ocrText || ocrStale" @click="copyOcr">
           {{ ocrCopied ? t("shot.ocrCopied") : t("shot.ocrCopy") }}
         </button>
         <button class="mini mini--ghost" @click="activePanel = null">{{ t("shot.close") }}</button>
@@ -281,6 +292,7 @@ type Drag =
 const HANDLES: Handle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 const COLORS = ["#ef4444", "#f59e0b", "#22c55e", "#2f6bff", "#111827", "#ffffff"];
 const WIDTHS = [2, 4, 7];
+const TEXT_SIZES = [16, 20, 28];
 const STRENGTHS = [
   { block: 8, label: "shot.strengthWeak" },
   { block: 14, label: "shot.strengthMedium" },
@@ -317,6 +329,7 @@ const ocrEngine = ref<OcrEngineKind | "">("");
 const ocrLines = ref(0);
 const ocrCopied = ref(false);
 const ocrStale = ref(false);
+let ocrRequestSeq = 0;
 
 /**
  * 面板头部的引擎徽标：
@@ -331,7 +344,7 @@ const ocrBadge = computed(() => {
   }
   return ocrLang.value;
 });
-const textSize = 20;
+const textSize = ref(20);
 /** 拖动中的文字标注索引（-1 = 无）；光标与重绘排除用 */
 const textDragIndex = ref(-1);
 /** 「文字」工具下指针是否悬在已敲定文字上（命中框反馈：grab 光标） */
@@ -427,7 +440,7 @@ const k = computed(() => {
   return m.physical_width / vw.value;
 });
 
-const isDrawTool = computed(() => tool.value !== "none" && tool.value !== "text");
+const isDrawTool = computed(() => tool.value !== "none");
 
 /**
  * 选区是否小到没有意义（物理像素不足 1px）。
@@ -534,7 +547,7 @@ const textStyle = computed(() => {
     left: `${textEdit.value.x}px`,
     top: `${textEdit.value.y}px`,
     color: color.value,
-    fontSize: `${textSize}px`,
+    fontSize: `${textSize.value}px`,
   };
 });
 
@@ -695,21 +708,23 @@ function scheduleRedraw() {
 watch([box, radius, ops, draft], scheduleRedraw);
 
 async function loadBase(url: string) {
-  const b = meta.value;
-  if (!b || !url) return;
-  await new Promise<void>((resolve) => {
+  const myGen = sessionGeneration;
+  const currentMeta = meta.value;
+  if (!currentMeta || !url) return;
+  const nextBase = await new Promise<HTMLCanvasElement | null>((resolve) => {
     const im = new Image();
     im.onload = () => {
       const c = document.createElement("canvas");
       c.width = im.naturalWidth;
       c.height = im.naturalHeight;
       c.getContext("2d")?.drawImage(im, 0, 0);
-      base = c;
-      resolve();
+      resolve(c);
     };
-    im.onerror = () => resolve();
+    im.onerror = () => resolve(null);
     im.src = url;
   });
+  if (myGen !== sessionGeneration || meta.value !== currentMeta) return;
+  base = nextBase;
   redraw();
 }
 
@@ -950,7 +965,7 @@ async function commitText() {
   textValue.value = "";
   if (!at || !v) return;
   if (ops.value.length >= MAX_OPS) return;
-  ops.value = [...ops.value, { k: "text", x: at.x, y: at.y, text: v, size: textSize, color: color.value }];
+  ops.value = [...ops.value, { k: "text", x: at.x, y: at.y, text: v, size: textSize.value, color: color.value }];
 }
 
 function onTextKey(e: KeyboardEvent) {
@@ -966,6 +981,10 @@ function onTextKey(e: KeyboardEvent) {
 
 // ===== 取字（本地离线 OCR）=====
 
+function boxSignature(b: Box | null): string {
+  return b ? `${b.x},${b.y},${b.w},${b.h}` : "";
+}
+
 /**
  * 对当前选区取字。
  *
@@ -977,6 +996,9 @@ async function runOcr() {
   const b = box.value;
   // v0.9.2：选区过小时直接不发起（按钮已 disabled，这里再兜一层防误触）
   if (!b || ocrBusy.value || selTooSmall.value) return;
+  const myGen = sessionGeneration;
+  const myRequest = ++ocrRequestSeq;
+  const selection = boxSignature(b);
   activePanel.value = "ocr";
   ocrBusy.value = true;
   ocrErr.value = "";
@@ -994,21 +1016,24 @@ async function runOcr() {
       Math.max(1, Math.round(b.w * s)),
       Math.max(1, Math.round(b.h * s)),
     );
+    if (myGen !== sessionGeneration || myRequest !== ocrRequestSeq || selection !== boxSignature(box.value)) return;
     ocrText.value = res.text.trim();
     ocrLang.value = res.language ?? "";
     ocrEngine.value = res.engine;
     ocrLines.value = res.lines;
     if (!ocrText.value) ocrErr.value = t("shot.ocrEmpty");
   } catch (err) {
-    ocrErr.value = err instanceof Error ? err.message : String(err);
+    if (myGen === sessionGeneration && myRequest === ocrRequestSeq && selection === boxSignature(box.value)) {
+      ocrErr.value = err instanceof Error ? err.message : String(err);
+    }
   } finally {
-    ocrBusy.value = false;
+    if (myRequest === ocrRequestSeq) ocrBusy.value = false;
   }
 }
 
 /** 复制取字结果（走 Rust 的 arboard，不依赖 WebView 的剪贴板权限） */
 async function copyOcr() {
-  if (!ocrText.value) return;
+  if (!ocrText.value || ocrStale.value) return;
   try {
     await screenshot.copyText(ocrText.value);
     ocrCopied.value = true;
@@ -1020,9 +1045,9 @@ async function copyOcr() {
 
 /** 选区一变，之前取到的文字就对不上了 → 标记过期，免得用户复制走旧文本 */
 watch(
-  () => box.value && `${box.value.x},${box.value.y},${box.value.w},${box.value.h}`,
+  () => boxSignature(box.value),
   () => {
-    if (activePanel.value === "ocr" && ocrText.value) ocrStale.value = true;
+    if (activePanel.value === "ocr" && (ocrBusy.value || ocrText.value)) ocrStale.value = true;
   },
 );
 
@@ -1058,12 +1083,7 @@ function selectAll() {
 
 // ===== 提交 / 取消 =====
 
-/** 把选区 + 标注 + 圆角合成成一张 PNG（data URL）
- *
- * v1.2.2：投影功能整体移除 → `pad` 恒为 0、画布尺寸恒等于选区尺寸，
- * 导出图不再有四周留白与暗影。下面仍保留 `pad` 变量（恒 0），
- * 是为了让 `roundRectPath` / `drawImage` / `paintOps` 的坐标推导只有一条口径，
- * 不必为"无留白"再写一套偏移为 0 的重复逻辑。 */
+/** 把选区 + 标注 + 圆角合成成一张无留白 PNG（data URL）。 */
 function compose(): string | null {
   const b = box.value;
   if (!b || !base || !meta.value) return null;
@@ -1072,19 +1092,18 @@ function compose(): string | null {
   const ch = Math.round(b.h * s);
   if (cw < 1 || ch < 1) return null;
   const r = radius.value * s;
-  const pad = 0;
 
   const c = document.createElement("canvas");
-  c.width = cw + pad * 2;
-  c.height = ch + pad * 2;
+  c.width = cw;
+  c.height = ch;
   const g = c.getContext("2d");
   if (!g) return null;
 
   g.save();
-  roundRectPath(g, pad, pad, cw, ch, r);
+  roundRectPath(g, 0, 0, cw, ch, r);
   g.clip();
-  g.drawImage(base, Math.round(b.x * s), Math.round(b.y * s), cw, ch, pad, pad, cw, ch);
-  paintOps(g, s, pad - Math.round(b.x * s), pad - Math.round(b.y * s), ops.value);
+  g.drawImage(base, Math.round(b.x * s), Math.round(b.y * s), cw, ch, 0, 0, cw, ch);
+  paintOps(g, s, -Math.round(b.x * s), -Math.round(b.y * s), ops.value);
   g.restore();
 
   return c.toDataURL("image/png");
@@ -1100,16 +1119,21 @@ function compose(): string | null {
     }
   }
 
+  const commitError = ref("");
+
   async function commit(copy: boolean, save: boolean) {
     const png = compose();
     if (!png) return;
+    commitError.value = "";
     try {
       await screenshot.commit({ pngBase64: png, copy, save });
-    } finally {
-      endSession();
-      reset();
-      await getCurrentWindow().hide();
+    } catch (err) {
+      commitError.value = err instanceof Error ? err.message : String(err);
+      return;
     }
+    endSession();
+    reset();
+    await getCurrentWindow().hide();
   }
 
 function reset() {
@@ -1124,12 +1148,14 @@ function reset() {
   textValue.value = "";
   textDragIndex.value = -1;
   textHover.value = false;
+  ocrRequestSeq++;
   ocrBusy.value = false;
   ocrText.value = "";
   ocrErr.value = "";
   ocrLang.value = "";
   ocrCopied.value = false;
   ocrStale.value = false;
+  commitError.value = "";
   base = null;
   drag = null;
   // 丢掉上一会话残留的重绘任务，避免新会话首帧被旧状态覆盖
@@ -1406,6 +1432,21 @@ onBeforeUnmount(() => {
 .bar {
   padding: 6px 8px;
 }
+.commit-error {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 20;
+  max-width: min(720px, calc(100vw - 48px));
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: rgba(127, 29, 29, 0.96);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1.5;
+  pointer-events: auto;
+}
 .style-bar {
   height: 34px;
   padding: 0 10px;
@@ -1431,33 +1472,6 @@ onBeforeUnmount(() => {
   flex: 1;
   accent-color: #2f6bff;
 }
-.switch {
-  position: relative;
-  width: 30px;
-  height: 16px;
-  border: none;
-  border-radius: 8px;
-  background: rgba(148, 163, 184, 0.5);
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.switch.on {
-  background: #2f6bff;
-}
-.switch .knob {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: #fff;
-  transition: transform 0.15s;
-}
-.switch.on .knob {
-  transform: translateX(14px);
-}
-
 /* 取字面板：比圆角面板更宽更高；文本区必须单独允许选中（.cap-root 全局禁用了 user-select） */
 .panel--ocr {
   width: 320px;

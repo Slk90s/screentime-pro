@@ -5,10 +5,7 @@
  * 适用：偏好「一张完整潮玩角色浮在桌面」风格、不在意部件自定义的场景。
  * 视觉：透明底的戴黄帽抱吉他 3D 熊猫（已 color-key 抠图）+ drop-shadow 投影，状态差异通过 emoji 浮层 + CSS 动画表现。
  *
- * 与旧 2D 熊猫皮肤的关键差异（panda-2d 已于 v0.6.2-beta.5 移除）：
- * - 不消费 spriteLayout.ts（部件定位表）
- * - 不消费 usePetSprites（自定义部件编辑）
- * - 不消费 PetSpriteEditor（编辑器只对 2D 部件合成有意义）
+ * 使用完整角色图与 emoji 浮层；状态自定义经 usePetBadges 同步。
  *
  * 修改历史：
  *   - 2026-07-24 @v0.6.2-beta.1: 初始注册 - Pop Mart 3D 风皮肤（橙底参考图）

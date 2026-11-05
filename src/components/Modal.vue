@@ -18,11 +18,15 @@
     - message: 主文本（可用 slot 替代更复杂内容）
     - confirmText / cancelText: 按钮文案
     - width: 自定义宽度（默认 480px）
+    - closeOnConfirm: 确认后是否自动关闭（默认 true）
 
   Events:
     - confirm: 确认按钮点击
     - cancel: 取消按钮 / 遮罩点击 / Esc
     - update:modelValue: v-model 同步
+
+  修改历史：
+    - 2026-11-02 @v1.2.12: 新增 closeOnConfirm，允许表单校验失败时保持弹窗。
 -->
 <template>
   <transition name="modal-fade">
@@ -68,12 +72,14 @@ const props = withDefaults(
     cancelText?: string;
     width?: string;
     closeOnMask?: boolean;
+    closeOnConfirm?: boolean;
   }>(),
   {
     type: "info",
     message: "",
     width: "480px",
     closeOnMask: true,
+    closeOnConfirm: true,
   }
 );
 
@@ -93,7 +99,7 @@ function close() {
 }
 function onConfirm() {
   emit("confirm");
-  close();
+  if (props.closeOnConfirm) close();
 }
 function onCancel() {
   emit("cancel");

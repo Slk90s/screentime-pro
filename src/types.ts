@@ -1,4 +1,8 @@
-// 与后端 src-tauri/src/db/models.rs 中的 serde 结构一一对应
+/**
+ * 设计思路：集中定义 Rust DTO 的 TypeScript 镜像，IPC 返回值保持 snake_case，统一前后端字段口径。
+ * 修改历史：2026-11-03 @v1.2.12: 新增 - 补充文件头设计说明与修改历史。
+ */
+// Rust DTO 的 TypeScript 镜像；IPC 返回值保持 snake_case。
 
 export interface DailySummaryOut {
   date: string;
@@ -63,6 +67,7 @@ export interface CurrentForegroundOut {
   idle_seconds: number;
   tracking: boolean;
   window_title?: string | null;
+  bundle_id?: string | null;
   session_seconds: number;
 }
 
@@ -184,8 +189,8 @@ export interface StatusBarConfig {
   // v0.8.2（2026-09-17）：截图总开关透传（浮窗尾部截图按钮的显隐依据；
   // 权威源是 screenshot 模块配置，本字段只读不回写）
   screenshot_enabled: boolean;
-  // v1.2.2（2026-10-21）：悬浮窗液态玻璃开关。为 true 时浮窗改用系统材质
-  // （macOS 26 NSGlassEffectView / Windows DWM Acrylic），高度 36 → 44px 胶囊形。
+  // v1.2.2（2026-10-21）：悬浮窗液态玻璃开关。macOS 使用系统材质，
+  // Windows 使用纯 CSS 高透光（无系统模糊）；高度 36 → 44px 胶囊形。
   // 能力不足的平台由 `FloatGlassSupport.supported` 判定，设置页据此置灰。
   float_glass: boolean;
 }
@@ -235,12 +240,20 @@ export interface FloatGlassSupport {
  * 材质档位：
  * - `liquid`   macOS 26+ 系统液态玻璃（半透明 + 模糊 + 真实折射）
  * - `vibrancy` macOS < 26 NSVisualEffectView（半透明 + 模糊，无折射）
- * - `acrylic`  Windows 10 1809+ DWM Acrylic（半透明 + 模糊，无折射）
+ * - `acrylic`  Windows 纯 CSS 高透光（无系统模糊；保留既有 tier 名称）
  * - `none`     Linux / 过老系统（不支持）
  */
 export type FloatGlassTier = "liquid" | "vibrancy" | "acrylic" | "none";
 
 // ===== v0.7.5 / v0.7.6：状态栏系统指标 =====
+
+export interface DiskVolume {
+  mount: string;
+  total_bytes: number;
+  used_bytes: number;
+  avail_bytes: number;
+  is_system: boolean;
+}
 
 export interface MetricsOut {
   supported: boolean;
@@ -252,6 +265,7 @@ export interface MetricsOut {
   disk_usage: number;
   disk_used_bytes: number;
   disk_total_bytes: number;
+  disk_volumes?: DiskVolume[];
   // v0.7.6 新增：网络速率（bytes/sec）
   net_rx_bps: number;
   net_tx_bps: number;

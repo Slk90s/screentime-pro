@@ -21,6 +21,10 @@
 //!   「只有桌面壁纸」的图，必须提前拦下来并引导用户授权。
 //!
 //! 注意：本采集器仅在 `target_os = "macos"` 下编译进二进制。
+//!
+//! 修改历史：
+//!   - 2026-07-08 @v0.2.0: 新增 - 通过 NSWorkspace 与 CoreGraphics 采集前台应用和空闲时长。
+//!   - 2026-10-27 @v1.2.11: 修复 - 明确空闲检测无需辅助功能权限，避免权限引导误判。
 
 use crate::error::TrackerError;
 use crate::tracker::platform::{PlatformTracker, RawApp};

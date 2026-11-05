@@ -1,19 +1,21 @@
 //! Tauri 命令层（前端通过 `invoke` 调用）
+//! 设计：主窗口、采样、设置与备份 IPC 入口，业务实现委托 db / tracker / system_load。
 //!
 //! ## 修改历史
 //!
+//! - 2026-11-03 @v1.2.12: 重构 - 删除无消费者追踪命令；多盘卷列表透传；桌宠状态接 SQLite。
 //! - 2026-10-23 @v1.2.6:
 //!   ① `sampling_loop` 采集失败改为「状态翻转才记一条」——旧实现每 tick（2s）都打 WARN，
-//!      而「锁屏 / 桌面 / 自家辅助窗」都是**正常状态**，实测累计 9376 条占全部 WARN 的 98%。
-//!      现在 `NoForeground` 降为 DEBUG，真异常仍 WARN 但同类不重复，恢复时补一条 INFO。
+//!   而「锁屏 / 桌面 / 自家辅助窗」都是**正常状态**，实测累计 9376 条占全部 WARN 的 98%。
+//!   现在 `NoForeground` 降为 DEBUG，真异常仍 WARN 但同类不重复，恢复时补一条 INFO。
 //!   ② `finalize_active_session` 的 `let _ = insert_session(...)` 改为记录 error 日志：
-//!      写库失败原先完全静默，用户只会发现「今天时长比实际少」却毫无线索。
+//!   写库失败原先完全静默，用户只会发现「今天时长比实际少」却毫无线索。
 
 use crate::classifier::classify_app;
 use crate::db::{
     AppRankingOut, CategoryOut, CurrentForegroundOut, DailySummaryOut, DayCategoryOut, DeviceInfo,
-    ExportBundle, ExportResult, HourlyBucketOut, MetricsOut, MonthSummaryOut, OverviewOut,
-    PeriodStat, PermissionStatus, RuleOut, SettingsOut, TrendsOut,
+    ExportBundle, ExportResult, HourlyBucketOut, MetricsOut, MonthSummaryOut, NewSession,
+    OverviewOut, PeriodStat, PermissionStatus, RuleOut, SettingsOut, TrendsOut,
 };
 use crate::tracker::{platform_name, RawApp};
 use crate::AppState;
@@ -59,22 +61,6 @@ pub fn begin_tracking(state: &Arc<AppState>) {
 #[tauri::command]
 pub fn start_tracking(state: tauri::State<'_, Arc<AppState>>) -> Result<bool, String> {
     begin_tracking(&state);
-    Ok(true)
-}
-
-#[tauri::command]
-pub fn stop_tracking(state: tauri::State<'_, Arc<AppState>>) -> Result<bool, String> {
-    let mut r = state.tracking.lock().unwrap_or_else(|e| e.into_inner());
-    *r = false;
-    if let Some(active) = state
-        .current
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .take()
-    {
-        let now = Local::now();
-        finalize_active_session(&state, &active, now);
-    }
     Ok(true)
 }
 
@@ -155,16 +141,16 @@ fn finalize_active_session(state: &Arc<AppState>, active: &ActiveSession, now: D
             // 用户只会发现「今天时长比实际少」却找不到任何线索。
             // 配合 db::open 里新设的 busy_timeout(5s)，绝大多数瞬时锁冲突会自行重试成功；
             // 到这里仍失败就是真异常（磁盘满 / 库损坏 / 权限），必须留痕。
-            if let Err(e) = state.db.insert_session(
-                active.app_id,
-                &active.category_id,
-                &seg_start.to_rfc3339(),
-                &seg_end.to_rfc3339(),
-                effective,
-                &date,
-                active.app.window_title.as_deref(),
-                &state.device_id,
-            ) {
+            if let Err(e) = state.db.insert_session(NewSession {
+                app_id: active.app_id,
+                category_id: &active.category_id,
+                start_rfc3339: &seg_start.to_rfc3339(),
+                end_rfc3339: &seg_end.to_rfc3339(),
+                duration: effective,
+                date: &date,
+                window_title: active.app.window_title.as_deref(),
+                device: &state.device_id,
+            }) {
                 tracing::error!(
                     error = %e,
                     app = %active.app.process_name,
@@ -175,11 +161,6 @@ fn finalize_active_session(state: &Arc<AppState>, active: &ActiveSession, now: D
             }
         }
     }
-}
-
-#[tauri::command]
-pub fn is_tracking(state: tauri::State<'_, Arc<AppState>>) -> Result<bool, String> {
-    Ok(*state.tracking.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
 #[tauri::command]
@@ -841,31 +822,14 @@ pub fn add_rule(
 }
 
 #[tauri::command]
-pub fn update_rule(
-    state: tauri::State<'_, Arc<AppState>>,
-    id: i64,
-    field: String,
-    match_type: String,
-    pattern: String,
-    category_id: String,
-    priority: i32,
-    enabled: bool,
-) -> Result<bool, String> {
-    state
-        .db
-        .update_rule(
-            id,
-            &field,
-            &match_type,
-            &pattern,
-            &category_id,
-            priority,
-            enabled,
-        )
-        .map_err(|e| e.to_string())?;
+pub fn update_rule(state: tauri::State<'_, Arc<AppState>>, rule: RuleOut) -> Result<bool, String> {
+    state.db.update_rule(&rule).map_err(|e| e.to_string())?;
     crate::logging::audit(
         "rule_updated",
-        &format!("id={id} field={field} pattern={pattern}"),
+        &format!(
+            "id={} field={} pattern={}",
+            rule.id, rule.field, rule.pattern
+        ),
     );
     reload_rules(&state);
     Ok(true)
@@ -2121,6 +2085,7 @@ pub fn get_system_metrics(state: tauri::State<'_, Arc<AppState>>) -> MetricsOut 
         disk_usage: snap.disk_usage,
         disk_used_bytes: snap.disk_used_bytes,
         disk_total_bytes: snap.disk_total_bytes,
+        disk_volumes: snap.disk_volumes,
         net_rx_bps: snap.net_rx_bps,
         net_tx_bps: snap.net_tx_bps,
     }

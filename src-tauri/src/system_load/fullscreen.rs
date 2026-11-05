@@ -5,14 +5,13 @@
 //! 设计：
 //! - Windows：GetForegroundWindow 的 GetWindowRect 与其所在显示器（MonitorFromWindow
 //!   + GetMonitorInfoW 的 rcMonitor）逐点比较，相等即视为全屏（无边框全屏/独占全屏
-//!   游戏均命中）。
+//!     游戏均命中）。
 //! - 排除桌面 shell（Progman / WorkerW / Shell_TrayWnd）：点击桌面时前台窗口矩形
 //!   恰好等于整屏，会造成「没全屏却隐藏浮窗」的假阳性。
 //! - macOS：CGWindowListCopyWindowInfo 取**最前台普通窗口**（kCGWindowLayer == 0）的
-//!   kCGWindowBounds，与 CGDisplayBounds(主显示器) 逐值比较（容差 2pt）。关键判别点：
-//!   普通「最大化」窗口不会盖住菜单栏（bounds.y 从菜单栏下方开始），只有真正的全屏窗口
-//!   （绿色按钮全屏 / 视频全屏 / 游戏独占）其 bounds 才等于整屏 → 天然区分，无需额外判据。
-//!   v0.8.0（2026-09-16）实装。旧取舍「macOS 恒 false、不做全屏隐藏」作废。
+//!   kCGWindowBounds，与 CGGetActiveDisplayList 枚举出的**任一活动显示器**比较（容差 2pt）。
+//!   普通「最大化」窗口不会盖住菜单栏，因此不会被误判；主屏与副屏全屏均可识别。
+//!   v0.8.0（2026-09-16）实装，2026-11-02 扩展为多显示器。
 //! - Linux：v1 恒返回 false（EWMH 需逐 WM 适配），后续可按需补。
 //!
 //! FFI 风格与 network.rs 一致：裸 `extern "system"` 声明，不引入 windows crate。
@@ -20,6 +19,23 @@
 //! 修改历史：
 //!   - 2026-09-10 @v0.7.6: 初始创建 - Windows 实装，其余平台 stub。
 //!   - 2026-09-16 @v0.8.0: macOS 实装（前台普通窗口 bounds vs 主显示器 bounds）。
+
+#[cfg(any(target_os = "macos", test))]
+#[derive(Clone, Copy)]
+struct Bounds {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn bounds_match(window: Bounds, display: Bounds, tol: f64) -> bool {
+    (window.x - display.x).abs() <= tol
+        && (window.y - display.y).abs() <= tol
+        && (window.w - display.w).abs() <= tol
+        && (window.h - display.h).abs() <= tol
+}
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
@@ -135,8 +151,12 @@ mod macos_impl {
 
     #[link(name = "CoreGraphics", kind = "framework")]
     extern "C" {
-        fn CGMainDisplayID() -> u32;
         fn CGDisplayBounds(display: u32) -> CGRect;
+        fn CGGetActiveDisplayList(
+            max_displays: u32,
+            active_displays: *mut u32,
+            display_count: *mut u32,
+        ) -> i32;
     }
 
     /// 从字典里按「原生 CFString 键指针」取 f64（CFNumber 自动转 double）
@@ -178,7 +198,18 @@ mod macos_impl {
             if list.is_null() {
                 return false;
             }
-            let display = CGDisplayBounds(CGMainDisplayID());
+            let mut display_count = 0u32;
+            if CGGetActiveDisplayList(0, std::ptr::null_mut(), &mut display_count) != 0
+                || display_count == 0
+            {
+                return false;
+            }
+            let mut ids = vec![0u32; display_count as usize];
+            if CGGetActiveDisplayList(display_count, ids.as_mut_ptr(), &mut display_count) != 0 {
+                return false;
+            }
+            ids.truncate(display_count as usize);
+            let displays: Vec<CGRect> = ids.into_iter().map(|id| CGDisplayBounds(id)).collect();
             let count = CFArrayGetCount(list);
             // 列表按「前 → 后」排序，第一个命中的即最前台全屏窗
             for i in 0..count {
@@ -218,11 +249,18 @@ mod macos_impl {
                     },
                 );
                 const TOL: f64 = 2.0;
-                if (x - display.origin.x).abs() <= TOL
-                    && (y - display.origin.y).abs() <= TOL
-                    && (w - display.size.width).abs() <= TOL
-                    && (h - display.size.height).abs() <= TOL
-                {
+                if displays.iter().any(|display| {
+                    bounds_match(
+                        Bounds { x, y, w, h },
+                        Bounds {
+                            x: display.origin.x,
+                            y: display.origin.y,
+                            w: display.size.width,
+                            h: display.size.height,
+                        },
+                        TOL,
+                    )
+                }) {
                     return true;
                 }
             }
@@ -239,4 +277,111 @@ pub fn foreground_is_fullscreen() -> bool {
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn foreground_is_fullscreen() -> bool {
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bounds_match, Bounds};
+
+    #[test]
+    fn fullscreen_matches_any_display_not_only_primary() {
+        assert!(bounds_match(
+            Bounds {
+                x: 0.0,
+                y: 0.0,
+                w: 1920.0,
+                h: 1080.0
+            },
+            Bounds {
+                x: 0.0,
+                y: 0.0,
+                w: 1920.0,
+                h: 1080.0
+            },
+            2.0
+        ));
+        assert!(bounds_match(
+            Bounds {
+                x: -2560.0,
+                y: 0.0,
+                w: 2560.0,
+                h: 1440.0
+            },
+            Bounds {
+                x: -2560.0,
+                y: 0.0,
+                w: 2560.0,
+                h: 1440.0
+            },
+            2.0
+        ));
+    }
+
+    #[test]
+    fn maximized_or_other_display_is_not_fullscreen() {
+        assert!(!bounds_match(
+            Bounds {
+                x: 0.0,
+                y: 25.0,
+                w: 1920.0,
+                h: 1055.0
+            },
+            Bounds {
+                x: 0.0,
+                y: 0.0,
+                w: 1920.0,
+                h: 1080.0
+            },
+            2.0
+        ));
+        assert!(!bounds_match(
+            Bounds {
+                x: 0.0,
+                y: 0.0,
+                w: 1920.0,
+                h: 1080.0
+            },
+            Bounds {
+                x: 2560.0,
+                y: 0.0,
+                w: 2560.0,
+                h: 1440.0
+            },
+            2.0
+        ));
+    }
+
+    #[test]
+    fn tolerance_is_two_points() {
+        assert!(bounds_match(
+            Bounds {
+                x: 1.0,
+                y: -1.0,
+                w: 1919.0,
+                h: 1079.0
+            },
+            Bounds {
+                x: 0.0,
+                y: 0.0,
+                w: 1920.0,
+                h: 1080.0
+            },
+            2.0
+        ));
+        assert!(!bounds_match(
+            Bounds {
+                x: 3.0,
+                y: 0.0,
+                w: 1920.0,
+                h: 1080.0
+            },
+            Bounds {
+                x: 0.0,
+                y: 0.0,
+                w: 1920.0,
+                h: 1080.0
+            },
+            2.0
+        ));
+    }
 }

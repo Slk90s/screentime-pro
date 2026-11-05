@@ -45,6 +45,7 @@ const visible = ref(false);
 let unlistenShown: (() => void) | null = null;
 
 onMounted(async () => {
+  await petStore.init();
   // 透明窗体：局部覆盖本窗口 document 的 html/body/#app 背景（仅影响 pet-menu 这个 webview，
   // 不会污染主窗口）。注意：绝不能用全局（非 scoped）CSS 设 html/body/#app —— 本组件被 App.vue
   // 顶层 import，其全局样式会注入主窗口文档，把主窗口 html/body/#app 设成 overflow:hidden 而

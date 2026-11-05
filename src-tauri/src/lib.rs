@@ -13,12 +13,12 @@
 //!   - 2026-10-21 @v1.2.2: 新增 - 悬浮窗液态玻璃。
 //!     ① `mod float_glass;`（新模块，材质层 + 能力探测）；
 //!     ② 启动恢复段：`cfg.float_glass` 为真时**在 show 之前**应用材质并把窗口高度
-//!        拉到 44px。这里刻意不走 `apply_via_app`（它内部 run_on_main_thread 是异步
-//!        派发，无法保证早于 show），而 setup 本身跑在主线程，直接同步调用即可；
+//!     拉到 44px。这里刻意不走 `apply_via_app`（它内部 run_on_main_thread 是异步
+//!     派发，无法保证早于 show），而 setup 本身跑在主线程，直接同步调用即可；
 //!     ③ `generate_handler!` 注册 `float_glass::float_glass_support`（IPC 82→83）。
-//!        （CONVENTIONS 里长期写着 84，那是 v1.1.1 的旧数；v1.2.0 删掉
-//!        `create_float_window`/`hide_float_window` 两个死命令后实际已是 82，
-//!        本次一并按实测校准。）
+//!     （CONVENTIONS 里长期写着 84，那是 v1.1.1 的旧数；v1.2.0 删掉
+//!     `create_float_window`/`hide_float_window` 两个死命令后实际已是 82，
+//!     本次一并按实测校准。）
 //!   - 2026-10-23 @v1.2.6: 加固 - `default_window_icon().unwrap()` 降级为 `match`。
 //!     图标资源异常时（打包缺失 / 解码失败）旧代码直接 panic，表现为「双击 exe 没反应」；
 //!     现在记一条 warn 并用空图标兜底启动，界面其余部分照常可用。
@@ -47,6 +47,10 @@
 //!     函数数双向比对，两者相等才算数）：**84 → 85**（净 +1）。
 //!     注：上方 v1.2.8 条目写的「85」实为把闭合行 `])` 也数了进去，当时真实值是 **84**。
 //!     本次已按实测更正，不要再引用旧值。后续改命令请同样实地数，不要凭文档递推。
+//!   - 2026-11-02 @v1.2.12: 修复 - 新增 `primary_button_down` 供悬浮条等待原生拖拽真正松手；
+//!     删除 stop_tracking / is_tracking / screenshot_restart_app 三个无消费者命令；当前工作区 IPC 91。
+//!   - 2026-10-30 @v1.2.12: 新增 - `pet/drag.rs` 三平台统一 Rust 拖拽循环与
+//!     `window_bounds.rs` 公共离屏判定；IPC 实测 91。
 //!
 
 mod categorizer;
@@ -882,8 +886,6 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::start_tracking,
-            commands::stop_tracking,
-            commands::is_tracking,
             commands::get_current_foreground,
             commands::get_overview,
             commands::get_daily_summaries,
@@ -954,7 +956,6 @@ pub fn run() {
             screenshot::screenshot_permission_status,
             screenshot::screenshot_request_permission,
             screenshot::screenshot_open_permission_settings,
-            screenshot::screenshot_restart_app,
             // v1.1.1：滑动截长图四件套（screenshot_long_start/capture/finish/cancel）
             // 已**移除** —— 遮罩窗是置顶窗，用户无法滚动它下方的目标窗口，
             // 功能在现有遮罩窗架构内不可达。详见 screenshot/mod.rs 修改历史。
@@ -967,9 +968,12 @@ pub fn run() {
             pet::set_pet_hit_mask,
             pet::set_pet_drag_lock,
             pet::clear_pet_hit_mask,
-            // v1.2.12（批次 2）：Rust 侧拖拽循环（macOS 主方案 / Win·Linux 兜底）
-            // IPC 实测 **91**（本文件 `generate_handler!` 内 `mod::cmd,` 行计数；v1.2.11 是 89，
-            // 本版 +begin_drag +end_drag。别照文档递推 —— 见本文件头 2026-10-25 那条记账纠正）
+            pet::primary_button_down,
+            pet::load_pet_state,
+            pet::save_pet_state,
+            // v1.2.12（批次 2）：三平台统一 Rust 全局光标拖拽循环
+            // 当前工作区 IPC 91：v1.2.12 发布版 91 + 松手检测 1 - 无消费者命令 3 + 桌宠状态 2。
+            // 计数仍以 generate_handler! 实测为准，不按文档递推。
             pet::begin_drag,
             pet::end_drag,
             pet::create_pet_menu_window,

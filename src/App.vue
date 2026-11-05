@@ -440,23 +440,6 @@ onMounted(async () => {
         permDialogReason.value = ev.payload || "not_granted";
       })
     );
-    // v0.9.4：启动预请求完成后仍未授权 → 弹紧凑授权窗。
-    // v1.2.10（2026-10-26）：**Rust 侧已删除启动预请求，本事件在生产路径上不再发出**
-    // （唯一 emit 点随 schedule_startup_permission_request 一起移除）。
-    // 这里仍保留监听做两层兜底：① 用户从旧版升级、旧进程可能还在跑；
-    // ② 将来若在别处重新引入「主动请求后广播」，语义仍然是「只更新状态，不自动弹窗」——
-    //    纯查询引起的状态变化不该抢用户注意力，弹窗只应由「截图被拦」这种明确意图触发。
-    unlisteners.push(
-      await listen<{ reason: string; permitted: boolean }>(
-        "screenshot-permission-changed",
-        (ev) => {
-          if (ev.payload?.permitted) {
-            // 授权已生效：顺手清掉可能残留的弹窗（避免用户授权后仍被挡住）
-            permDialogReason.value = null;
-          }
-        }
-      )
-    );
     // v1.1.0：延时截图倒计时（Rust begin_capture_delayed 每秒发出，payload = 剩余秒数；
     // 0 = 结束或取消）。>0 显示悬浮倒计时，0 收起。Esc 可取消（见下方keydown）。
     unlisteners.push(

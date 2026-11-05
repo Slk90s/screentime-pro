@@ -1,10 +1,14 @@
+<!--
+  设计思路：以卡片集中呈现单日或范围总览指标，按统计口径切换标题及附加信息。
+  修改历史：2026-11-03 @v1.2.12: 新增 - 补充文件头设计说明与修改历史。
+-->
 <template>
   <!-- 总览卡片：单日/范围聚合总使用时长大数字 -->
   <section class="card overview">
     <div class="label">{{ isRange ? t("overview.titleRange", { range }) : t("overview.titleDay") }}</div>
     <div class="big">{{ formatDuration(overview.total_seconds) }}</div>
     <div class="sub">
-      {{ isRange ? t("overview.accumulated") : t("overview.dailyAvg") }} {{ overview.app_count }} {{ t("overview.appUnit") }} · {{ t("overview.mostUsed", { app: overview.most_used_app || "—" }) }}
+      {{ t("overview.accumulated") }} {{ overview.app_count }} {{ t("overview.appUnit") }} · {{ t("overview.mostUsed", { app: overview.most_used_app || "—" }) }}
     </div>
     <div class="stats">
       <div class="stat">

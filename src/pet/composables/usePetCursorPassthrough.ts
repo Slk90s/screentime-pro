@@ -2,13 +2,9 @@
  * pet/composables/usePetCursorPassthrough.ts
  * 鼠标穿透控制 + pet 窗口环境初始化（背景/滚动条）。
  *
- * 设计思路（v0.6.0-beta.1 UI优化版）：
- * - 桌宠默认「接收事件」(passthrough:false)，使拖拽/右键/点击全部可用。
- *   透明空白处会挡住下层点击，但 140×140 小窗是可接受的取舍（QQ 企鹅同理）。
- * - **关键**：全局 style.css 的 body{background:#f5f5f7} 会污染 pet 窗口导致不透，
- *   此处在 mount 时强制将 html/body/#app 背景设为 transparent 并 hidden 滚动条。
- * - Rust 端 create_pet_window 也已默认 set_ignore_cursor_events(false)，双保险。
- * - 后续若要做「只有熊猫身体 alpha 通道接收事件」，Phase 4 改为按坐标动态切换即可。
+ * 设计思路：
+ * - 初始化时允许本窗接收事件；运行期由 usePetHitMask 按身体 alpha 网格动态切穿透。
+ * - 强制覆盖全局 body 背景并隐藏滚动条，保证透明窗体不被默认样式污染。
  *
  * 修改历史：
  *   - 2026-07-17 @v0.6.0-beta.1: 初始创建 - 占位接口（默认全穿透，导致不可交互）

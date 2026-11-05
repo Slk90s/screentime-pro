@@ -49,6 +49,7 @@
  *   - 2026-10-29 @v1.2.12: 重构（批次 2.3/2.5）- 新增 Rust 拖拽循环档；macOS 不再逐帧 IPC；
  *     ③ 档加在途串行化（同一时刻只有一个 move_pet_window 在飞，消除「后发的先到 → 窗口回跳」）；
  *     补回 setPointerCapture（v0.6.2-beta.6 加过、beta.28 重构时丢了）
+ *   - 2026-11-02 @v1.2.12: 修复 - end_drag 回传 Rust generation，迟到的旧收尾不得停掉新会话。
  *   - 2026-10-30 @v1.2.12: 修复（审计 P0-1）- **取消 ① 原生档**，三平台统一走 ② Rust 循环。
  *     原 ① 的 `startDragging()` 同步返回 → 当场读起点写盘（重启跳回拖拽起点）+ onEnd 提前放锁；
  *     且原生档下 pointerup 被模态移动循环吞掉，前端无法在自己这边补救。删掉 `beginNativeDrag`
@@ -89,6 +90,7 @@ export function usePetDrag(
   let originY = 0;
   let moved = false; // 是否已越过拖拽阈值
   let mode: DragMode = 'idle';
+  let rustGeneration = 0;
   // 拖拽会话序号：每次 pointerdown 自增。用于判定「await 回来的那次 begin 是否还算数」——
   // 一次快速的点下-拖动-松开可能让 begin_drag 的 IPC 在松手之后才落到 Rust。
   let dragSeq = 0;
@@ -150,9 +152,11 @@ export function usePetDrag(
     // 本次拖拽的序号：await 期间用户可能已经松手、甚至又开始了下一次拖拽，
     // 靠它判断「回来时这个 begin 还算不算数」（见下方 await 之后的两条判定）。
     const seq = dragSeq;
+    let generation = 0;
     try {
       // 参数名遵循 Tauri v2 约定：Rust 侧 grab_dx → JS 侧传 grabDx
-      await invoke('begin_drag', { grabDx: startX, grabDy: startY });
+      generation = await invoke<number>('begin_drag', { grabDx: startX, grabDy: startY });
+      if (seq === dragSeq) rustGeneration = generation;
     } catch (err) {
       log.warn('[pet] begin_drag 不可用，回退逐帧 move_pet_window', err);
       if (seq === dragSeq) mode = 'manual';
@@ -167,7 +171,7 @@ export function usePetDrag(
     //    end 只是把 running 置 false，随后 begin 又把它置 true 并起线程 → 留下一个
     //    跟着光标永远搬窗的孤儿循环。所以在 begin 落地之后再收，顺序是确定的。
     if (pointerId === null) {
-      void endRustDrag(seq);
+      void endRustDrag(seq, generation);
       return;
     }
     // ② 档不需要 pointermove 搬窗（Rust 读全局光标），但 pointerup 必须由我们收尾 → 监听要在。
@@ -232,9 +236,9 @@ export function usePetDrag(
    * 位置写进 store。位置本身是对的（Rust 回报的是真实终点），但状态机与「新一轮已经开始
    * 搬窗」冲突，所以过期的回报只丢弃、不应用。
    */
-  async function endRustDrag(forSeq: number): Promise<void> {
+  async function endRustDrag(forSeq: number, expectedGeneration = rustGeneration): Promise<void> {
     try {
-      const [x, y] = await invoke<[number, number]>('end_drag');
+      const [x, y] = await invoke<[number, number]>('end_drag', { generation: expectedGeneration });
       if (forSeq !== dragSeq) return; // 已开始新一轮拖拽 → 这份回报作废
       finishDrag(x, y);
     } catch (err) {

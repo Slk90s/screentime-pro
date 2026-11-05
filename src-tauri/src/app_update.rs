@@ -50,6 +50,9 @@
 //! 3. **开发态 `bundle_type()` 是 `None`**（二进制 patch 只在打包时写入
 //!    `__TAURI_BUNDLE_TYPE`）。所以 `cargo run` 下 Linux 会被判为「非 AppImage」
 //!    从而关闭 —— 这是**正确**的保守行为，不是 bug。
+//!
+//! 修改历史：
+//!   - 2026-10-27 @v1.2.11: 新增 - 引入 Tauri updater 签名校验与平台化安装策略。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 

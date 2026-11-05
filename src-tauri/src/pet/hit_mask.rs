@@ -22,6 +22,7 @@
 //! - Linux 光标坐标取自 X11 `query_pointer`，逻辑与前两端一致，属「可微调」范围（未实机验证）。
 //!
 //! 修改历史：
+//!   - 2026-11-02 @v1.2.12: 新增 - `primary_button_down` 全局左键查询；Linux 复用同一 X11 缓存连接。
 //!   - 2026-09-16 @v0.8.0: 初始创建 - alpha 网格掩码 + 全局光标轮询穿透
 //!
 
@@ -247,8 +248,8 @@ pub(crate) fn cursor_native() -> Option<(f64, f64)> {
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn cursor_native() -> Option<(f64, f64)> {
-    // X11：root 窗口下的指针坐标即全屏像素坐标
+fn x11_pointer_state() -> Option<(f64, f64, bool)> {
+    // X11：root 窗口下的指针坐标与左键状态
     use std::cell::RefCell;
     use std::sync::Arc;
     use x11rb::connection::Connection;
@@ -285,10 +286,11 @@ pub(crate) fn cursor_native() -> Option<(f64, f64)> {
         }
     };
 
-    let read = || -> Option<(f64, f64)> {
+    let read = || -> Option<(f64, f64, bool)> {
         let root = conn.setup().roots.get(screen_num)?.root;
         let reply = conn.query_pointer(root).ok()?.reply().ok()?;
-        Some((f64::from(reply.root_x), f64::from(reply.root_y)))
+        let button1 = u16::from(reply.mask) & (1 << 8) != 0;
+        Some((f64::from(reply.root_x), f64::from(reply.root_y), button1))
     };
 
     match read() {
@@ -304,9 +306,45 @@ pub(crate) fn cursor_native() -> Option<(f64, f64)> {
     }
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn cursor_native() -> Option<(f64, f64)> {
+    let (x, y, _) = x11_pointer_state()?;
+    Some((x, y))
+}
+
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 pub(crate) fn cursor_native() -> Option<(f64, f64)> {
     None
+}
+
+/// 查询全局鼠标左键是否仍按下，供原生拖拽等待真正松手。
+#[tauri::command]
+pub fn primary_button_down() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+        // SAFETY: Win32 只读调用，无指针参数或资源所有权。
+        unsafe { GetAsyncKeyState(0x01) < 0 }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        #[link(name = "CoreGraphics", kind = "framework")]
+        extern "C" {
+            fn CGEventSourceButtonState(source: i32, button: u32) -> bool;
+        }
+        // SAFETY: CoreGraphics 只读调用；0 = CombinedSessionState / 左键。
+        unsafe { CGEventSourceButtonState(0, 0) }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        x11_pointer_state()
+            .map(|(_, _, down)| down)
+            .unwrap_or(false)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        false
+    }
 }
 
 /// 统一换算到 Tauri **逻辑坐标**（穿透轮询用）。

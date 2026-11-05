@@ -293,7 +293,7 @@ fn cleanup_old_logs(dir: &Path, keep: usize) {
 /// 文件（比如手动拖入的 `notes.log`）也算成我们的日志占用：
 ///   - 滚动日志：`app.<YYYY-MM-DD>.log`（日期恰好 10 字符 + 前后两个点）
 ///   - 插件日志：`ScreenTime Pro.log`（productName 拼 `.log`）
-/// 识别「本程序写入的日志文件」（导出日志命令 export_logs 复用本函数，保证与 dir_size 一致）
+///     识别「本程序写入的日志文件」（导出日志命令 export_logs 复用本函数，保证与 dir_size 一致）
 pub fn is_our_log_file(name: &str) -> bool {
     // 1) 滚动日志 app.<YYYY-MM-DD>.log
     if let Some(rest) = name.strip_prefix("app.") {

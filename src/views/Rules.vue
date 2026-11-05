@@ -1,8 +1,13 @@
+<!--
+  设计思路：集中管理分类规则的展示、新增、编辑、删除和历史重算，以弹窗承载编辑并保留失败现场。
+  修改历史：2026-11-03 @v1.2.12: 新增 - 补充文件头设计说明与修改历史。
+-->
 <template>
   <!-- 分类规则管理视图
        负责：展示/新增/编辑/删除「自动归类规则」，并一键按规则重算历史数据。
        v0.3.1：新增/编辑改成弹窗（避免长规则看不到完成提醒）
-       注：开机自启开关已移至「设置」页（Settings.vue），此处不再重复。 -->
+       注：开机自启开关已移至「设置」页（Settings.vue），此处不再重复。
+       2026-11-02 @v1.2.12: 修复 - 规则校验或提交失败时保持编辑弹窗，成功后才关闭。 -->
   <div class="rules-view">
     <!-- ============ 规则列表 ============ -->
     <section class="card">
@@ -72,6 +77,7 @@
       :title="editingId === null ? t('rules.createTitle') : t('rules.editTitle', { id: editingId })"
       :confirm-text="editingId === null ? t('rules.addBtn') : t('rules.saveBtn')"
       :cancel-text="t('common.cancel')"
+      :close-on-confirm="false"
       @confirm="submit"
       width="560px"
     >

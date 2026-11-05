@@ -9,6 +9,7 @@
  *
  * 注：Tauri 多窗口 JS 上下文隔离：本 composable 必须挂在 pet 窗口内；其他窗口
  * （主窗口的 Settings）不订阅。
+ * 修改历史：2026-11-03 @v1.2.12: 新增 - 补充文件头修改历史。
  */
 import { onBeforeUnmount, onMounted } from 'vue';
 import { listen } from '@tauri-apps/api/event';

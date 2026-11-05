@@ -1,3 +1,7 @@
+<!--
+  设计思路：用语义名称统一路由 lucide 矢量图标，通过 currentColor 与尺寸属性适配各使用场景。
+  修改历史：2026-11-03 @v1.2.12: 新增 - 补充文件头设计说明与修改历史。
+-->
 <script setup lang="ts">
 // AppIcon —— 统一矢量图标组件（替代 emoji 表情）
 // 使用 lucide-vue-next，24x24 描边风格，颜色继承 currentColor（由容器 CSS color 控制）。

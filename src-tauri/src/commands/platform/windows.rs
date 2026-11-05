@@ -1,5 +1,8 @@
 //! Windows 实现：reveal 走 `explorer /select,`；权限三件套给安全兜底（TCC 是 macOS 概念）；
 //! WebView2 检测走注册表。
+//!
+//! 修改历史：
+//!   - 2026-09-24 @v0.9.7: 重构 - 收口 Windows 文件打开、权限兜底与 WebView2 注册表检测。
 
 use super::{OsOpenBackend, PermissionBackend, Webview2Backend};
 

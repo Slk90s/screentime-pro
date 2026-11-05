@@ -14,6 +14,7 @@
   - 每个皮肤只接收 { state } prop；isDragging / animClass 通过 inheritAttrs 自动落到皮肤根元素
 
   修改历史：
+    - 2026-11-02 @v1.2.12: 修复 - 透传 previewAction，蜘蛛侠点击射蛛丝时创建真实姿势图。
     - 2026-07-24 @v0.6.2: 初始创建 - 皮肤路由器
 -->
 <template>
@@ -22,6 +23,7 @@
     v-if="activeRenderer"
     :key="skinTick"
     :state="state"
+    :preview-action="previewAction"
   />
 </template>
 
@@ -31,7 +33,7 @@ import { skinRegistry } from '../skins/registry';
 import type { PetState } from '../types';
 
 // 透传给皮肤渲染器：state 显式声明（皮肤必须有），其余通过 $attrs 自动 inheritAttrs
-defineProps<{ state: PetState }>();
+defineProps<{ state: PetState; previewAction?: string }>();
 
 // 强制重建键 + 当前渲染器
 const skinTick = ref(0);

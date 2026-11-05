@@ -3,6 +3,9 @@
 //! 取 idle / kernel / user 三个时长；diff 计算使用率。
 //! 用 windows crate 0.58 内置签名（`GetSystemTimes` 位于 `Win32::System::Threading`，
 //! `FILETIME` 位于 `Win32::Foundation`；二者特性均已在 Cargo.toml 启用）。
+//!
+//! 修改历史：
+//!   - 2026-07-28 @v0.6.2-beta.25: 新增 - 基于 GetSystemTimes 差分计算 Windows CPU 使用率。
 
 #![cfg(target_os = "windows")]
 

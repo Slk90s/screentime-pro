@@ -40,6 +40,18 @@ use std::sync::Mutex;
 use crate::classifier::{classify_app, Rule};
 use crate::tracker::platform::RawApp;
 
+/// 单个待写入会话，避免把多个独立字段散成一长串位置参数。
+pub struct NewSession<'a> {
+    pub app_id: i64,
+    pub category_id: &'a str,
+    pub start_rfc3339: &'a str,
+    pub end_rfc3339: &'a str,
+    pub duration: i64,
+    pub date: &'a str,
+    pub window_title: Option<&'a str>,
+    pub device: &'a str,
+}
+
 /// SQLite 封装（bundled 编译，无需系统依赖）
 pub struct AppDb(pub Mutex<Connection>);
 
@@ -176,25 +188,23 @@ impl AppDb {
     /// 即：纯写入、零读取的死数据，白付一倍写放大与 B-tree 维护成本。
     /// 表结构与其 `DELETE` 保留不动（老库兼容 + 将来若真要做预聚合可直接复用）。
     /// 详见 `db::mod` 模块头「daily_summaries 已停写」条。
-    pub fn insert_session(
-        &self,
-        app_id: i64,
-        category_id: &str,
-        start_rfc3339: &str,
-        end_rfc3339: &str,
-        duration: i64,
-        date: &str,
-        window_title: Option<&str>,
-        device: &str,
-    ) -> rusqlite::Result<()> {
+    pub fn insert_session(&self, session: NewSession<'_>) -> rusqlite::Result<()> {
         let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT INTO sessions (app_id, start_at, end_at, duration_seconds, date, window_title, device)
              VALUES (?1,?2,?3,?4,?5,?6,?7)",
-            params![app_id, start_rfc3339, end_rfc3339, duration, date, window_title, device],
+            params![
+                session.app_id,
+                session.start_rfc3339,
+                session.end_rfc3339,
+                session.duration,
+                session.date,
+                session.window_title,
+                session.device
+            ],
         )?;
         // category_id 冗余写入 apps（若用户手动改过分类，以 apps 为准；此处不动）
-        let _ = category_id;
+        let _ = session.category_id;
         Ok(())
     }
 
@@ -305,7 +315,7 @@ impl AppDb {
     ///
     /// - `days == 0`：单日排行（按 `date` 精确匹配，用于「今日 / 点选某天详情」）
     /// - `days > 0`：范围聚合排行（`date >= date('now','-N days')`，用于「近7/14/30天」）
-    /// 两种模式均按 device 过滤（空 device = 全部设备合并）。
+    ///   两种模式均按 device 过滤（空 device = 全部设备合并）。
     pub fn get_app_ranking(
         &self,
         days: u32,
@@ -355,8 +365,8 @@ impl AppDb {
     ///
     /// - `days == 0`：单日总览（按 `date` 精确匹配，用于「今日 / 点选某天详情」）
     /// - `days > 0`：范围聚合总览（`date >= date('now','-N days')`，用于「近7/14/30天」）
-    /// 两种模式均按 device 过滤（空 device = 全部设备合并）。
-    /// 范围模式额外计算 `avg_daily_seconds`（按有数据的实际天数均摊）。
+    ///   两种模式均按 device 过滤（空 device = 全部设备合并）。
+    ///   范围模式额外计算 `avg_daily_seconds`（按有数据的实际天数均摊）。
     pub fn get_overview(
         &self,
         days: u32,
@@ -651,29 +661,20 @@ impl AppDb {
     }
 
     /// 更新规则（按 id）
-    pub fn update_rule(
-        &self,
-        id: i64,
-        field: &str,
-        match_type: &str,
-        pattern: &str,
-        category_id: &str,
-        priority: i32,
-        enabled: bool,
-    ) -> rusqlite::Result<()> {
+    pub fn update_rule(&self, rule: &RuleOut) -> rusqlite::Result<()> {
         let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE classification_rules
              SET field=?2, match_type=?3, pattern=?4, category_id=?5, priority=?6, enabled=?7
              WHERE id=?1",
             params![
-                id,
-                field,
-                match_type,
-                pattern,
-                category_id,
-                priority,
-                if enabled { 1i64 } else { 0i64 }
+                rule.id,
+                rule.field,
+                rule.match_type,
+                rule.pattern,
+                rule.category_id,
+                rule.priority,
+                if rule.enabled { 1i64 } else { 0i64 }
             ],
         )?;
         Ok(())
@@ -934,10 +935,16 @@ impl AppDb {
             }
         }
 
+        drop(dev_stmt);
+        drop(stmt2);
+        drop(stmt);
+        let pet_state = self.get_setting_result("pet_state")?;
+
         Ok(ExportBundle {
             version: 1,
             exported_at: Local::now().to_rfc3339(),
             devices,
+            pet_state,
             apps,
             sessions,
         })
@@ -953,6 +960,13 @@ impl AppDb {
             conn.execute(
                 "INSERT INTO settings (key, value) VALUES (?1,?2) ON CONFLICT(key) DO NOTHING",
                 params![format!("device_name:{}", id), name],
+            )?;
+        }
+        if let Some(json) = &bundle.pet_state {
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('pet_state', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                params![json],
             )?;
         }
         // 先 upsert 应用（按 process_name+platform 去重，与设备无关）
@@ -1055,6 +1069,11 @@ impl AppDb {
 
     /// 读取配置项（不存在返回 None）
     pub fn get_setting(&self, key: &str) -> Option<String> {
+        self.get_setting_result(key).ok().flatten()
+    }
+
+    /// 读取配置项并保留数据库错误，迁移流程不得把错误当成“尚未迁移”。
+    pub fn get_setting_result(&self, key: &str) -> rusqlite::Result<Option<String>> {
         let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
             "SELECT value FROM settings WHERE key=?1",
@@ -1062,8 +1081,16 @@ impl AppDb {
             |r| r.get(0),
         )
         .optional()
-        .ok()
-        .flatten()
+    }
+
+    /// 只在配置不存在时写入，避免多窗口用旧快照覆盖新状态。
+    pub fn set_setting_if_absent(&self, key: &str, value: &str) -> rusqlite::Result<bool> {
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let changed = conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1,?2) ON CONFLICT(key) DO NOTHING",
+            params![key, value],
+        )?;
+        Ok(changed > 0)
     }
 
     /// 写入/覆盖配置项
@@ -1272,7 +1299,7 @@ impl AppDb {
             });
         }
         // 按总秒数倒序，最活跃的排前面
-        out.sort_by(|a, b| b.total_seconds.cmp(&a.total_seconds));
+        out.sort_by_key(|a| std::cmp::Reverse(a.total_seconds));
         Ok(out)
     }
 }

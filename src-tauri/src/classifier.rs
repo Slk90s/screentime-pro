@@ -14,6 +14,10 @@
 //! - 历史踩坑（v0.6.2-beta.17）：旧版 `equals: value == rule.pattern` 中
 //!   `value` 已 lowered，`rule.pattern` 未 lowered，导致 WorkBuddy 等
 //!   进程的自动规则被创建后却不参与分类 → 用户看到"规则没生效"
+//!
+//! 修改历史：
+//!   - 2026-07-08 @v0.2.0: 新增 - 引入按优先级匹配的可配置应用分类规则。
+//!   - 2026-07-25 @v0.6.2-beta.17: 修复 - 统一匹配值大小写，避免 equals 规则无法命中。
 
 use crate::tracker::platform::RawApp;
 
@@ -57,7 +61,7 @@ pub fn classify_app(app: &RawApp, rules: &[Rule]) -> String {
 
     // 仅评估启用中的规则，按优先级降序；高优先级先匹配先返回
     let mut ordered: Vec<&Rule> = rules.iter().filter(|r| r.enabled).collect();
-    ordered.sort_by(|a, b| b.priority.cmp(&a.priority));
+    ordered.sort_by_key(|a| std::cmp::Reverse(a.priority));
 
     for rule in ordered {
         if let Some(value) = fields

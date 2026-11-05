@@ -3,17 +3,15 @@
  * 3D 桌宠「表情（emoji 浮层）」自定义（v0.6.2-beta.6 新增）。
  *
  * 背景：
- * - v0.6.2 起桌宠皮肤为 Pop Mart 3D（popmart3d），状态差异通过 emoji 浮层表达（见 PopMartPandaPet.vue 的 STATE_BADGES）
- * - 此前编辑器只对 2D 部件合成有意义；3D 皮肤不消费 spriteLayout/usePetSprites
- * - 本模块让用户按状态自定义 emoji 表情，编辑器（主窗口）与实时桌宠（pet 窗口）通过
- *   `pet-custom-updated` 事件 + reloadConfig 跨窗口同步（与 2D 自定义素材同一机制）
+ * - 3D 皮肤通过 emoji 浮层表达状态差异。
+ * - 编辑器（主窗口）与实时桌宠（pet 窗口）通过 `pet-custom-updated` 事件同步。
  *
  * 存储：
  * - localStorage key `pet_custom_badges`：{ [state]: string }，value 为 emoji 串（可含多个字形，按 grapheme 切分）
  * - 默认回退：无自定义时使用 PopMartPandaPet.vue 内置 STATE_BADGES
  *
  * 设计要点：
- * - reactive 单例 + deep watch 自动持久化（与 usePetSprites 同构）
+ * - reactive 单例 + deep watch 自动持久化
  * - reloadConfig() 不持久化、不重发事件（事件循环防护，见 MEMORY 跨窗口同步范式）
  *
  * 修改历史：

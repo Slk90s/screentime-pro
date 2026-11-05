@@ -60,6 +60,8 @@
 //!   - 2026-10-29 @v1.2.12: 新增 - 批次 2.1/2.2/2.4/2.5/2.6
 //!   - 2026-10-30 @v1.2.12: 修订（审计 P0-1 / P1-1）- ① 全链路改平台原生坐标，消除跨 DPI 屏的
 //!     scale 分叉；② 成为三平台唯一拖拽实现（原生档已删，见上「单一形态」）
+//!   - 2026-10-30 @v1.2.12: 重构 - 统一三平台 Rust 拖拽并采用平台原生坐标，修复跨 DPI 偏移。
+//!   - 2026-11-02 @v1.2.12: 修复 - end 使用终点屏幕 scale；frame 锁隔离最后一帧；会话号不匹配的旧 end 不停新会话。
 //!
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -135,11 +137,13 @@ pub struct PetDragState {
     generation: AtomicU64,
     /// 当前是否有会话在跑：`end_drag` 置 false，循环据此收尾
     running: AtomicBool,
+    /// 串行化「最后一帧投递 + 目标记录」与 `end_drag` 的终点读取/离屏纠偏。
+    frame: Mutex<()>,
     /// 抓取偏移 = 光标 − 窗口左上角（**原生坐标**）。前端给的是逻辑像素
     /// （`clientX/clientY`），在 `begin_drag` 里用 `logical_to_native` 转一次。
     grab_native: Mutex<(f64, f64)>,
-    /// 窗口 scale factor：begin 时读一次。**循环内禁止再查 getter**（会阻塞等主线程）。
-    /// 只在两头用到：begin 换算 grab、end 换算回报值。
+    /// begin 时的窗口 scale factor，仅用于换算抓取偏移；end 改读终点屏幕的 live scale。
+    /// **循环内禁止再查 getter**（会阻塞等主线程）。
     scale: Mutex<f64>,
     /// 循环最后一次应用的窗口左上角（**原生坐标**）；`end_drag` 据此回报，不去查询窗口
     last_target: Mutex<Option<(f64, f64)>>,
@@ -158,6 +162,15 @@ fn should_send(last: Option<(f64, f64)>, next: (f64, f64)) -> bool {
     match last {
         None => true,
         Some((lx, ly)) => (next.0 - lx).abs() >= DRAG_EPS || (next.1 - ly).abs() >= DRAG_EPS,
+    }
+}
+
+/// 收尾必须使用终点显示器的 scale；getter 失败时才回退到 begin 的缓存值。
+fn end_scale(live: Option<f64>, cached: f64) -> f64 {
+    match live {
+        Some(s) if s > 0.0 => s,
+        _ if cached > 0.0 => cached,
+        _ => 1.0,
     }
 }
 
@@ -192,17 +205,21 @@ pub fn begin_drag(
     // 抓取偏移在这里**一次性**转成原生坐标：前端给逻辑值，循环里的光标是原生坐标。
     // 转换只做这一次，跨 DPI 屏时 live scale 再怎么变，循环内的加减法都不受影响
     // （旧实现在每帧换算，而除用的 scale 与乘用的 live scale 不同源 → 位移被放大）。
-    *state.grab_native.lock().unwrap_or_else(|e| e.into_inner()) = (
-        logical_to_native(grab_dx, scale),
-        logical_to_native(grab_dy, scale),
-    );
-    *state.scale.lock().unwrap_or_else(|e| e.into_inner()) = scale;
-    *state.size_logical.lock().unwrap_or_else(|e| e.into_inner()) = (size.width, size.height);
-    *state.last_target.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    // 先自增会话号、再置 running：反过来会给旧线程留一个「看到旧号 + 新旗子」的窗口，
-    // 它会在收尾时把新会话的 running 抹成 false（拖拽当场失效）。
-    let my_gen = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
-    state.running.store(true, Ordering::SeqCst);
+    let my_gen = {
+        let _frame = state.frame.lock().unwrap_or_else(|e| e.into_inner());
+        *state.grab_native.lock().unwrap_or_else(|e| e.into_inner()) = (
+            logical_to_native(grab_dx, scale),
+            logical_to_native(grab_dy, scale),
+        );
+        *state.scale.lock().unwrap_or_else(|e| e.into_inner()) = scale;
+        *state.size_logical.lock().unwrap_or_else(|e| e.into_inner()) = (size.width, size.height);
+        *state.last_target.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        // 先自增会话号、再置 running：反过来会给旧线程留一个「看到旧号 + 新旗子」的窗口，
+        // 它会在收尾时把新会话的 running 抹成 false（拖拽当场失效）。
+        let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        state.running.store(true, Ordering::SeqCst);
+        generation
+    };
 
     let app_for_thread = app.clone();
     std::thread::Builder::new()
@@ -219,6 +236,7 @@ pub fn begin_drag(
 }
 
 /// 结束拖拽：停循环，回报**最终位置（逻辑像素）**给前端写持久化。
+/// 传入 generation 时只允许同会话收尾，避免迟到的 end 停掉新会话。
 ///
 /// 返回的是循环自己记录的最后一个目标值（经离屏纠偏后），不是查询窗口的结果 ——
 /// `set_position` 是异步投递，刚投出去的那几帧可能还没落到 NSWindow 上，
@@ -227,21 +245,34 @@ pub fn begin_drag(
 pub fn end_drag(
     app: AppHandle,
     state: tauri::State<'_, PetDragState>,
+    generation: Option<u64>,
 ) -> Result<(f64, f64), String> {
-    state.running.store(false, Ordering::SeqCst);
     let window = app
         .get_webview_window(PET_WINDOW_LABEL)
         .ok_or_else(|| "pet 窗口尚未创建".to_string())?;
-
-    let last = *state.last_target.lock().unwrap_or_else(|e| e.into_inner());
-    let scale = {
-        let cached = *state.scale.lock().unwrap_or_else(|e| e.into_inner());
-        if cached > 0.0 {
-            cached
-        } else {
-            window.scale_factor().unwrap_or(1.0)
+    if let Some(expected) = generation {
+        let current = state.generation.load(Ordering::SeqCst);
+        if current != expected {
+            let scale = end_scale(window.scale_factor().ok(), 1.0);
+            let p = window
+                .outer_position()
+                .map_err(|e| format!("读取桌宠窗口位置失败: {e}"))?
+                .to_logical::<f64>(scale);
+            return Ok((p.x.round(), p.y.round()));
         }
+    }
+    let end_generation = state.generation.load(Ordering::SeqCst);
+    state.running.store(false, Ordering::SeqCst);
+    // 等最后一帧完成后取快照；窗口 getter 一律在锁外执行。
+    let (last, cached_scale, cached_size) = {
+        let _frame = state.frame.lock().unwrap_or_else(|e| e.into_inner());
+        (
+            *state.last_target.lock().unwrap_or_else(|e| e.into_inner()),
+            *state.scale.lock().unwrap_or_else(|e| e.into_inner()),
+            *state.size_logical.lock().unwrap_or_else(|e| e.into_inner()),
+        )
     };
+    let scale = end_scale(window.scale_factor().ok(), cached_scale);
     // 循环记的是**原生坐标**；前端持久化的是逻辑像素，这里用 `native_to_logical` 统一换算一次
     // （与 begin 里的 `logical_to_native` 严格互逆）。
     // 一帧都没发过（按下立刻松手 / 光标读取全程失败）→ 窗口没动，问它自己在哪。
@@ -261,9 +292,8 @@ pub fn end_drag(
     // 拖拽**过程中**故意不做纠偏 —— 每帧纠偏会让窗口在用户手里弹跳。
     // 枚举显示器失败时整段跳过：宁可不纠偏，也不要凭「猜不到的屏幕布局」把窗口挪走。
     let size = {
-        let cached = *state.size_logical.lock().unwrap_or_else(|e| e.into_inner());
-        if cached.0 > 0.0 && cached.1 > 0.0 {
-            cached
+        if cached_size.0 > 0.0 && cached_size.1 > 0.0 {
+            cached_size
         } else {
             // 没跑过 begin_drag（例如前端只补发了一次 end_drag）→ 现查一次
             window
@@ -290,15 +320,21 @@ pub fn end_drag(
                 FallbackCorner::BottomRight,
                 DRAG_MARGIN,
             ) {
-                // 回落到物理坐标 → 换算回逻辑像素回报前端（前端存的就是逻辑像素）
-                x = f64::from(rx) / scale;
-                y = f64::from(ry) / scale;
-                tracing::info!(
-                    physical_x = rx,
-                    physical_y = ry,
-                    "拖拽结束时桌宠落在所有显示器之外，已贴回主屏右下角"
-                );
-                let _ = window.set_position(tauri::PhysicalPosition::new(rx, ry));
+                let should_apply = {
+                    let _frame = state.frame.lock().unwrap_or_else(|e| e.into_inner());
+                    state.generation.load(Ordering::SeqCst) == end_generation
+                };
+                if should_apply {
+                    // 回落到物理坐标 → 换算回逻辑像素回报前端（前端存的就是逻辑像素）
+                    x = f64::from(rx) / scale;
+                    y = f64::from(ry) / scale;
+                    tracing::info!(
+                        physical_x = rx,
+                        physical_y = ry,
+                        "拖拽结束时桌宠落在所有显示器之外，已贴回主屏右下角"
+                    );
+                    let _ = window.set_position(tauri::PhysicalPosition::new(rx, ry));
+                }
             }
         }
     }
@@ -336,6 +372,13 @@ fn drag_loop(app: AppHandle, my_gen: u64) {
             Some(w) => w,
             None => break, // 窗口没了，没什么可搬的
         };
+        let _frame = state.frame.lock().unwrap_or_else(|e| e.into_inner());
+        // end_drag 可能在取光标后到来；进入临界区后必须再确认会话仍有效。
+        if state.generation.load(Ordering::SeqCst) != my_gen
+            || !state.running.load(Ordering::Relaxed)
+        {
+            break;
+        }
         // 非主线程调用安全（见模块头「线程约束」）：内部是 proxy 投递，不碰 AppKit。
         // `apply_position` 按平台选 Physical/Logical，使投递值恰好等于本平台原生坐标 ——
         // 跨 DPI 屏时不会被再缩放一次。
@@ -416,5 +459,15 @@ mod tests {
         }
         // 非法 scale 不能把坐标算成 NaN / 0 —— `native_to_logical` 要退化到恒等
         assert_eq!(native_to_logical(123.0, 0.0), 123.0);
+    }
+
+    /// 跨到另一块 DPI 屏后，持久化必须使用终点屏幕的 scale，而不是开始屏的缓存值。
+    #[test]
+    fn end_scale_prefers_the_destination_monitor() {
+        assert_eq!(end_scale(Some(1.5), 1.0), 1.5);
+        assert_eq!(end_scale(Some(2.0), 1.25), 2.0);
+        assert_eq!(end_scale(None, 1.25), 1.25);
+        assert_eq!(end_scale(Some(0.0), 1.5), 1.5);
+        assert_eq!(end_scale(None, 0.0), 1.0);
     }
 }

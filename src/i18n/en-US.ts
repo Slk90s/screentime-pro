@@ -1,3 +1,7 @@
+/**
+ * 设计思路：提供与中文词表相同语义键结构的英文词条，保证界面文案可整体切换。
+ * 修改历史：2026-11-03 @v1.2.12: 新增 - 补充文件头设计说明与修改历史。
+ */
 // English messages (fallback: zh-CN)
 export default {
   common: {
@@ -293,6 +297,10 @@ export default {
     statusBarShowMem: "Show memory usage",
     // v0.7.7 (2026-09-10): disk usage (system volume)
     statusBarShowDisk: "Show disk usage",
+    diskScope: "Disk scope",
+    diskScopeSystem: "System volume only",
+    diskScopeAll: "All local volumes combined",
+    diskScopeHint: "Choose system volume, all volumes, or a mount point for the float bar. Falls back to the system volume if unavailable.",
     statusBarShowNet: "Show network speed",
     statusBarOn: "Enabled",
     statusBarOff: "Disabled",

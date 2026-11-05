@@ -2,6 +2,7 @@
  * tracker.ts
  * 设计思路：前端与 Rust 后端的通信封装。双模运行——Tauri 内通过 `invoke` 调用真实 Rust 命令，
  * 普通浏览器内（仅看 UI / 调试）自动走 `mock` 假数据，使前端可脱离 Rust 编译单独预览。
+ * 修改历史：2026-11-03 @v1.2.12: 新增 - 清理无消费者命令并透传多盘字段。
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -71,8 +72,6 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 
 export const tracker = {
   start: () => call<boolean>("start_tracking"),
-  stop: () => call<boolean>("stop_tracking"),
-  isTracking: () => call<boolean>("is_tracking"),
   current: () => call<CurrentForegroundOut>("get_current_foreground"),
   overview: (days: number, date: string, device?: string) =>
     call<OverviewOut>("get_overview", { days, date, device: device ?? null }),
@@ -182,7 +181,7 @@ export const tracker = {
     categoryId: string;
     priority: number;
     enabled: boolean;
-  }) => call<boolean>("update_rule", r),
+  }) => call<boolean>("update_rule", { rule: r }),
   deleteRule: (id: number) => call<boolean>("delete_rule", { id }),
   reclassify: () => call<number>("reclassify_all"),
   setAutostart: (enabled: boolean) => call<boolean>("set_autostart", { enabled }),

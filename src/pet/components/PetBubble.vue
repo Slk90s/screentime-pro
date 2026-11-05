@@ -11,6 +11,7 @@
   - 2.5s 后自动淡出（CSS transition）+ 父组件卸载
   - 字体: -apple-system，圆角白底深色字，带小三角指向桌宠
   - 不挡角色（容器在角色上方 6px，远离角色身体）
+  修改历史：2026-11-03 @v1.2.12: 新增 - 补充文件头修改历史。
 -->
 <template>
   <Transition name="bubble-fade">

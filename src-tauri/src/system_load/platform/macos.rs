@@ -7,6 +7,10 @@
 //! - v0.7.7：statfs 必须按真实 2168 字节结构体接收（旧 `[0u8; 256]` 栈越界写 → 崩溃）
 //! - v0.7.7：vm_statistics64 按字段名读取 + `size_of` 静态断言锁死 152 字节布局
 //!   布局若漂移，编译期断言直接失败，而不是用户机器上再次越界写
+//!
+//! 修改历史：
+//!   - 2026-09-23 @v0.9.7: 重构 - 从 metrics.rs 拆出 macOS 内存与磁盘 FFI，并保留布局护栏。
+//!   - 2026-10-29 @v1.2.12: 修复 - 磁盘改用 f_bavail 并保留只读系统卷，统一用户可用量口径。
 
 use super::{DiskVolume, MetricsBackend};
 use crate::system_load::metrics::MetricsInner;
@@ -283,7 +287,6 @@ fn macos_volume_selected(fs_type: &str, mount: &str, flags: u32) -> bool {
 ///
 /// ⚠️ `getfsstat` 的 `bufsize` 参数是**字节数**，且结构体是 **2168 字节**（见 `StatFs` 断言）。
 /// 传 `[0u8; 256]` 之类的裸缓冲会越界写（v0.7.7 崩溃根因），这里用 `Vec<StatFs>` 保证尺寸。
-#[allow(dead_code)] // v1.2.13 接入多盘调用方后删除（详见 platform/mod.rs 的 DiskVolume 文档）
 fn ffi_read_disks() -> Vec<DiskVolume> {
     const MNT_NOWAIT: i32 = 2;
 

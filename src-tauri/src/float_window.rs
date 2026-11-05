@@ -29,20 +29,20 @@
 //!     1/3 宽时回落到主屏右上角。纯 Rust 兜底，不依赖前端能否枚举显示器。
 //!   - 2026-10-21 @v1.2.2: 重构 - 高度改为「模式相关」动态取值，接液态玻璃。
 //!     ① FLOAT_HEIGHT 保留为普通模式高度（36），新增 FLOAT_HEIGHT_GLASS（44）+ 玻璃圆角；
-//!        实际取值统一走 `float_glass::height_for(glass)`，本文件不再直接读 FLOAT_HEIGHT。
+//!     实际取值统一走 `float_glass::height_for(glass)`，本文件不再直接读 FLOAT_HEIGHT。
 //!     ② **关键**：`resize_float_window` 原先把高度写死成 FLOAT_HEIGHT，而该命令被前端
-//!        `fitWidth()` 每秒调用（1Hz tick + ResizeObserver）——玻璃模式一开，下一秒就被
-//!        压回 36px。现改为按 AppState 里的 `status_bar_config.float_glass` 取值。
+//!     `fitWidth()` 每秒调用（1Hz tick + ResizeObserver）——玻璃模式一开，下一秒就被
+//!     压回 36px。现改为按 AppState 里的 `status_bar_config.float_glass` 取值。
 //!     ③ `ensure_float_window` 不负责材质：conf 已预创建 float 窗口，本函数开头的
-//!        `if exists { return Ok(()) }` 会早返回，材质若放这里永远不生效。
-//!        材质由调用方（commands / lib）在 ensure 之后经 `float_glass::apply_via_app` 应用。
+//!     `if exists { return Ok(()) }` 会早返回，材质若放这里永远不生效。
+//!     材质由调用方（commands / lib）在 ensure 之后经 `float_glass::apply_via_app` 应用。
 //!   - 2026-10-29 @v1.2.12: 重构 - 离屏纠偏判定搬到公共 util `window_bounds`（整改 1.3）。
 //!     桌宠的位置存在**同一类** localStorage 绝对坐标里、却完全没防，v1.2.1 那个根因在它身上
 //!     会原样复发；两处共用一套判定才不会各修各的。本文件保留同名私有函数作薄封装（只传
 //!     「右上角 + 24px 边距」两个 float 专属参数），三个调用点不动。判定顺带变严格：从只看
 //!     水平重叠改成两轴各 1/3，且枚举显示器失败时从静默 return 改成 warn 日志。
 
-use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager};
 
 use crate::float_glass;
 
@@ -94,35 +94,9 @@ fn current_height(app: &AppHandle) -> f64 {
 /// visible=false 创建；显隐统一走 set_float_visible（透明空窗即使 show 也不可见，
 /// 因此不存在「先 show 再加载」的白闪问题）
 pub fn ensure_float_window(app: &AppHandle) -> Result<(), String> {
-    if app.get_webview_window(FLOAT_WINDOW_LABEL).is_some() {
-        return Ok(());
-    }
-    // v1.2.2：创建时就按当前模式定高，避免"先 36 后 44"的二次调整
-    let h = current_height(app);
-    let window = WebviewWindowBuilder::new(
-        app,
-        FLOAT_WINDOW_LABEL,
-        WebviewUrl::App("index.html".into()),
-    )
-    .title("ScreenTime Float")
-    .inner_size(FLOAT_INITIAL_WIDTH, h)
-    .min_inner_size(FLOAT_MIN_WIDTH, h)
-    .resizable(false)
-    .maximizable(false)
-    .minimizable(false)
-    .closable(false)
-    .decorations(false)
-    .transparent(true)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .shadow(false)
-    .focused(false)
-    .visible(false)
-    .build()
-    .map_err(|e| format!("创建悬浮指标条失败: {e}"))?;
-    let _ = window.set_ignore_cursor_events(false); // 可交互（整条拖拽）
-    tracing::info!("悬浮指标条窗口创建成功");
-    Ok(())
+    app.get_webview_window(FLOAT_WINDOW_LABEL)
+        .map(|_| ())
+        .ok_or_else(|| "float 窗口未由 tauri.conf.json 预创建".to_string())
 }
 
 /// **离屏纠偏**（v1.2.1）：窗口若与所有显示器都「几乎不相交」，则移回主屏右上默认位。
@@ -184,19 +158,54 @@ pub async fn show_float_window(app: AppHandle) -> Result<(), String> {
     set_float_visible(&app, true)
 }
 
-/// 移动浮窗到屏幕绝对坐标（逻辑像素；前端拖拽结束 / 恢复位置时调用）
+/// 在写入前用目标矩形做纯函数纠偏，避免 set 后立即 getter 读到混合快照。
+fn visible_target(
+    window: &tauri::WebviewWindow,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    scale: f64,
+) -> (f64, f64) {
+    let scale = if scale > 0.0 { scale } else { 1.0 };
+    let result = (|| {
+        let monitors = crate::window_bounds::monitor_rects(window)?;
+        let primary = crate::window_bounds::primary_rect(window, &monitors)?;
+        let rect = crate::window_bounds::rect_from_logical(x, y, width, height, scale);
+        Ok::<_, String>(crate::window_bounds::offscreen_target(
+            rect,
+            &monitors,
+            primary,
+            crate::window_bounds::FallbackCorner::TopRight,
+            FLOAT_OFFSCREEN_MARGIN,
+        ))
+    })();
+    match result {
+        Ok(Some((px, py))) => (f64::from(px) / scale, f64::from(py) / scale),
+        Ok(None) => (x, y),
+        Err(e) => {
+            tracing::warn!(error = %e, "悬浮指标条目标位置纠偏跳过");
+            (x, y)
+        }
+    }
+}
+
+/// 移动浮窗到屏幕绝对坐标；返回实际落点供前端持久化。
 #[tauri::command]
-pub async fn move_float_window(app: AppHandle, x: f64, y: f64) -> Result<(), String> {
+pub async fn move_float_window(app: AppHandle, x: f64, y: f64) -> Result<(f64, f64), String> {
     let window = app
         .get_webview_window(FLOAT_WINDOW_LABEL)
         .ok_or_else(|| "float 窗口尚未创建".to_string())?;
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let size = window
+        .outer_size()
+        .map_err(|e| format!("读取悬浮指标条尺寸失败: {e}"))?;
+    let logical = size.to_logical::<f64>(scale);
+    let (tx, ty) = visible_target(&window, x, y, logical.width, logical.height, scale);
     window
-        .set_position(LogicalPosition::new(x, y))
+        .set_position(LogicalPosition::new(tx, ty))
         .map_err(|e| format!("移动悬浮指标条失败: {e}"))?;
-    // 恢复 localStorage 旧位置时可能落在已移除的副屏上；set 完立即纠偏，
-    // 否则 onMounted 的 applyPosition 会把 show 前的 clamp 成果再拉回屏幕外（v1.2.1）
-    clamp_to_visible_area(&window);
-    Ok(())
+    Ok((tx.round(), ty.round()))
 }
 
 /// 按内容自适应调整浮窗宽度（逻辑像素；前端测量 DOM 宽度后调用）
@@ -212,14 +221,13 @@ pub async fn move_float_window(app: AppHandle, x: f64, y: f64) -> Result<(), Str
 /// 现按 `status_bar_config.float_glass` 取 `float_glass::height_for()`。
 /// 高度变化时**顶部锚定**（只改 x 与 size，不改 y），窗口向下生长，符合"贴屏幕右上"预期。
 #[tauri::command]
-pub async fn resize_float_window(app: AppHandle, width: f64) -> Result<(), String> {
+pub async fn resize_float_window(app: AppHandle, width: f64) -> Result<(f64, f64), String> {
     let window = app
         .get_webview_window(FLOAT_WINDOW_LABEL)
         .ok_or_else(|| "float 窗口尚未创建".to_string())?;
     let target_w = width.max(FLOAT_MIN_WIDTH);
     let target_h = current_height(&app);
     let scale = window.scale_factor().unwrap_or(1.0);
-    // 当前物理尺寸/位置 → 换算成逻辑坐标做锚定
     let (cur_w, cur_h) = window
         .inner_size()
         .map(|s| {
@@ -227,20 +235,24 @@ pub async fn resize_float_window(app: AppHandle, width: f64) -> Result<(), Strin
             (l.width, l.height)
         })
         .unwrap_or((FLOAT_INITIAL_WIDTH, target_h));
-    // 宽高都无变化才免调整，避免无谓的 set_size/set_position 抖动
     if (cur_w - target_w).abs() < 0.5 && (cur_h - target_h).abs() < 0.5 {
-        return Ok(());
+        let pos = window
+            .outer_position()
+            .map_err(|e| format!("读取悬浮指标条位置失败: {e}"))?
+            .to_logical::<f64>(scale);
+        return Ok((pos.x.round(), pos.y.round()));
     }
-    if let Ok(pos) = window.outer_position() {
-        let logical = pos.to_logical::<f64>(scale);
-        // 右锚定：宽度变小时窗口左边缘右移，保持右上角不动
-        let new_x = logical.x + (cur_w - target_w);
-        let _ = window.set_position(LogicalPosition::new(new_x, logical.y));
-    }
+    let pos = window
+        .outer_position()
+        .map_err(|e| format!("读取悬浮指标条位置失败: {e}"))?
+        .to_logical::<f64>(scale);
+    let next_x = pos.x + (cur_w - target_w);
+    let (tx, ty) = visible_target(&window, next_x, pos.y, target_w, target_h, scale);
+    window
+        .set_position(LogicalPosition::new(tx, ty))
+        .map_err(|e| format!("锚定悬浮指标条位置失败: {e}"))?;
     window
         .set_size(LogicalSize::new(target_w, target_h))
         .map_err(|e| format!("调整悬浮指标条尺寸失败: {e}"))?;
-    // 锚定后再兜底一次：异常初始位置/尺寸组合下右锚定可能把窗口送出屏（v1.2.1）
-    clamp_to_visible_area(&window);
-    Ok(())
+    Ok((tx.round(), ty.round()))
 }

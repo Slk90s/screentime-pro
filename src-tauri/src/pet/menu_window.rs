@@ -19,44 +19,17 @@
 //! 修改历史：
 //!   - 2026-07-25 @v0.6.2-beta.17: 初始创建 - 解决菜单无法在桌面自由拖拽
 
-use tauri::{AppHandle, Emitter, LogicalPosition, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, LogicalPosition, Manager};
 
 /// 桌宠右键菜单窗口的固定 label（与 tauri.conf.json 的 windows[].label 一致）
 pub const PET_MENU_WINDOW_LABEL: &str = "pet-menu";
 
-/// 创建 pet-menu 窗口（若已存在则忽略并返回 Ok，幂等）
-///
-/// 窗口初始大小 280×600（兼容现有菜单内容高度），按需可由前端 move_pet_menu_window 改位。
-/// `transparent`+`decorations(false)`+`always_on_top`+`skip_taskbar`，与 pet 本体一致。
+/// 幂等复用 `tauri.conf.json` 预创建的 pet-menu 窗口；不存在时明确报错。
 #[tauri::command]
 pub async fn create_pet_menu_window(app: AppHandle) -> Result<(), String> {
-    if app.get_webview_window(PET_MENU_WINDOW_LABEL).is_some() {
-        return Ok(());
-    }
-
-    let window = WebviewWindowBuilder::new(
-        &app,
-        PET_MENU_WINDOW_LABEL,
-        WebviewUrl::App("index.html".into()),
-    )
-    .title("ScreenTime Pet Menu")
-    .inner_size(300.0, 620.0)
-    // 不设 min/max 限制，让前端按需调整
-    .resizable(false)
-    .decorations(false)
-    .transparent(true)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .shadow(false)
-    .focused(false)
-    .visible(false) // 默认隐藏，等前端 show_pet_menu_window 才显示
-    .build()
-    .map_err(|e| format!("创建 pet 菜单窗口失败: {e}"))?;
-
-    // 菜单窗口必须接收事件（拖动 + 按钮），所以默认**不穿透**
-    let _ = window.set_ignore_cursor_events(false);
-    tracing::info!("pet-menu 窗口创建成功");
-    Ok(())
+    app.get_webview_window(PET_MENU_WINDOW_LABEL)
+        .map(|_| ())
+        .ok_or_else(|| "pet-menu 窗口未由 tauri.conf.json 预创建".to_string())
 }
 
 /// 显示 pet-menu 窗口（不改变位置）

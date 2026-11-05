@@ -10,9 +10,11 @@
  *   ① Windows 装完后进程**立即退出**（updater 内部 `process::exit(0)`），
  *      `install()` 的 Promise **永远不会 resolve**。所以不要写「安装成功」提示。
  *   ② Linux 装完由 Rust 侧调用 `app.restart()`，Promise 会 resolve，但紧接着进程重启。
+ * 修改历史：2026-11-03 @v1.2.12: 新增 - 补充文件头修改历史。
  */
 
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { isTauri } from "./tracker";
 
 /** 下载进度（Rust 侧 `DownloadProgress` 的镜像）。 */
 export interface DownloadProgress {
@@ -39,7 +41,7 @@ export interface AppUpdate {
  * 一句「不支持」是多余的一次失败交互。
  */
 export function isSupported(): Promise<boolean> {
-  return invoke<boolean>("app_update_supported");
+  return isTauri ? invoke<boolean>("app_update_supported") : Promise.resolve(false);
 }
 
 /** 查询是否有可安装的新版本。`null` = 已是最新 / 本平台不支持。 */

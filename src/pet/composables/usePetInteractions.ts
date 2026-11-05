@@ -7,10 +7,11 @@
  * - 三种动画分别映射到 happy / sad / angry + 各自 CSS 动画名，由 lastClickIndex 轮转。
  * - 单击 *头* 取 happy 基底（仍走 happy）但动画随机；单击 *身体* 取 angry 基底。
  * - 单击、双击、长按动作分离：单击轮流 / 双击固定 spin-burst / 长按固定心疼 shrink。
- * - 状态临时覆盖 1.4s 后回到 idle（不打断自动监听）。
+ * - 状态临时覆盖后恢复反应前的 override；用户期间手动改状态不被回滚。
  * - v0.6.2-beta.31：皮肤感知——蜘蛛侠皮肤下单击轮转额外加入 pet-anim-web（跳起射蛛丝网）。
  *
  * 修改历史：
+ *   - 2026-11-02 @v1.2.12: 修复 - 长按不尾随单击；临时反应恢复先前 override；手动状态保留 shopping。
  *   - 2026-07-17 @v0.6.0-beta.1: 初始创建 - 4 类点击反应
  *   - 2026-07-25 @v0.6.2-beta.15: 改造 - 单击轮流 jump/squash/jolt，长按为心疼
  *   - 2026-08-07 @v0.6.2-beta.31: 蜘蛛侠皮肤下单击轮转加入 web（跳起射蛛丝网），由注册表活跃皮肤判定
@@ -66,16 +67,29 @@ export function usePetInteractions(): UsePetInteractionsReturn {
   let lastClickTime = 0;
   let clickIndex = 0;
   let longPressTimer: number | null = null;
+  let longPressTriggered = false;
   let resetTimer: number | null = null;
+  let previousOverride: PetState | null = null;
+  let temporaryState: PetState | null = null;
   // v0.7.2：拖拽结束后的 pointerup 会误触发点击反应（抖动），用此标志位抑制接下来一小段时间内的点击反应
   let clickSuppressed = false;
 
+  function restorePreviousOverride(): void {
+    if (temporaryState !== null && petStore.override === temporaryState) {
+      petStore.setOverride(previousOverride);
+    }
+    temporaryState = null;
+  }
+
   function setTemporaryState(s: PetState, anim: string, ms = RESET_MS): void {
+    if (resetTimer === null) previousOverride = petStore.override;
+    temporaryState = s;
     petStore.setOverride(s);
     animClass.value = anim;
     if (resetTimer !== null) clearTimeout(resetTimer);
     resetTimer = window.setTimeout(() => {
-      petStore.setOverride(null);
+      resetTimer = null;
+      restorePreviousOverride();
       animClass.value = '';
     }, ms);
   }
@@ -85,6 +99,12 @@ export function usePetInteractions(): UsePetInteractionsReturn {
     if (clickSuppressed) return;
     // v0.7.2：仅左键/单指触发点击反应；右键交给菜单（onContextMenu），不应让桌宠抖动
     if (e.button !== 0) return;
+    if (longPressTriggered) {
+      longPressTriggered = false;
+      if (longPressTimer !== null) clearTimeout(longPressTimer);
+      longPressTimer = null;
+      return;
+    }
     if (longPressTimer !== null) {
       clearTimeout(longPressTimer);
       longPressTimer = null;
@@ -118,9 +138,10 @@ export function usePetInteractions(): UsePetInteractionsReturn {
   function onPointerDownForLongPress(e: PointerEvent): void {
     // v0.7.2：仅左键/单指才有长按（心疼）反应；右键长按不触发，避免与菜单冲突
     if (e.button !== 0) return;
+    longPressTriggered = false;
     if (longPressTimer !== null) clearTimeout(longPressTimer);
     longPressTimer = window.setTimeout(() => {
-      // 长按：撒娇/心疼
+      longPressTriggered = true;
       setTemporaryState('sad', 'pet-anim-shrink');
       longPressTimer = null;
     }, LONG_PRESS_MS);
@@ -156,12 +177,18 @@ export function usePetInteractions(): UsePetInteractionsReturn {
   // （只清动画，不清用户手动设置的 state override）
   function clearAnim(): void {
     if (resetTimer !== null) clearTimeout(resetTimer);
+    resetTimer = null;
+    if (longPressTimer !== null) clearTimeout(longPressTimer);
+    longPressTimer = null;
+    longPressTriggered = false;
+    restorePreviousOverride();
     animClass.value = '';
   }
 
   onBeforeUnmount(() => {
     if (resetTimer !== null) clearTimeout(resetTimer);
     if (longPressTimer !== null) clearTimeout(longPressTimer);
+    restorePreviousOverride();
   });
 
   return {

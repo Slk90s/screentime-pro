@@ -47,15 +47,6 @@ function loadCustom(): CustomPhraseLibrary {
   return {};
 }
 
-/** 保存运行时自定义覆盖 */
-function saveCustom(custom: CustomPhraseLibrary): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(custom));
-  } catch (e) {
-    log.warn('[pet] 保存自定义气泡配置失败', e);
-  }
-}
-
 /** 按当前语言选词库（v1.2.2：英文模式切到 en-US 气泡池，桌宠不再说中文） */
 function baseLibrary(): PhraseLibrary {
   const loc = (i18n.global.locale.value as string) || '';
@@ -119,50 +110,4 @@ export function pickBubble(state: PetState, skinId?: string | null): string {
 /** 取得下一个气泡的随机间隙毫秒（8~22s） */
 export function nextGapMs(): number {
   return 8000 + Math.floor(Math.random() * 14000);
-}
-
-/** 读取某个皮肤的自定义配置（无自定义则 undefined） */
-export function getCustomPhrases(skinId: string): SkinPhraseConfig | undefined {
-  const custom = loadCustom();
-  return custom[skinId];
-}
-
-/** 设置/覆盖某个皮肤的自定义配置（空数组可删除该条目） */
-export function setCustomPhrases(skinId: string, config: Partial<SkinPhraseConfig>): void {
-  const custom = loadCustom();
-  const cleaned: SkinPhraseConfig = { common: [], state: {} };
-
-  if (config.common && config.common.length > 0) {
-    cleaned.common = config.common.filter((s) => s.trim() !== '');
-  }
-  if (config.state) {
-    for (const [k, v] of Object.entries(config.state)) {
-      const arr = (v ?? []).filter((s) => s.trim() !== '');
-      if (arr.length > 0) {
-        cleaned.state[k as PetState] = arr;
-      }
-    }
-  }
-
-  if (cleaned.common.length === 0 && Object.keys(cleaned.state).length === 0) {
-    delete custom[skinId];
-  } else {
-    custom[skinId] = cleaned;
-  }
-  saveCustom(custom);
-}
-
-/** 重读自定义配置（跨窗口同步：编辑器保存后 pet 窗口收到 pet-custom-updated 调它） */
-export function reloadBubbleConfig(): void {
-  // 自定义配置在 pickBubble 时实时从 localStorage 读取，无需缓存刷新；
-  // 本函数仅作为事件回调的显式入口，保留与 usePetBadges 一致的跨窗口同步范式。
-}
-
-/** 重置所有自定义气泡配置 */
-export function resetAllCustomPhrases(): void {
-  try {
-    localStorage.removeItem(STORAGE_KEY);
-  } catch (e) {
-    log.warn('[pet] 重置自定义气泡配置失败', e);
-  }
 }
