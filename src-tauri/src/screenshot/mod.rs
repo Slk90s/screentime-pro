@@ -166,6 +166,8 @@ const SELF_OVERLAY_LABELS: [&str; 3] = ["pet", "float", CAPTURE_WINDOW_LABEL];
 /// 缓存的整屏帧（物理像素 RGBA8），确认时按选区裁剪
 pub struct CachedFrame {
     pub img: RgbaImage,
+    /// 与 `CaptureReadyPayload.seq` 同源；提交必须命中这张帧，防止旧会话误收尾。
+    pub seq: u64,
 }
 
 /// 截图运行时状态（由 lib.rs `app.manage` 注入）
@@ -181,6 +183,15 @@ pub struct ScreenshotState {
     /// 真机表现是「第一次截图只有半屏」。存一份在这里，前端注册完监听后
     /// 主动 `invoke("take_capture_ready")` 兜底，事件早晚都不会丢。
     pub pending_capture: Mutex<Option<CaptureReadyPayload>>,
+    /// 提交单飞锁：重复点击不得并发执行剪贴板、落盘等副作用。
+    ///
+    /// 使用异步锁是因为提交在等待 `session_lock` 时仍要持有它，让并发重复提交立即失败。
+    pub commit_lock: tokio::sync::Mutex<()>,
+    /// 截图会话锁：串行化开抓、提交与取消的共享窗口状态及原生收尾。
+    ///
+    /// 锁顺序固定为 `commit_lock → session_lock → frame/pending_capture/hidden`；
+    /// begin/cancel 只取 session，绝不在持有 session 时反取 commit，避免锁顺序倒置。
+    pub session_lock: tokio::sync::Mutex<()>,
     /// 截图轮次序号（v1.2.11 整改 0.2）：每轮 `begin_capture_inner` 递增，
     /// 随载荷发给遮罩窗。
     ///
@@ -200,6 +211,8 @@ impl ScreenshotState {
             hidden: Mutex::new(Vec::new()),
             config: Mutex::new(config),
             pending_capture: Mutex::new(None),
+            commit_lock: tokio::sync::Mutex::new(()),
+            session_lock: tokio::sync::Mutex::new(()),
             capture_seq: std::sync::atomic::AtomicU64::new(0),
         }
     }
@@ -583,11 +596,7 @@ pub fn begin_capture_delayed(app: &AppHandle, delay_secs: u32) {
 
         if let Err(e) = begin_capture_inner(&app2).await {
             tracing::error!(error = %e, "启动截图失败");
-            // 失败路径：遮罩窗不亮，但必须把 hide-self 隐藏的窗还回去
-            if let Some(state) = app2.try_state::<ScreenshotState>() {
-                restore_self(&app2, &state);
-            }
-            hide_capture_window(&app2);
+            // hide-self 回滚与窗口收尾已在 begin_capture_inner 的会话锁内完成。
             let _ = app2.emit_to("main", "screenshot-error", e);
         }
     });
@@ -649,6 +658,23 @@ async fn begin_capture_inner(app: &AppHandle) -> Result<(), String> {
     let state = app
         .try_state::<ScreenshotState>()
         .ok_or_else(|| "截图状态未初始化".to_string())?;
+    // 从权限检查、hide-self 一直到帧发布与窗口显示都在同一会话临界区内。
+    // 否则 commit/cancel 可能在新会话 hide_self 清空 labels 后恢复或隐藏新窗口。
+    let _session_guard = state.session_lock.lock().await;
+    let result = begin_capture_with_session(app, &state).await;
+    if result.is_err() {
+        // 失败回滚同样必须持有会话锁，不能与等待中的 commit/cancel 交错。
+        restore_self(app, &state);
+        hide_capture_window(app);
+    }
+    result
+}
+
+/// `begin_capture_inner` 持有会话锁后的实际抓屏与发布流程。
+async fn begin_capture_with_session(
+    app: &AppHandle,
+    state: &ScreenshotState,
+) -> Result<(), String> {
     let cfg = state
         .config
         .lock()
@@ -696,7 +722,7 @@ async fn begin_capture_inner(app: &AppHandle) -> Result<(), String> {
     }
 
     // ① 先隐藏自家置顶窗（pet/float），等合成器稳定后再抓屏
-    hide_self(app, &state);
+    hide_self(app, state);
     tokio::time::sleep(Duration::from_millis(160)).await;
 
     // ② 抓**光标所在显示器**整屏（v1.2.0 起；单屏时即主屏，行为零变化）。
@@ -757,7 +783,12 @@ async fn begin_capture_inner(app: &AppHandle) -> Result<(), String> {
     // 「开发/真机调试构建下把口径发散当场炸出来」，而非 CI 门禁 ——
     // 别指望 `cargo test` 能验证它们。
 
-    *state.frame.lock().unwrap_or_else(|e| e.into_inner()) = Some(CachedFrame { img });
+    // 帧与序号同时发布：后续 commit 按同一序号校验，payload 不再另取一个序号。
+    let capture_seq = state.next_capture_seq();
+    *state.frame.lock().unwrap_or_else(|e| e.into_inner()) = Some(CachedFrame {
+        img,
+        seq: capture_seq,
+    });
 
     // ③ 亮遮罩窗，覆盖整个显示器
     //
@@ -837,7 +868,7 @@ async fn begin_capture_inner(app: &AppHandle) -> Result<(), String> {
     // 事件仍保留：窗口已就绪时（第二次起）走事件是最省事的路径，
     // 且避免前端每帧轮询。
     let payload = CaptureReadyPayload {
-        seq: state.next_capture_seq(),
+        seq: capture_seq,
         width: logical_w,
         height: logical_h,
         physical_width: phys_w,
@@ -1036,6 +1067,42 @@ pub struct ScreenshotResult {
     pub saved: bool,
 }
 
+/// 非阻塞获取提交锁：在途请求失败后可由用户显式重试，但并发重复调用直接拒绝。
+fn acquire_commit(state: &ScreenshotState) -> Result<tokio::sync::MutexGuard<'_, ()>, String> {
+    state
+        .commit_lock
+        .try_lock()
+        .map_err(|_| "截图正在提交，请勿重复操作".to_string())
+}
+
+/// 提交阶段持有的两把锁。字段顺序保证先释放 commit，再释放 session。
+struct CommitSessionGuard<'a> {
+    _commit: tokio::sync::MutexGuard<'a, ()>,
+    _session: tokio::sync::MutexGuard<'a, ()>,
+}
+
+/// 以固定顺序获取提交锁与会话锁。
+///
+/// commit 先入场可让重复提交即使在等待 begin 结束时也立即被拒绝；其它路径只取
+/// session，不存在持 session 反取 commit 的反向链，因此不会形成锁顺序死锁。
+async fn acquire_commit_session(state: &ScreenshotState) -> Result<CommitSessionGuard<'_>, String> {
+    let commit = acquire_commit(state)?;
+    let session = state.session_lock.lock().await;
+    Ok(CommitSessionGuard {
+        _commit: commit,
+        _session: session,
+    })
+}
+
+/// 在任何解码、剪贴板、文件或数据库副作用之前校验活动帧。
+fn validate_commit_frame(frame: Option<&CachedFrame>, capture_seq: u64) -> Result<(), String> {
+    let frame = frame.ok_or_else(|| "截图会话已结束，请勿重复提交".to_string())?;
+    if frame.seq != capture_seq {
+        return Err("截图会话已切换，请基于最新画面重新提交".to_string());
+    }
+    Ok(())
+}
+
 /// 确认截图：解码前端合成好的 PNG → 复制剪贴板 / 落盘归档 → 收遮罩 → 恢复自家窗
 ///
 /// 入参是遮罩窗 canvas 合成后的**最终图**（已含裁剪、标注、圆角），
@@ -1043,6 +1110,7 @@ pub struct ScreenshotResult {
 #[tauri::command]
 pub async fn screenshot_commit(
     app: AppHandle,
+    capture_seq: u64,
     png_base64: String,
     copy: bool,
     save: bool,
@@ -1050,6 +1118,11 @@ pub async fn screenshot_commit(
     let state = app
         .try_state::<ScreenshotState>()
         .ok_or_else(|| "截图状态未初始化".to_string())?;
+    // 会话锁一直持有到 restore_self 完成，begin/cancel 不得插入提交收尾。
+    let _guards = acquire_commit_session(&state).await?;
+    // 帧锁一直持有到收尾完成：其它只读命令也不能在提交副作用期间读到半收尾状态。
+    let mut frame_guard = state.frame.lock().unwrap_or_else(|e| e.into_inner());
+    validate_commit_frame(frame_guard.as_ref(), capture_seq)?;
 
     // 前端可能带 `data:image/png;base64,` 前缀，两种写法都容忍
     let b64 = png_base64
@@ -1120,26 +1193,56 @@ pub async fn screenshot_commit(
     // ③ 通知主窗口（无论只复制还是只保存都要提示，文案由前端按 copied/saved 组合）
     let _ = app.emit_to("main", "screenshot-done", result.clone());
 
-    // ④ 收尾：清帧、收遮罩、恢复自家窗
-    *state.frame.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    hide_capture_window(&app);
+    // ④ 收尾：仅成功路径清帧/元信息、收遮罩、恢复自家窗；任一失败都会提前返回并保留现场。
+    *frame_guard = None;
+    *state
+        .pending_capture
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = None;
+    // 先恢复 pet/float，再收遮罩：重开截图时 hidden 可能含 capture，
+    // 反过来会被 restore_self 重新显示，且前端不再用无序号保护的 hide 兜底。
     restore_self(&app, &state);
+    hide_capture_window(&app);
     Ok(result)
 }
 
-/// 取消截图：清帧、收遮罩、恢复自家窗
-#[tauri::command]
-pub fn screenshot_cancel(app: AppHandle) -> Result<(), String> {
-    if let Some(state) = app.try_state::<ScreenshotState>() {
-        *state.frame.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        // 本轮的元信息载荷一并清掉：它与 frame 同生命周期，留着会让「遮罩窗被重建」
-        // 时的主动拉取把上一轮的载荷当成本轮消费（`seq` 只能去重，认不出「这轮已经结束」）。
-        *state
-            .pending_capture
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = None;
-        restore_self(&app, &state);
+/// 仅清理序号仍命中活动帧的取消请求；返回值决定是否允许执行原生窗口收尾。
+///
+/// 所有校验与清理都在调用方持有的 session 锁下进行。旧序号、重复取消及无活动帧
+/// 一律是 no-op，尤其不能清 pending、恢复 labels 或隐藏新会话窗口。
+fn clear_cancelled_session(state: &ScreenshotState, capture_seq: u64) -> bool {
+    let mut frame_guard = state.frame.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(frame) = frame_guard.as_ref() else {
+        return false;
+    };
+    if frame.seq != capture_seq {
+        return false;
     }
+    *frame_guard = None;
+    drop(frame_guard);
+
+    // 本轮的元信息载荷一并清掉：它与 frame 同生命周期，留着会让「遮罩窗被重建」
+    // 时的主动拉取把上一轮的载荷当成本轮消费。
+    *state
+        .pending_capture
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = None;
+    true
+}
+
+/// 取消指定序号的截图：仅当前会话可清帧、收遮罩并恢复自家窗；过期取消安全忽略。
+#[tauri::command]
+pub async fn screenshot_cancel(app: AppHandle, capture_seq: u64) -> Result<(), String> {
+    let Some(state) = app.try_state::<ScreenshotState>() else {
+        return Ok(());
+    };
+    let _session_guard = state.session_lock.lock().await;
+    if !clear_cancelled_session(&state, capture_seq) {
+        tracing::debug!(capture_seq, "忽略无匹配活动帧的截图取消");
+        return Ok(());
+    }
+    // 原生窗口副作用也必须在会话锁内，且只能由已通过序号校验的请求执行。
+    restore_self(&app, &state);
     hide_capture_window(&app);
     Ok(())
 }
@@ -1583,6 +1686,122 @@ mod tests {
             a, 0,
             "0 保留给「前端没拿到序号」的兜底语义，不能发给真实轮次"
         );
+    }
+
+    #[test]
+    fn commit_validation_requires_the_active_frame() {
+        let frame = CachedFrame {
+            img: RgbaImage::new(1, 1),
+            seq: 7,
+        };
+        assert!(validate_commit_frame(Some(&frame), 7).is_ok());
+
+        let stale = validate_commit_frame(Some(&frame), 6);
+        assert!(matches!(stale, Err(message) if message.contains("会话已切换")));
+        // 校验失败只返回错误，不得消费活动帧；随后用正确序号仍应通过。
+        assert!(validate_commit_frame(Some(&frame), 7).is_ok());
+
+        let duplicate = validate_commit_frame(None, 7);
+        assert!(matches!(duplicate, Err(message) if message.contains("请勿重复提交")));
+    }
+
+    #[test]
+    fn commit_lock_rejects_overlap_but_allows_retry() {
+        let state = ScreenshotState::new(ScreenshotConfig::default());
+        let first = acquire_commit(&state).expect("首次提交应获得锁");
+        let duplicate = acquire_commit(&state);
+        assert!(matches!(duplicate, Err(message) if message.contains("正在提交")));
+        drop(first);
+
+        // 在途请求结束后锁必须可再次获取，失败场景下用户可以显式重试。
+        let retry = acquire_commit(&state);
+        assert!(retry.is_ok(), "提交结束后应允许显式重试");
+    }
+
+    #[test]
+    fn cancel_only_clears_the_matching_active_session() {
+        let state = ScreenshotState::new(ScreenshotConfig::default());
+        *state.frame.lock().unwrap_or_else(|e| e.into_inner()) = Some(CachedFrame {
+            img: RgbaImage::new(1, 1),
+            seq: 8,
+        });
+        *state
+            .pending_capture
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(CaptureReadyPayload {
+            seq: 8,
+            width: 1.0,
+            height: 1.0,
+            physical_width: 1,
+            physical_height: 1,
+            scale_factor: 1.0,
+            default_radius: 0,
+        });
+        *state.hidden.lock().unwrap_or_else(|e| e.into_inner()) = vec!["pet".into()];
+
+        // 旧会话的迟到取消不得清掉新帧、待取载荷或 hidden labels。
+        assert!(!clear_cancelled_session(&state, 7));
+        assert_eq!(
+            state
+                .frame
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .map(|frame| frame.seq),
+            Some(8)
+        );
+        assert!(state
+            .pending_capture
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some());
+        assert_eq!(
+            *state.hidden.lock().unwrap_or_else(|e| e.into_inner()),
+            vec!["pet".to_string()]
+        );
+
+        assert!(clear_cancelled_session(&state, 8));
+        assert!(state
+            .frame
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_none());
+        assert!(state
+            .pending_capture
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_none());
+        // hidden labels 由原生 restore_self 消费；纯状态清理不能提前 drain。
+        assert_eq!(
+            *state.hidden.lock().unwrap_or_else(|e| e.into_inner()),
+            vec!["pet".to_string()]
+        );
+        assert!(!clear_cancelled_session(&state, 8), "重复取消应为 no-op");
+    }
+
+    #[tokio::test]
+    async fn commit_lock_order_allows_waiting_without_deadlock() {
+        let state = ScreenshotState::new(ScreenshotConfig::default());
+        let session = state.session_lock.lock().await;
+        let mut pending_commit = Box::pin(acquire_commit_session(&state));
+
+        // 第一次轮询后，提交应持有 commit 并等待 session；重复提交仍可立即被拒绝。
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut pending_commit)
+                .await
+                .is_err()
+        );
+        assert!(matches!(acquire_commit(&state), Err(message) if message.contains("正在提交")));
+
+        drop(session);
+        let guards = tokio::time::timeout(Duration::from_secs(1), pending_commit)
+            .await
+            .expect("固定锁顺序下等待中的提交必须能继续")
+            .expect("会话释放后提交锁应可获取");
+        drop(guards);
+
+        // 两把锁都释放后允许新的显式提交，不留等待/失败残留。
+        assert!(acquire_commit_session(&state).await.is_ok());
     }
 
     /// v0.9.0：脏值必须在**进入内存缓存与 DB 之前**就被归一化。

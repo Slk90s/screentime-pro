@@ -47,6 +47,8 @@ const emit = defineEmits<{ (e: "close"): void }>();
 const permitted = ref<boolean | null>(null);
 // 轮询定时器
 let pollTimer: number | undefined;
+// 同一时刻最多一个权限请求，避免较慢的旧 false 覆盖较新的 true。
+let pollInFlight = false;
 // 详情折叠区展开状态
 const showDetail = ref(false);
 // 「重置并重启」执行中（防双击）
@@ -95,13 +97,16 @@ async function resetAndRestart(resetPermission: boolean) {
 
 // ===== 轮询 =====
 async function pollOnce() {
-  if (!isTauri) return;
+  if (!isTauri || pollInFlight) return;
+  pollInFlight = true;
   try {
     const s = await screenshot.permissionStatus();
     permitted.value = s.permitted;
     if (s.permitted) stopPoll(); // 翻转后停止轮询（等用户点重启）
   } catch {
     /* 非 macOS / 非 Tauri：静默 */
+  } finally {
+    pollInFlight = false;
   }
 }
 

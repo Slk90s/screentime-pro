@@ -18,7 +18,7 @@
 //! - `value_len` / `value` 字段变为**私有**
 //! - 必须使用类型化访问器：`value8()` / `value16()` / `value32()`
 //!   这些方法返回 `Option<Impl Iterator>`（format 不匹配时返回 None）
-//! - 所有请求函数（get_property / intern_atom / xss_query_info）返回 `Result<Cookie, E>`
+//! - 所有请求函数（get_property / intern_atom / screensaver_query_info）返回 `Result<Cookie, E>`
 //!   需先解开 Result 再调用 cookie.reply()
 //!
 //! 修改历史：
@@ -37,6 +37,17 @@ use crate::tracker::platform::{PlatformTracker, RawApp};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{Atom, ConnectionExt};
 
+const X11_ATOM_NAMES: &[&[u8]] = &[
+    b"_NET_ACTIVE_WINDOW",
+    b"_NET_WM_NAME",
+    b"_NET_WM_PID",
+    b"UTF8_STRING",
+    b"WM_NAME",
+    b"STRING",
+    b"CARDINAL",
+    b"WINDOW",
+];
+
 /// X11 EWMH/ICCCM 协议所需 atoms（连接时一次性 intern 缓存）
 struct X11Atoms {
     net_active_window: Atom,
@@ -51,16 +62,7 @@ struct X11Atoms {
 
 impl X11Atoms {
     fn intern(conn: &impl Connection) -> Result<Self, TrackerError> {
-        let names: &[&[u8]] = &[
-            b"NET_ACTIVE_WINDOW",
-            b"NET_WM_NAME",
-            b"NET_WM_PID",
-            b"UTF8_STRING",
-            b"WM_NAME",
-            b"STRING",
-            b"CARDINAL",
-            b"WINDOW",
-        ];
+        let names = X11_ATOM_NAMES;
         // intern_atom 返回 Result<Cookie, ConnectionError>
         let mut cookies = Vec::with_capacity(names.len());
         for name in names {
@@ -132,10 +134,8 @@ impl PlatformTracker for LinuxTracker {
         })?;
 
         // x11rb 0.13: value32() 返回 Option<Iterator<Item=u32>>（format != 32 时 None）
-        let window_id = active_reply
-            .value32()
-            .and_then(|mut iter| iter.next())
-            .ok_or(TrackerError::NoForeground)?;
+        let window_id =
+            require_active_window(active_reply.value32().and_then(|mut iter| iter.next()))?;
 
         // 2. 读取窗口标题（优先 UTF-8 的 _NET_WM_NAME，fallback WM_NAME）
         let window_title = get_window_title(&x.conn, window_id, &x.atoms);
@@ -172,6 +172,14 @@ impl PlatformTracker for LinuxTracker {
 }
 
 // ===================== 辅助函数 =====================
+
+/// EWMH 用 0 表示当前没有活动窗口；它和属性缺失一样都不是可查询的 X11 窗口。
+fn require_active_window(window_id: Option<u32>) -> Result<u32, TrackerError> {
+    match window_id {
+        Some(id) if id != 0 => Ok(id),
+        _ => Err(TrackerError::NoForeground),
+    }
+}
 
 /// 从指定窗口获取标题字符串
 ///
@@ -262,22 +270,55 @@ fn read_proc_pid(pid: i32) -> ProcInfo {
     ProcInfo { name, exe_path }
 }
 
-/// 通过 X ScreenSaver 扩展获取用户空闲毫秒数
-#[cfg(feature = "xss")]
+/// 通过 X ScreenSaver 扩展获取用户空闲秒数
 fn get_xss_idle() -> Option<u64> {
-    use x11rb::connection::Connection;
-    use x11rb::protocol::xss::ConnectionExt as _;
+    use x11rb::protocol::screensaver::ConnectionExt as _;
 
     let (conn, _) = x11rb::connect(None).ok()?;
-    let screen = conn.setup().screens.first()?;
-    // xss_query_info 返回 Result<Cookie, _>
-    let cookie = conn.xss_query_info(screen.root).ok()?;
+    let screen = conn.setup().roots.first()?;
+    let cookie = conn.screensaver_query_info(screen.root).ok()?;
     let reply = cookie.reply().ok()?;
-    Some((reply.ms_since_user_input / 1000) as u64)
+    Some(xss_millis_to_seconds(reply.ms_since_user_input))
 }
 
-/// 无 xss feature 时直接返回 None
-#[cfg(not(feature = "xss"))]
-fn get_xss_idle() -> Option<u64> {
-    None
+fn xss_millis_to_seconds(milliseconds: u32) -> u64 {
+    u64::from(milliseconds / 1000)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{require_active_window, xss_millis_to_seconds, X11_ATOM_NAMES};
+    use crate::error::TrackerError;
+
+    #[test]
+    fn ewmh_atoms_use_standard_underscored_names() {
+        let expected: &[&[u8]] = &[b"_NET_ACTIVE_WINDOW", b"_NET_WM_NAME", b"_NET_WM_PID"];
+        assert_eq!(&X11_ATOM_NAMES[..3], expected);
+    }
+
+    #[test]
+    fn missing_active_window_is_no_foreground() {
+        assert!(matches!(
+            require_active_window(None),
+            Err(TrackerError::NoForeground)
+        ));
+    }
+
+    #[test]
+    fn zero_active_window_is_no_foreground() {
+        assert!(matches!(
+            require_active_window(Some(0)),
+            Err(TrackerError::NoForeground)
+        ));
+        assert_eq!(require_active_window(Some(42)).ok(), Some(42));
+    }
+
+    #[test]
+    fn xss_idle_milliseconds_round_down_to_seconds() {
+        assert_eq!(xss_millis_to_seconds(0), 0);
+        assert_eq!(xss_millis_to_seconds(999), 0);
+        assert_eq!(xss_millis_to_seconds(1000), 1);
+        assert_eq!(xss_millis_to_seconds(1999), 1);
+        assert_eq!(xss_millis_to_seconds(u32::MAX), 4_294_967);
+    }
 }

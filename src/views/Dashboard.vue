@@ -163,26 +163,53 @@ const hourly = ref<HourlyBucketOut[]>([]);
 const ranking = ref<AppRankingOut[]>([]);
 const categories = ref<CategoryOut[]>([]);
 
+// 每类加载只接受最后一次请求的结果，避免快速切换时旧响应覆盖新选择。
+let rangeRequestGeneration = 0;
+let detailsRequestGeneration = 0;
+
 // 加载时间范围内的汇总（按天柱状图 + 分类字典），与所选日期无关
 // range=0 表示「今天」：daily 用 days=1 取今日一行（SQLite LIMIT），dayCats 用 days=0 自然只取今天
 async function loadRange() {
-  categories.value = await tracker.categories();
-  const dailyDays = range.value === 0 ? 1 : range.value;
-  const catDays = range.value === 0 ? 0 : range.value;
-  daily.value = await tracker.daily(dailyDays, device.value);
-  dayCats.value = await tracker.dailyCategories(catDays, device.value);
+  const generation = ++rangeRequestGeneration;
+  const input = Object.freeze({ days: range.value, dev: device.value });
+  const dailyDays = input.days === 0 ? 1 : input.days;
+  const catDays = input.days === 0 ? 0 : input.days;
+
+  const nextCategories = await tracker.categories();
+  if (generation !== rangeRequestGeneration) return;
+  categories.value = nextCategories;
+
+  const nextDaily = await tracker.daily(dailyDays, input.dev);
+  if (generation !== rangeRequestGeneration) return;
+  daily.value = nextDaily;
+
+  const nextDayCats = await tracker.dailyCategories(catDays, input.dev);
+  if (generation !== rangeRequestGeneration) return;
+  dayCats.value = nextDayCats;
 }
 // 加载所选「某天 / 某范围」的详情（总览 / 小时分布 / 排行）
 // opts.days 缺省时取当前 range：range=0 单日（用 selectedDate），range>0 范围聚合
 // opts.date 缺省时取 selectedDate
 async function loadDetails(opts?: { days?: number; date?: string }) {
-  const days = opts?.days ?? range.value;
-  const date = opts?.date ?? selectedDate.value;
-  const dev = device.value;
-  detailDays.value = days;
-  overview.value = await tracker.overview(days, date, dev);
-  hourly.value = await tracker.hourly(date, dev);
-  ranking.value = await tracker.ranking(days, date, dev);
+  const generation = ++detailsRequestGeneration;
+  const input = Object.freeze({
+    days: opts?.days ?? range.value,
+    date: opts?.date ?? selectedDate.value,
+    dev: device.value,
+  });
+  detailDays.value = input.days;
+
+  const nextOverview = await tracker.overview(input.days, input.date, input.dev);
+  if (generation !== detailsRequestGeneration) return;
+  overview.value = nextOverview;
+
+  const nextHourly = await tracker.hourly(input.date, input.dev);
+  if (generation !== detailsRequestGeneration) return;
+  hourly.value = nextHourly;
+
+  const nextRanking = await tracker.ranking(input.days, input.date, input.dev);
+  if (generation !== detailsRequestGeneration) return;
+  ranking.value = nextRanking;
 }
 // 点击柱状图某天 -> 切换查看日期并强制以单日模式刷新当天详情
 function onPickDay(d: string) {

@@ -19,6 +19,7 @@
     - confirmText / cancelText: 按钮文案
     - width: 自定义宽度（默认 480px）
     - closeOnConfirm: 确认后是否自动关闭（默认 true）
+    - busy: 异步操作进行中，禁用并忽略确认操作（默认 false）
 
   Events:
     - confirm: 确认按钮点击
@@ -26,12 +27,19 @@
     - update:modelValue: v-model 同步
 
   修改历史：
+    - 2026-10-30 @v1.2.13: 修复 - Escape 只关闭最上层弹窗，堆叠弹窗共享正确的 body 滚动锁。
     - 2026-11-02 @v1.2.12: 新增 closeOnConfirm，允许表单校验失败时保持弹窗。
 -->
 <template>
   <transition name="modal-fade">
     <div v-if="modelValue" class="modal-mask" @mousedown.self="onMaskClick">
-      <div class="modal-container" :style="{ width }" role="dialog" aria-modal="true">
+      <div
+        class="modal-container"
+        :style="{ width }"
+        role="dialog"
+        aria-modal="true"
+        :aria-busy="busy || undefined"
+      >
         <header class="modal-header" :class="type">
           <h3>{{ resolvedTitle }}</h3>
           <button class="modal-close" @click="onCancel" aria-label="关闭"><AppIcon name="x" /></button>
@@ -44,10 +52,10 @@
           <slot name="footer">
             <template v-if="type === 'confirm' || type === 'warn'">
               <button class="modal-btn cancel" @click="onCancel">{{ resolvedCancel }}</button>
-              <button class="modal-btn primary" @click="onConfirm">{{ resolvedConfirm }}</button>
+              <button class="modal-btn primary" :disabled="busy" @click="onConfirm">{{ resolvedConfirm }}</button>
             </template>
             <template v-else>
-              <button class="modal-btn primary" @click="onConfirm">{{ resolvedConfirm }}</button>
+              <button class="modal-btn primary" :disabled="busy" @click="onConfirm">{{ resolvedConfirm }}</button>
             </template>
           </slot>
         </footer>
@@ -56,11 +64,25 @@
   </transition>
 </template>
 
+<script lang="ts">
+const modalStack: symbol[] = [];
+
+function removeModalFromStack(id: symbol): void {
+  const index = modalStack.indexOf(id);
+  if (index >= 0) modalStack.splice(index, 1);
+}
+
+function syncModalBodyLock(): void {
+  document.body.style.overflow = modalStack.length > 0 ? "hidden" : "";
+}
+</script>
+
 <script setup lang="ts">
 import { onMounted, onUnmounted, watch, computed } from "vue";
 import { useI18n } from "vue-i18n";
 
 const { t } = useI18n();
+const modalId = Symbol("modal");
 
 const props = withDefaults(
   defineProps<{
@@ -73,6 +95,7 @@ const props = withDefaults(
     width?: string;
     closeOnMask?: boolean;
     closeOnConfirm?: boolean;
+    busy?: boolean;
   }>(),
   {
     type: "info",
@@ -80,6 +103,7 @@ const props = withDefaults(
     width: "480px",
     closeOnMask: true,
     closeOnConfirm: true,
+    busy: false,
   }
 );
 
@@ -98,6 +122,7 @@ function close() {
   emit("update:modelValue", false);
 }
 function onConfirm() {
+  if (props.busy) return;
   emit("confirm");
   if (props.closeOnConfirm) close();
 }
@@ -108,19 +133,28 @@ function onCancel() {
 function onMaskClick() {
   if (props.closeOnMask) onCancel();
 }
-// Esc 关闭
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape" && props.modelValue) onCancel();
+  if (e.key !== "Escape" || !props.modelValue) return;
+  if (modalStack[modalStack.length - 1] !== modalId) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  onCancel();
 }
 onMounted(() => window.addEventListener("keydown", onKeydown));
-onUnmounted(() => window.removeEventListener("keydown", onKeydown));
+onUnmounted(() => {
+  window.removeEventListener("keydown", onKeydown);
+  removeModalFromStack(modalId);
+  syncModalBodyLock();
+});
 
-// 打开时锁定 body 滚动
 watch(
   () => props.modelValue,
-  (v) => {
-    document.body.style.overflow = v ? "hidden" : "";
-  }
+  (visible) => {
+    removeModalFromStack(modalId);
+    if (visible) modalStack.push(modalId);
+    syncModalBodyLock();
+  },
+  { immediate: true }
 );
 </script>
 
@@ -212,6 +246,10 @@ watch(
 }
 .modal-btn:hover {
   opacity: 0.92;
+}
+.modal-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 /* 过渡 */
 .modal-fade-enter-active,

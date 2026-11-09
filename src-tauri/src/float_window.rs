@@ -3,15 +3,14 @@
 //! 悬浮指标条窗口（v0.7.6，2026-09-10）：透明置顶无边框小窗，1Hz 显示系统指标。
 //!
 //! 设计（照抄 pet/window.rs 模式）：
-//! - 运行时幂等创建（ensure_float_window），首次创建后窗体常驻、只切显隐（不销毁 webview，
+//! - conf 预创建，ensure_float_window 幂等获取并复用；窗体常驻、只切显隐（不销毁 webview，
 //!   重新显示零延迟）
 //! - 位置由前端 FloatBar.vue 用 localStorage 持久化并恢复；Rust 只提供 move 命令
 //!   （逻辑像素入参，与 usePetDrag/move_pet_window 同约定，避免高 DPI 偏移）
 //! - Windows 采样线程（lib.rs）每 tick 做全屏检测 → 全屏自动隐藏（system_load/fullscreen.rs）
 //! - 与 pet 的差异：整条窗口都是拖拽区（原生 startDragging，无阈值判断），无右键菜单、
 //!   无鼠标穿透动态切换
-//! - 窗口同时在 tauri.conf.json 中声明（visible:false），与 pet/pet-menu 双保险方式一致：
-//!   conf 预创建则 ensure 幂等复用，未预创建则运行时按需创建
+//! - 窗口只在 tauri.conf.json 中声明（visible:false），Rust 不再保留 builder 重复定义
 //!
 //! 修改历史：
 //!   - 2026-09-10 @v0.7.6: 初始创建 - 创建/显示/隐藏/移动 4 个命令 + 显隐 helper
@@ -70,9 +69,8 @@ const FLOAT_OFFSCREEN_MARGIN: i32 = 24;
 
 /// 从 AppState 读当前是否处于玻璃模式（读不到按 false，退回普通态最安全）
 ///
-/// 为什么经 AppHandle 读而不是加参数：`resize_float_window` 由前端 1Hz 调用，
-/// 让前端每次多传一个 glass 参数会把"配置真相"分散到两端；这里直接读后端缓存，
-/// 单一来源，且与 `set_status_bar_config` 写入的缓存天然一致。
+/// 配置真相仍只在后端缓存；`resize_float_window` 的可选 glass 参数仅是本次显式
+/// height 已采用的排版基础档元数据，用于下一次 apply 保留详情增量，不参与配置决策。
 fn current_glass(app: &AppHandle) -> bool {
     app.try_state::<std::sync::Arc<crate::AppState>>()
         .map(|st| {
@@ -153,11 +151,6 @@ pub fn set_float_visible(app: &AppHandle, show: bool) -> Result<(), String> {
     }
 }
 
-#[tauri::command]
-pub async fn show_float_window(app: AppHandle) -> Result<(), String> {
-    set_float_visible(&app, true)
-}
-
 /// 在写入前用目标矩形做纯函数纠偏，避免 set 后立即 getter 读到混合快照。
 fn visible_target(
     window: &tauri::WebviewWindow,
@@ -220,13 +213,22 @@ pub async fn move_float_window(app: AppHandle, x: f64, y: f64) -> Result<(f64, f
 /// 44px 每秒压回 36px（本命令被前端 fitWidth() 以 1Hz + ResizeObserver 调用）。
 /// 现按 `status_bar_config.float_glass` 取 `float_glass::height_for()`。
 /// 高度变化时**顶部锚定**（只改 x 与 size，不改 y），窗口向下生长，符合"贴屏幕右上"预期。
+/// `height` 省略时沿用当前普通/玻璃档高度；展开网络详情时前端可显式传入基础高度 + 详情高度。
+/// 显式 height 可同时带 glass 排版档元数据；隐藏期间先 resize 再 show 也不会重复加 8px。
+/// 离屏判定使用同一个目标宽高，右边缘锚定与高度展开可同时生效。
 #[tauri::command]
-pub async fn resize_float_window(app: AppHandle, width: f64) -> Result<(f64, f64), String> {
+pub async fn resize_float_window(
+    app: AppHandle,
+    width: f64,
+    height: Option<f64>,
+    glass: Option<bool>,
+) -> Result<(f64, f64), String> {
     let window = app
         .get_webview_window(FLOAT_WINDOW_LABEL)
         .ok_or_else(|| "float 窗口尚未创建".to_string())?;
     let target_w = width.max(FLOAT_MIN_WIDTH);
-    let target_h = current_height(&app);
+    let target_h = height.unwrap_or_else(|| current_height(&app));
+    let layout_glass = glass.unwrap_or_else(|| current_glass(&app));
     let scale = window.scale_factor().unwrap_or(1.0);
     let (cur_w, cur_h) = window
         .inner_size()
@@ -236,6 +238,7 @@ pub async fn resize_float_window(app: AppHandle, width: f64) -> Result<(f64, f64
         })
         .unwrap_or((FLOAT_INITIAL_WIDTH, target_h));
     if (cur_w - target_w).abs() < 0.5 && (cur_h - target_h).abs() < 0.5 {
+        float_glass::note_layout_glass(layout_glass);
         let pos = window
             .outer_position()
             .map_err(|e| format!("读取悬浮指标条位置失败: {e}"))?
@@ -254,5 +257,6 @@ pub async fn resize_float_window(app: AppHandle, width: f64) -> Result<(f64, f64
     window
         .set_size(LogicalSize::new(target_w, target_h))
         .map_err(|e| format!("调整悬浮指标条尺寸失败: {e}"))?;
+    float_glass::note_layout_glass(layout_glass);
     Ok((tx.round(), ty.round()))
 }

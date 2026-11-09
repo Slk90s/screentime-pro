@@ -11,6 +11,7 @@
 //!   - macOS：getifaddrs + 解析 if_data.ifi_ibytes/ifi_obytes
 //!   - Windows：GetIfTable2 累加 InOctets/OutOctets
 //!   - Linux：读 /proc/net/dev 累加 rx/tx bytes
+//! - `NetworkStatusSampler`：网络详情原生链路缓存 + 用户可选的 HTTPS 质量探测，IPC 不等待网络
 //! - `MetricsSampler`：统一指标采样器（v0.7.5 引入，v0.7.7 补齐全平台内存/磁盘）
 //!   - 复用 CpuMonitor 的 CPU 采样
 //!   - 复用 NetworkSampler 的网络采样（v0.7.6）
@@ -46,6 +47,7 @@ mod macos;
 mod windows;
 
 mod network;
+pub mod network_status;
 // MetricsSampler 自 v0.7.6 起跨平台存在；平台差异（mem/disk FFI）抽到 platform/ 下
 mod metrics;
 // v0.9.7：跨平台指标后端（macOS/Windows/Linux 各自实现 MetricsBackend）

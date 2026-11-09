@@ -103,6 +103,7 @@ pub struct AppState {
     // ===== v0.7.5 → v0.7.6：托盘系统指标监测 =====
     // v0.7.5：仅 macOS，metrics_enabled + Option<MetricsSampler>；v0.7.6 拆 cfg，跨平台始终存在
     pub metrics_sampler: Arc<system_load::MetricsSampler>,
+    pub network_status: system_load::network_status::NetworkStatusSampler,
     pub status_bar_config: Mutex<commands::StatusBarConfig>,
 }
 
@@ -405,6 +406,9 @@ pub fn run() {
                 Arc::new(system_load::MetricsSampler::new(cpu_monitor_for_sampler));
             metrics_sampler.warmup();
             metrics_sampler.init();
+            let network_status = system_load::network_status::NetworkStatusSampler::new(
+                db.get_setting("network_probe_enabled").as_deref() == Some("true"),
+            );
             let app_state = Arc::new(AppState {
                 db,
                 tracker,
@@ -416,6 +420,7 @@ pub fn run() {
                 rules: Mutex::new(rules),
                 category_cache: categorizer::CategoryCache::new(),
                 metrics_sampler,
+                network_status,
                 status_bar_config: Mutex::new(status_bar_config),
             });
             app.manage(app_state.clone());
@@ -799,9 +804,8 @@ pub fn run() {
             // （tauri-2.11.5/src/app.rs:2524 `for window_config in ... .filter(|w| w.create)`），
             // 而 `float_window::ensure_float_window` 第一行就是
             // `if app.get_webview_window(LABEL).is_some() { return Ok(()) }`。
-            // → 对 float 窗口，**conf 才是唯一生效的构造参数**；`ensure_float_window`
-            // 里那份 `.inner_size(340, 44)` / `.min_inner_size(140, h)` 属于**死代码路径**
-            // （只有"窗口被销毁后重建"才会走到，当前没有任何路径 destroy float 窗口）。
+            // → 对 float 窗口，**conf 是唯一声明与构造来源**；`ensure_float_window`
+            // 只复用已建窗口并处理显隐/边界，Rust 不再保留备用 builder。
             //
             // 这条事实直接决定 conf 该怎么改（报告 §2.4 方案 3 三项的最终裁决）：
             //
@@ -926,6 +930,10 @@ pub fn run() {
             commands::dismiss_update,
             commands::open_url,
             commands::get_system_metrics,
+            commands::get_disk_volumes,
+            commands::get_network_status,
+            commands::get_network_probe_config,
+            commands::set_network_probe_config,
             commands::get_status_bar_config,
             commands::set_status_bar_config,
             commands::export_logs,
@@ -972,7 +980,7 @@ pub fn run() {
             pet::load_pet_state,
             pet::save_pet_state,
             // v1.2.12（批次 2）：三平台统一 Rust 全局光标拖拽循环
-            // 当前工作区 IPC 91：v1.2.12 发布版 91 + 松手检测 1 - 无消费者命令 3 + 桌宠状态 2。
+            // 当前工作区 IPC 94：v1.2.12 发布版 91 + 松手检测 1 - 无消费者命令 3 + 桌宠状态 2 + 磁盘/网络详情查询与配置 4 - 无消费者 show_float_window 1。
             // 计数仍以 generate_handler! 实测为准，不按文档递推。
             pet::begin_drag,
             pet::end_drag,
@@ -980,7 +988,6 @@ pub fn run() {
             pet::show_pet_menu_window,
             pet::hide_pet_menu_window,
             pet::move_pet_menu_window,
-            float_window::show_float_window,
             float_window::move_float_window,
             float_window::resize_float_window,
             // v1.2.2（2026-10-21）：液态玻璃能力探测（设置页开关可用性依据），IPC 82→83

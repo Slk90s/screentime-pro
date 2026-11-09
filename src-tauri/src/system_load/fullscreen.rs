@@ -118,6 +118,8 @@ pub fn foreground_is_fullscreen() -> bool {
 // ===== macOS 实装（v0.8.0）=====
 #[cfg(target_os = "macos")]
 mod macos_impl {
+    use super::{bounds_match, Bounds};
+    use core_foundation::array::CFArray;
     use core_foundation::base::TCFType;
     use core_foundation::string::CFString;
     use core_foundation_sys::array::{CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef};
@@ -194,10 +196,13 @@ mod macos_impl {
             let option: CGWindowListOption =
                 kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
             // 该 C 函数返回裸指针（非 Option），需手动判空
-            let list: CFArrayRef = CGWindowListCopyWindowInfo(option, kCGNullWindowID);
-            if list.is_null() {
+            let list_ref: CFArrayRef = CGWindowListCopyWindowInfo(option, kCGNullWindowID);
+            if list_ref.is_null() {
                 return false;
             }
+            // SAFETY: `CGWindowListCopyWindowInfo` 遵循 Create Rule，非空返回值是调用方拥有的
+            // +1 CFArray；RAII 包装接管这一次引用，确保后续提前返回也会释放。
+            let list: CFArray = CFArray::wrap_under_create_rule(list_ref);
             let mut display_count = 0u32;
             if CGGetActiveDisplayList(0, std::ptr::null_mut(), &mut display_count) != 0
                 || display_count == 0
@@ -210,10 +215,10 @@ mod macos_impl {
             }
             ids.truncate(display_count as usize);
             let displays: Vec<CGRect> = ids.into_iter().map(|id| CGDisplayBounds(id)).collect();
-            let count = CFArrayGetCount(list);
+            let count = CFArrayGetCount(list.as_concrete_TypeRef());
             // 列表按「前 → 后」排序，第一个命中的即最前台全屏窗
             for i in 0..count {
-                let d = CFArrayGetValueAtIndex(list, i) as CFDictionaryRef;
+                let d = CFArrayGetValueAtIndex(list.as_concrete_TypeRef(), i) as CFDictionaryRef;
                 if d.is_null() {
                     continue;
                 }

@@ -14,10 +14,13 @@ import type {
   DayCategoryOut,
   DeviceInfo,
   DeviceStats,
+  DiskVolume,
   ExportResult,
   HourlyBucketOut,
   MetricsOut,
   MonthSummaryOut,
+  NetworkProbeConfig,
+  NetworkStatusOut,
   OverviewOut,
   PermissionStatus,
   RuleOut,
@@ -181,13 +184,30 @@ export const tracker = {
     categoryId: string;
     priority: number;
     enabled: boolean;
-  }) => call<boolean>("update_rule", { rule: r }),
+  }) =>
+    call<boolean>("update_rule", {
+      rule: {
+        id: r.id,
+        field: r.field,
+        match_type: r.matchType,
+        pattern: r.pattern,
+        category_id: r.categoryId,
+        priority: r.priority,
+        enabled: r.enabled,
+      },
+    }),
   deleteRule: (id: number) => call<boolean>("delete_rule", { id }),
   reclassify: () => call<number>("reclassify_all"),
   setAutostart: (enabled: boolean) => call<boolean>("set_autostart", { enabled }),
   getAutostartPref: () => call<boolean | null>("get_autostart_pref"),
   // ===== v0.7.5：状态栏系统指标（v0.7.6 起扩展网络字段，向后兼容）=====
   getSystemMetrics: () => call<MetricsOut>("get_system_metrics"),
+  getDiskVolumes: () => call<DiskVolume[]>("get_disk_volumes"),
+  // 网络详情仅在浮窗展开时读取；质量探测配置与状态栏配置分开持久化。
+  getNetworkStatus: () => call<NetworkStatusOut>("get_network_status"),
+  getNetworkProbeConfig: () => call<NetworkProbeConfig>("get_network_probe_config"),
+  setNetworkProbeConfig: (enabled: boolean) =>
+    call<void>("set_network_probe_config", { enabled }),
   // ===== v0.7.6：状态栏配置（总开关 + 3 个子项）=====
   getStatusBarConfig: () => call<StatusBarConfig>("get_status_bar_config"),
   setStatusBarConfig: (config: StatusBarConfig) =>

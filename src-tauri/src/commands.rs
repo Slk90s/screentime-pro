@@ -42,6 +42,54 @@ pub struct ActiveSession {
     pub category_id: String,
     pub started_at: DateTime<Local>,
     pub last_input_at: DateTime<Local>,
+    /// 首次观察到无前台窗口的时刻；恢复同应用时用于扣除暂停区间。
+    pub paused_at: Option<DateTime<Local>>,
+}
+
+/// 无前台期间保留会话，只记录首次暂停时刻，避免短会话被立即收尾时丢弃。
+fn pause_active_session(active: &mut ActiveSession, now: DateTime<Local>) {
+    if active.paused_at.is_none() {
+        active.paused_at = Some(now);
+    }
+}
+
+/// 恢复同应用时平移会话时间轴以扣除无前台区间；换成其他应用则返回旧会话的暂停点。
+fn resolve_no_foreground_pause(
+    active: &mut ActiveSession,
+    same_app: bool,
+    now: DateTime<Local>,
+) -> Option<DateTime<Local>> {
+    let paused_at = active.paused_at?;
+    if !same_app {
+        return Some(paused_at);
+    }
+
+    // 系统时钟回拨时按零暂停处理，禁止把起点向后移而虚增使用时长。
+    let paused_for = (now - paused_at).max(Duration::zero());
+    active.started_at += paused_for;
+    active.last_input_at += paused_for;
+    active.paused_at = None;
+    None
+}
+
+/// 当前会话已计量的墙钟时长；暂停期间冻结在暂停点。
+fn active_session_seconds(active: &ActiveSession, now: DateTime<Local>) -> i64 {
+    let end = active.paused_at.unwrap_or(now);
+    (end - active.started_at).num_seconds().max(0)
+}
+
+/// 由实测空闲时长还原最近输入时间，并限制在当前会话范围内。
+fn last_input_from_idle(
+    now: DateTime<Local>,
+    idle_seconds: u64,
+    session_started_at: DateTime<Local>,
+) -> DateTime<Local> {
+    if now <= session_started_at {
+        return session_started_at;
+    }
+    let elapsed_seconds = (now - session_started_at).num_seconds() as u64;
+    let clamped_idle = idle_seconds.min(elapsed_seconds);
+    now - Duration::seconds(clamped_idle as i64)
 }
 
 pub fn begin_tracking(state: &Arc<AppState>) {
@@ -168,9 +216,10 @@ pub fn get_current_foreground(state: tauri::State<'_, Arc<AppState>>) -> Current
     let idle = state.tracker.get_idle_seconds().unwrap_or(0);
     let tracking = *state.tracking.lock().unwrap_or_else(|e| e.into_inner());
     let session_seconds = {
+        let now = Local::now();
         let cur = state.current.lock().unwrap_or_else(|e| e.into_inner());
         match cur.as_ref() {
-            Some(s) => (Local::now() - s.started_at).num_seconds().max(0),
+            Some(s) => active_session_seconds(s, now),
             None => 0,
         }
     };
@@ -653,18 +702,26 @@ pub fn save_backup_config(
     path: String,
     keep_days: u32,
 ) -> Result<(), String> {
-    let _ = state
+    state
         .db
-        .set_setting("backup_enabled", if enabled { "true" } else { "false" });
+        .set_setting("backup_enabled", if enabled { "true" } else { "false" })
+        .map_err(|e| e.to_string())?;
     if path.trim().is_empty() {
-        let _ = state.db.set_setting("backup_path", "");
+        state
+            .db
+            .set_setting("backup_path", "")
+            .map_err(|e| e.to_string())?;
     } else {
         std::fs::create_dir_all(&path).map_err(|e| format!("无法创建备份目录：{}", e))?;
-        let _ = state.db.set_setting("backup_path", &path);
+        state
+            .db
+            .set_setting("backup_path", &path)
+            .map_err(|e| e.to_string())?;
     }
-    let _ = state
+    state
         .db
-        .set_setting("backup_keep_days", &keep_days.to_string());
+        .set_setting("backup_keep_days", &keep_days.to_string())
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1009,6 +1066,19 @@ async fn sampling_loop(state: Arc<AppState>) {
                     tracing::debug!("当前无前台应用（锁屏或桌面），暂停采集");
                     last_fg_err = Some("no_foreground".to_string());
                 }
+                // 不在此立即收尾：不足 MIN_SESSION_SECS 的短会话会因此被丢弃。
+                // 保留会话并记录首次暂停点；恢复时按应用是否变化决定平移或在暂停点收尾。
+                let mut cur = state.current.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(active) = cur.as_mut() {
+                    let first_pause = active.paused_at.is_none();
+                    pause_active_session(active, Local::now());
+                    if first_pause {
+                        tracing::debug!(
+                            app = %active.app.process_name,
+                            "当前无前台应用，暂停当前会话计时"
+                        );
+                    }
+                }
                 continue;
             }
             Err(e) => {
@@ -1053,7 +1123,8 @@ async fn sampling_loop(state: Arc<AppState>) {
                     proc = %fg.process_name,
                     "检测到锁屏 / 登录界面，结束当前会话并暂停计时"
                 );
-                finalize_active_session(&state, &active, now);
+                // 若锁屏前已经处于无前台状态，暂停区间同样不能计入使用时长。
+                finalize_active_session(&state, &active, active.paused_at.unwrap_or(now));
             }
             continue;
         }
@@ -1102,28 +1173,33 @@ async fn sampling_loop(state: Arc<AppState>) {
                 }
             }
         };
-        let to_finalize: Option<ActiveSession> = {
+        let (to_finalize, pause_end) = {
             let mut cur = state.current.lock().unwrap_or_else(|e| e.into_inner());
-            let finalize = match cur.as_ref() {
+            let mut pause_end = None;
+            let finalize = match cur.as_mut() {
                 None => false,
                 Some(a) => {
                     let same =
                         a.app.process_name == fg.process_name && a.app.exe_path == fg.exe_path;
+                    pause_end = resolve_no_foreground_pause(a, same, now);
                     let date_changed = a.started_at.date_naive() != now.date_naive();
-                    !same || idle >= threshold || date_changed
+                    pause_end.is_some() || !same || idle >= threshold || date_changed
                 }
             };
-            if finalize {
+            let finished = if finalize {
                 cur.take()
             } else {
                 if let Some(a) = cur.as_mut() {
-                    a.last_input_at = now;
+                    a.last_input_at = last_input_from_idle(now, idle, a.started_at);
                 }
                 None
-            }
+            };
+            (finished, pause_end)
         };
         if let Some(active) = to_finalize {
-            finalize_active_session(&state, &active, now);
+            // 无前台后换成其他应用：旧会话只计到暂停开始，绝不能合并整段间隙。
+            let end = pause_end.or(active.paused_at).unwrap_or(now);
+            finalize_active_session(&state, &active, end);
         }
         {
             let mut cur = state.current.lock().unwrap_or_else(|e| e.into_inner());
@@ -1148,6 +1224,7 @@ async fn sampling_loop(state: Arc<AppState>) {
                     category_id: category.clone(),
                     started_at: now,
                     last_input_at: now,
+                    paused_at: None,
                 });
                 let already_covered = state
                     .rules
@@ -2069,6 +2146,44 @@ pub fn set_status_bar_config(
 }
 
 #[tauri::command]
+pub fn get_disk_volumes(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Vec<crate::system_load::platform::DiskVolume> {
+    state.metrics_sampler.disk_volumes()
+}
+
+#[tauri::command]
+pub fn get_network_status(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> crate::system_load::network_status::NetworkStatusOut {
+    state.network_status.snapshot()
+}
+
+#[tauri::command]
+pub fn get_network_probe_config(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> crate::system_load::network_status::NetworkProbeConfig {
+    state.network_status.probe_config()
+}
+
+#[tauri::command]
+pub fn set_network_probe_config(
+    state: tauri::State<'_, Arc<AppState>>,
+    enabled: bool,
+) -> Result<(), String> {
+    state
+        .db
+        .set_setting(
+            "network_probe_enabled",
+            if enabled { "true" } else { "false" },
+        )
+        .map_err(|e| e.to_string())?;
+    state.network_status.set_probe_enabled(enabled);
+    crate::logging::audit("network_probe_config", &format!("enabled={enabled}"));
+    Ok(())
+}
+
+#[tauri::command]
 pub fn get_system_metrics(state: tauri::State<'_, Arc<AppState>>) -> MetricsOut {
     let cfg = *state
         .status_bar_config
@@ -2099,7 +2214,131 @@ pub fn get_system_metrics(state: tauri::State<'_, Arc<AppState>>) -> MetricsOut 
 // 两者都不会报错、不会留日志，只能靠单测锁住。
 #[cfg(test)]
 mod tests {
-    use super::{is_idle_screen_process, is_version_tag, parse_atom_latest_release, semver_gt};
+    use super::{
+        active_session_seconds, is_idle_screen_process, is_version_tag, last_input_from_idle,
+        parse_atom_latest_release, pause_active_session, resolve_no_foreground_pause, semver_gt,
+        ActiveSession, MIN_SESSION_SECS,
+    };
+    use crate::tracker::RawApp;
+
+    fn local_time(seconds: i64) -> chrono::DateTime<chrono::Local> {
+        chrono::DateTime::from_timestamp(seconds, 0)
+            .expect("固定时间戳必须有效")
+            .with_timezone(&chrono::Local)
+    }
+
+    fn active_session(started_at: chrono::DateTime<chrono::Local>) -> ActiveSession {
+        ActiveSession {
+            app: RawApp {
+                name: "Editor".to_string(),
+                process_name: "editor".to_string(),
+                exe_path: Some("/opt/editor".to_string()),
+                bundle_id: None,
+                window_title: Some("main.rs".to_string()),
+            },
+            app_id: 1,
+            category_id: "development".to_string(),
+            started_at,
+            last_input_at: started_at,
+            paused_at: None,
+        }
+    }
+
+    #[test]
+    fn measured_idle_is_excluded_instead_of_counted_as_usage() {
+        let started_at = local_time(1_700_000_000);
+        let now = local_time(1_700_000_600);
+
+        let last_input = last_input_from_idle(now, 300, started_at);
+        assert_eq!(last_input, local_time(1_700_000_300));
+        let total = (now - started_at).num_seconds();
+        let idle = (now - last_input).num_seconds();
+        assert_eq!(total - idle, 300, "空闲阈值不能计成使用时长");
+        assert_eq!(
+            last_input_from_idle(now, 0, started_at),
+            now,
+            "零空闲表示当前时刻刚发生输入"
+        );
+    }
+
+    #[test]
+    fn measured_last_input_is_clamped_to_the_session() {
+        let started_at = local_time(1_700_000_000);
+        let now = local_time(1_700_000_600);
+
+        assert_eq!(last_input_from_idle(now, 600, started_at), started_at);
+        assert_eq!(
+            last_input_from_idle(now, u64::MAX, started_at),
+            started_at,
+            "超大空闲值不得溢出或越过会话起点"
+        );
+        assert_eq!(
+            last_input_from_idle(started_at - chrono::Duration::seconds(1), 0, started_at),
+            started_at,
+            "系统时钟回拨时不得产生会话起点之前的输入时间"
+        );
+    }
+
+    /// 回归：同应用恢复只保留暂停前后的活跃段，短会话也能累计到最低落库阈值。
+    #[test]
+    fn same_app_resume_excludes_gap_and_preserves_short_session() {
+        let started_at = local_time(1_700_000_000);
+        let paused_at = started_at + chrono::Duration::seconds(5);
+        let resumed_at = started_at + chrono::Duration::seconds(65);
+        let finished_at = started_at + chrono::Duration::seconds(70);
+        let mut active = active_session(started_at);
+        active.last_input_at = started_at + chrono::Duration::seconds(2);
+
+        pause_active_session(&mut active, paused_at);
+        pause_active_session(&mut active, paused_at + chrono::Duration::seconds(3));
+        assert_eq!(
+            active.paused_at,
+            Some(paused_at),
+            "连续无前台必须保留首次暂停点"
+        );
+        assert_eq!(
+            active_session_seconds(&active, resumed_at),
+            5,
+            "暂停后 UI 会话时长必须冻结"
+        );
+
+        assert_eq!(
+            resolve_no_foreground_pause(&mut active, true, resumed_at),
+            None
+        );
+        assert_eq!(active.paused_at, None);
+        assert_eq!(
+            active.started_at,
+            started_at + chrono::Duration::seconds(60)
+        );
+        assert_eq!(
+            active.last_input_at,
+            started_at + chrono::Duration::seconds(62),
+            "最后输入时间也必须随暂停区间平移"
+        );
+        assert_eq!(
+            active_session_seconds(&active, finished_at),
+            MIN_SESSION_SECS,
+            "5 秒暂停前活跃 + 5 秒恢复后活跃应为 10 秒，而非含间隙的 70 秒"
+        );
+    }
+
+    /// 回归：无前台后切到别的应用，旧会话只能在暂停点开始处结束。
+    #[test]
+    fn different_app_after_pause_uses_pause_start_as_session_end() {
+        let started_at = local_time(1_700_000_000);
+        let paused_at = started_at + chrono::Duration::seconds(5);
+        let resumed_at = started_at + chrono::Duration::seconds(65);
+        let mut active = active_session(started_at);
+        pause_active_session(&mut active, paused_at);
+
+        let end = resolve_no_foreground_pause(&mut active, false, resumed_at)
+            .expect("换应用必须结束旧会话");
+        assert_eq!(end, paused_at);
+        assert_eq!(active.started_at, started_at, "换应用不能平移旧会话");
+        assert_eq!(active.paused_at, Some(paused_at));
+        assert_eq!(active_session_seconds(&active, end), 5);
+    }
 
     /// 🐞 回归（P1，2026-10-29 @v1.2.11）：锁屏 / 登录界面不得计入使用时长。
     ///

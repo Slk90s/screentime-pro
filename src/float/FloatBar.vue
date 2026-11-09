@@ -13,6 +13,7 @@
   - 显隐由 Rust 侧管理（托盘菜单/设置页开关 + 全屏自动隐藏），本组件只负责渲染与位置
 
   修改历史：
+  - 2026-10-30 @v1.2.13: 修复 - 移除前端无条件 show，显隐只由 Rust 权威配置控制；指标轮询改为 single-flight。
   - 2026-11-02 @v1.2.12: 修复 - 原生拖拽等待系统左键释放后再持久化，不再把 startDragging 返回当松手。
   - 2026-09-10 @v0.7.6: 初始创建
   - 2026-09-10 @v0.7.7: ① 修 bug——cpu_usage / memory_usage 后端返回的是 0~1 分数，
@@ -170,11 +171,18 @@
        改成外层铺满窗口后，胶囊几何 ≡ 窗口矩形 ≡ 材质矩形，三者圆角天然重合，
        溢出从原理上不可能发生；测量移到内层，宽度自适应逻辑不受影响。 -->
   <div
-    :class="['float-bar', { 'is-glass': cfg.float_glass, 'has-blur': cfg.float_glass && nativeBlur }]"
+    :class="[
+      'float-bar',
+      {
+        'is-glass': cfg.float_glass,
+        'has-blur': cfg.float_glass && nativeBlur,
+        'has-network-detail': networkDetailOpen,
+      },
+    ]"
     @pointerdown="onPointerDown"
     @contextmenu.prevent
   >
-    <div ref="contentRef" class="f-content">
+    <div ref="contentRef" class="f-content" :style="{ height: `${baseHeight}px` }">
       <span class="f-dot" :style="dotStyle" :title="dotTitle"></span>
       <span v-if="cfg.show_cpu" class="f-item">
         <i>CPU</i><b>{{ pct(metrics?.cpu_usage) }}</b>
@@ -187,10 +195,22 @@
       </span>
       <template v-if="cfg.show_net">
         <span v-if="hasAnyBefore" class="f-sep"></span>
-        <span class="f-item f-net">
+        <button
+          type="button"
+          class="f-item f-net f-net-toggle"
+          :aria-expanded="networkDetailOpen"
+          aria-controls="float-network-detail"
+          :aria-label="networkToggleLabel"
+          :title="t(networkDetailOpen ? 'float.network.collapse' : 'float.network.expand')"
+          @pointerdown.stop
+          @click="onNetworkToggle"
+        >
           <b class="down">↓{{ fmtRate(metrics?.net_rx_bps ?? 0) }}</b>
           <b class="up">↑{{ fmtRate(metrics?.net_tx_bps ?? 0) }}</b>
-        </span>
+          <svg class="f-net-chevron" viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+            <path d="m3 4.5 3 3 3-3" />
+          </svg>
+        </button>
       </template>
       <!-- v0.8.2：尾部「截图」按钮。可见 = 截图开启 && 浮窗开启；pointerdown.stop
            防止点按钮误触发整条拖拽；点击走 screenshot_trigger（与快捷键完全同路径） -->
@@ -211,18 +231,80 @@
       </template>
       <span v-if="!hasAny && !shotEnabled" class="f-item"><b class="f-dim">ScreenTime Pro</b></span>
     </div>
+
+    <section
+      v-if="networkDetailOpen"
+      id="float-network-detail"
+      class="f-network-detail"
+      :aria-label="t('float.network.details')"
+      @pointerdown.stop
+    >
+      <dl class="f-network-grid">
+        <div class="f-network-stat">
+          <dt>{{ t("float.network.link") }}</dt>
+          <dd>{{ networkLinkLabel }}</dd>
+        </div>
+        <div class="f-network-stat">
+          <dt>{{ t("float.network.medium") }}</dt>
+          <dd>{{ networkMediumLabel }}</dd>
+        </div>
+        <div class="f-network-stat">
+          <dt>{{ t("float.network.band") }}</dt>
+          <dd>{{ networkBandLabel }}</dd>
+        </div>
+        <div class="f-network-stat">
+          <dt>{{ t("float.network.vpn") }}</dt>
+          <dd>
+            {{ networkStatus ? t(networkStatus.vpn ? "float.network.vpnOn" : "float.network.vpnOff") : t("float.network.linkUnknown") }}
+          </dd>
+        </div>
+      </dl>
+      <div class="f-network-quality-head">
+        <span>{{ t("float.network.quality") }}</span>
+        <span class="f-network-internet" :data-state="networkStatus?.internet ?? 'unknown'">
+          {{ networkInternetLabel }}
+        </span>
+      </div>
+      <dl class="f-network-grid">
+        <div class="f-network-stat">
+          <dt>{{ t("float.network.p50") }}</dt>
+          <dd>{{ qualityMs(networkStatus?.latency_p50_ms) }}</dd>
+        </div>
+        <div class="f-network-stat">
+          <dt>{{ t("float.network.p95") }}</dt>
+          <dd>{{ qualityMs(networkStatus?.latency_p95_ms) }}</dd>
+        </div>
+        <div class="f-network-stat">
+          <dt>{{ t("float.network.jitter") }}</dt>
+          <dd>{{ qualityMs(networkStatus?.jitter_ms) }}</dd>
+        </div>
+        <div class="f-network-stat">
+          <dt>{{ t("float.network.failure") }}</dt>
+          <dd>{{ qualityFailure(networkStatus?.failure_pct) }}</dd>
+        </div>
+      </dl>
+      <p class="f-network-explanation">{{ networkExplanation }}</p>
+    </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "vue-i18n";
 // Tauri v2：monitor API 为模块级函数（Window 实例上没有 currentMonitor）
 import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 import { tracker } from "../api/tracker";
 import { screenshot } from "../api/screenshot";
-import type { MetricsOut, StatusBarConfig } from "../types";
+import type {
+  MetricsOut,
+  NetworkBand,
+  NetworkInternet,
+  NetworkLink,
+  NetworkMedium,
+  NetworkStatusOut,
+  StatusBarConfig,
+} from "../types";
 import { log } from "@/lib/logger";
 
 // v0.8.2：按钮 tooltip 文案（浮窗此前无任何用户可见文案，首次引入 useI18n）
@@ -249,6 +331,8 @@ const BAR_W = 340;
  * ⚠️ 若将来改外层 border 宽度，本常量必须同步为 2 × border-width。
  */
 const WIDTH_SLACK = 2;
+/** 展开区固定高度；宽度仍只由顶部指标行测量，避免详情文案引起横向呼吸。 */
+const NETWORK_DETAIL_HEIGHT = 212;
 const POS_KEY = "float_pos";
 
 /** v1.2.8：内层内容容器（宽度测量基准）。
@@ -267,10 +351,20 @@ const cfg = ref<StatusBarConfig>({
   float_glass: false,
 });
 const metrics = ref<MetricsOut | null>(null);
+const networkStatus = ref<NetworkStatusOut | null>(null);
+const networkExpanded = ref(false);
+const baseHeight = computed(() => (cfg.value.float_glass ? 44 : 36));
+const networkDetailOpen = computed(() => networkExpanded.value && cfg.value.show_net);
+const targetHeight = computed(
+  () => baseHeight.value + (networkDetailOpen.value ? NETWORK_DETAIL_HEIGHT : 0),
+);
 const diskMode = ref(localStorage.getItem("screentime-disk-mode") || "system");
 let timer: number | null = null;
-/** 上次已应用的内容宽度，避免每秒无谓 IPC */
+// 慢 IPC 时跳过新 tick，避免并发采样推进网络基准、旧响应覆盖新状态。
+let tickInFlight = false;
+/** 上次已应用的内容尺寸，避免每秒无谓 IPC；高度变化不能只依赖 ResizeObserver。 */
 let appliedW = 0;
+let appliedH = 0;
 /** 拖拽进行中标记：拖拽期间不调整尺寸，避免与 OS 拖拽循环抢窗口状态 */
 let dragging = false;
 /**
@@ -419,6 +513,85 @@ const dotTitle = computed(() => {
   return `${t(map[lv], { cpu, mem })}\n${t("float.dotRule")}`;
 });
 
+const NETWORK_LINK_KEYS: Record<NetworkLink, string> = {
+  up: "float.network.linkUp",
+  down: "float.network.linkDown",
+  unknown: "float.network.linkUnknown",
+};
+const NETWORK_MEDIUM_KEYS: Record<NetworkMedium, string> = {
+  ethernet: "float.network.mediumEthernet",
+  wifi: "float.network.mediumWifi",
+  vpn: "float.network.mediumVpn",
+  other: "float.network.mediumOther",
+  unknown: "float.network.mediumUnknown",
+};
+const NETWORK_BAND_KEYS: Record<NetworkBand, string> = {
+  not_applicable: "float.network.bandNotApplicable",
+  ghz24: "float.network.band24",
+  ghz5: "float.network.band5",
+  ghz6: "float.network.band6",
+  other: "float.network.bandOther",
+  unknown: "float.network.bandUnknown",
+};
+const NETWORK_INTERNET_KEYS: Record<NetworkInternet, string> = {
+  disabled: "float.network.internetDisabled",
+  checking: "float.network.internetChecking",
+  online: "float.network.internetOnline",
+  unreachable: "float.network.internetUnreachable",
+  stale: "float.network.internetStale",
+};
+
+const networkToggleLabel = computed(() => {
+  const action = t(networkDetailOpen.value ? "float.network.collapse" : "float.network.expand");
+  return `${action}: ↓${fmtRate(metrics.value?.net_rx_bps ?? 0)}, ↑${fmtRate(metrics.value?.net_tx_bps ?? 0)}`;
+});
+const networkLinkLabel = computed(() =>
+  t(NETWORK_LINK_KEYS[networkStatus.value?.link ?? "unknown"]),
+);
+const networkMediumLabel = computed(() =>
+  t(NETWORK_MEDIUM_KEYS[networkStatus.value?.medium ?? "unknown"]),
+);
+const networkBandLabel = computed(() =>
+  t(NETWORK_BAND_KEYS[networkStatus.value?.band ?? "unknown"]),
+);
+const networkInternetLabel = computed(() =>
+  networkStatus.value
+    ? t(NETWORK_INTERNET_KEYS[networkStatus.value.internet])
+    : t("float.network.internetUnknown"),
+);
+
+function qualityMs(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return `${Math.max(0, Math.round(value))} ms`;
+}
+
+function qualityFailure(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  const bounded = Math.max(0, Math.min(100, value));
+  return `${Math.round(bounded * 10) / 10}%`;
+}
+
+const networkExplanation = computed(() => {
+  const status = networkStatus.value;
+  if (!status) return t("float.network.explainLoading");
+  if (status.internet === "disabled") return t("float.network.explainDisabled");
+  if (status.link === "down") return t("float.network.explainLinkDown");
+  if (status.internet === "stale") return t("float.network.explainStale");
+  if (status.internet === "unreachable") return t("float.network.explainUnreachable");
+  if (status.attempts === 0 || status.successes < 5) {
+    return t("float.network.explainWarmup", { successes: Math.min(5, status.successes) });
+  }
+  if (
+    status.latency_p50_ms == null ||
+    status.latency_p95_ms == null ||
+    status.jitter_ms == null ||
+    status.failure_pct == null
+  ) {
+    return t("float.network.explainUnknown");
+  }
+  return t("float.network.explainReady", { attempts: status.attempts });
+});
+
 /** 字节/秒格式化（与 Rust format_bps 同口径：B / K / M / G 自适应） */
 function fmtRate(bps: number): string {
   if (!Number.isFinite(bps) || bps < 0) return "0B";
@@ -439,6 +612,14 @@ async function onShot(): Promise<void> {
   } catch {
     /* 应用退出中偶发失败，忽略 */
   }
+}
+
+async function onNetworkToggle(): Promise<void> {
+  networkExpanded.value = !networkDetailOpen.value;
+  if (!networkExpanded.value) networkStatus.value = null;
+  await fitWidth();
+  // 展开后立即复用现有 single-flight tick；折叠后 tick 不会请求网络详情。
+  if (networkExpanded.value) void tick();
 }
 
 /**
@@ -485,15 +666,36 @@ async function runFitWidth(): Promise<void> {
   if (!el) return;
   const need = Math.max(el.getBoundingClientRect().width, el.scrollWidth);
   const w = Math.ceil(need) + WIDTH_SLACK;
-  if (Math.abs(w - appliedW) < 1) return;
+  const h = targetHeight.value;
+  if (Math.abs(w - appliedW) < 1 && Math.abs(h - appliedH) < 1) return;
   try {
-    const [x, y] = await invoke<[number, number]>("resize_float_window", { width: w });
+    const [x, y] = await invoke<[number, number]>("resize_float_window", {
+      width: w,
+      height: h,
+      // 本次显式高度所使用的基础档；隐藏期间先 resize、后 show 时仍要保持详情增量。
+      glass: cfg.value.float_glass,
+    });
     appliedW = w;
+    appliedH = h;
     persistPosition(x, y);
   } catch {
-    /* 窗口尚未创建 / 退出中，忽略；不更新 appliedW，下次 tick 会重试 */
+    /* 窗口尚未创建 / 退出中，忽略；不更新 appliedW/H，下次 tick 会重试 */
   }
 }
+
+// DOM 内容行的 ResizeObserver 只覆盖宽度；展开/折叠与玻璃档切换需要显式观察高度。
+watch(targetHeight, () => {
+  void fitWidth();
+});
+watch(
+  () => cfg.value.show_net,
+  (show) => {
+    if (!show) {
+      networkExpanded.value = false;
+      networkStatus.value = null;
+    }
+  },
+);
 
 /** 恢复上次位置；无记录则放主屏右上角（顶 24px / 右 24px） */
 async function applyPosition(): Promise<void> {
@@ -554,6 +756,45 @@ async function onPointerDown(e: PointerEvent): Promise<void> {
   }
 }
 
+function shouldPollNetworkDetail(): boolean {
+  return networkDetailOpen.value && cfg.value.enabled && cfg.value.float_enabled;
+}
+
+async function tick(): Promise<void> {
+  if (tickInFlight) return;
+  tickInFlight = true;
+  try {
+    // 配置读取失败时不得沿用旧快照派生网络探测；下一轮拿到权威配置后再恢复。
+    let configLoaded = false;
+    try {
+      diskMode.value = localStorage.getItem("screentime-disk-mode") || "system";
+      cfg.value = await tracker.getStatusBarConfig();
+      configLoaded = true;
+      metrics.value = await tracker.getSystemMetrics();
+    } catch {
+      /* 应用退出中偶发失败，忽略 */
+    }
+    // snapshot 会按需派生 HTTPS 探测：除展开与双开关外，还必须确认 OS 窗口实际可见。
+    // isVisible 由 core:window:default 授权；读取失败按隐藏处理，绝不 fail-open。
+    if (configLoaded && shouldPollNetworkDetail()) {
+      const visible = await getCurrentWindow()
+        .isVisible()
+        .catch(() => false);
+      // await 期间配置/展开态可能已变化，发请求前再检查一次。
+      if (visible && shouldPollNetworkDetail()) {
+        try {
+          networkStatus.value = await tracker.getNetworkStatus();
+        } catch {
+          networkStatus.value = null;
+        }
+      }
+    }
+    await fitWidth();
+  } finally {
+    tickInFlight = false;
+  }
+}
+
 onMounted(async () => {
   // 局部透明（学 PetMenuWindow.vue：只改本 webview 的 html/body/#app，不用全局 CSS）
   const els = [document.documentElement, document.body, document.getElementById("app")].filter(
@@ -594,22 +835,7 @@ onMounted(async () => {
     });
     resizeObs.observe(contentRef.value);
   }
-  // 就绪后再显示（Rust 启动/开关路径也会 show，幂等；透明空窗 show 本就不可见）
-  try {
-    await invoke("show_float_window");
-  } catch {
-    /* 已显示或窗口未创建 */
-  }
-  const tick = async () => {
-    try {
-      diskMode.value = localStorage.getItem("screentime-disk-mode") || "system";
-      cfg.value = await tracker.getStatusBarConfig();
-      metrics.value = await tracker.getSystemMetrics();
-    } catch {
-      /* 应用退出中偶发失败，忽略 */
-    }
-    await fitWidth();
-  };
+  // 显隐只由 Rust 按权威配置控制；此处主动 show 会让禁用状态在启动时闪现。
   void tick();
   timer = window.setInterval(tick, 1000);
 });
@@ -695,6 +921,79 @@ onBeforeUnmount(() => {
   padding: 0 12px;
   width: max-content;
   flex: none;
+}
+/* 展开后仍是同一个 webview：顶部保持原基础高度，详情填充新增的固定高度。 */
+.float-bar.has-network-detail {
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  border-radius: 20px;
+  cursor: default;
+}
+.float-bar.is-glass.has-network-detail {
+  border-radius: 22px;
+}
+.float-bar.has-network-detail .f-content {
+  cursor: grab;
+}
+.f-network-detail {
+  box-sizing: border-box;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  padding: 8px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  white-space: normal;
+  cursor: default;
+  overflow: hidden;
+}
+.f-network-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 12px;
+  margin: 0;
+}
+.f-network-stat {
+  min-width: 0;
+}
+.f-network-stat dt {
+  color: rgba(255, 255, 255, 0.64);
+  font-size: 9px;
+  font-weight: 500;
+  line-height: 12px;
+}
+.f-network-stat dd {
+  margin: 0;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 15px;
+  overflow-wrap: anywhere;
+}
+.f-network-quality-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 6px 0 4px;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 12px;
+}
+.f-network-internet {
+  flex: none;
+}
+.f-network-internet[data-state="unreachable"],
+.f-network-internet[data-state="stale"] {
+  color: #ffd8a8;
+}
+.f-network-explanation {
+  margin: 6px 0 0;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 13px;
 }
 .float-bar:hover {
   background: rgba(28, 30, 38, 0.86);
@@ -902,6 +1201,35 @@ onBeforeUnmount(() => {
 }
 .f-net {
   gap: 7px;
+}
+.f-net-toggle {
+  appearance: none;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+.f-net-toggle:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.9);
+  outline-offset: 3px;
+}
+.f-net-chevron {
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.15s ease;
+}
+.f-net-toggle[aria-expanded="true"] .f-net-chevron {
+  transform: rotate(180deg);
 }
 /* 网速值域比百分比宽（↓75K / ↑12.7M / ↓999K），单独给更宽的定位宽度 */
 .f-net > b {
@@ -1164,6 +1492,26 @@ onBeforeUnmount(() => {
   .float-bar.is-glass.has-blur .f-shot:hover {
     background: rgba(0, 0, 0, 0.10);
     color: #1c1c1e;
+  }
+
+  /* 展开详情与顶部胶囊一起反色，避免浅底上继续使用白字。 */
+  .float-bar.is-glass.has-blur .f-network-detail {
+    border-top-color: rgba(0, 0, 0, 0.12);
+  }
+  .float-bar.is-glass.has-blur .f-network-stat dt,
+  .float-bar.is-glass.has-blur .f-network-quality-head,
+  .float-bar.is-glass.has-blur .f-network-explanation {
+    color: rgba(0, 0, 0, 0.62);
+  }
+  .float-bar.is-glass.has-blur .f-network-stat dd {
+    color: #1c1c1e;
+  }
+  .float-bar.is-glass.has-blur .f-network-internet[data-state="unreachable"],
+  .float-bar.is-glass.has-blur .f-network-internet[data-state="stale"] {
+    color: #7a4405;
+  }
+  .float-bar.is-glass.has-blur .f-net-toggle:focus-visible {
+    outline-color: rgba(0, 0, 0, 0.72);
   }
 }
 </style>

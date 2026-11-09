@@ -73,10 +73,21 @@
 //!   只能自研「截桌面 → 高斯模糊 → 当窗口背景」，涉及截屏权限、隐私与性能，
 //!   需求方已明确暂不做。
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use tauri::{Manager, WebviewWindow};
 
 /// 浮窗固定 label（与 tauri.conf.json / float_window.rs 一致）
 const FLOAT_WINDOW_LABEL: &str = "float";
+
+/// 最近窗口几何使用的玻璃基础档。配置缓存会在 apply_via_app 之前更新，不能拿它推断旧基础高度。
+/// conf 的初始窗口是普通档，因此初值为 false；apply 与前端显式 resize 都会同步此状态。
+static LAST_LAYOUT_GLASS: AtomicBool = AtomicBool::new(false);
+
+/// 记录一次已经落定的基础档，供下一次玻璃切换保留详情附加高度。
+pub(crate) fn note_layout_glass(glass: bool) {
+    LAST_LAYOUT_GLASS.store(glass, Ordering::Release);
+}
 
 /// 普通模式高度（逻辑像素）。与 `float_window::FLOAT_HEIGHT` 同值。
 ///
@@ -104,6 +115,11 @@ pub fn height_for(glass: bool) -> f64 {
     } else {
         FLOAT_HEIGHT_PLAIN
     }
+}
+
+/// 切换基础高度时保留详情区的非负附加高度；同档重复应用保持幂等。
+fn height_preserving_detail(current_height: f64, previous_base: f64, target_base: f64) -> f64 {
+    target_base + (current_height - previous_base).max(0.0)
 }
 
 /// 材质能力档位。
@@ -386,7 +402,10 @@ pub fn apply(window: &WebviewWindow, glass: bool) -> Result<(), String> {
             window.label()
         ));
     }
-    platform_apply(window, glass)
+    let result = platform_apply(window, glass);
+    // 材质失败时 apply_via_app 仍会切换 CSS/窗口基础高度，因此几何档也必须前进。
+    note_layout_glass(glass);
+    result
 }
 
 /// 便捷封装：应用材质 + 同步窗口高度（内部负责主线程派发）。
@@ -405,6 +424,9 @@ pub fn apply_via_app(app: &tauri::AppHandle, glass: bool) -> Result<(), String> 
         .ok_or_else(|| "float 窗口尚未创建".to_string())?;
     let app2 = app.clone();
     app.run_on_main_thread(move || {
+        // apply 会推进 LAST_LAYOUT_GLASS，必须先取旧档；同档 show/hide 恢复时两者相等。
+        let previous_base = height_for(LAST_LAYOUT_GLASS.load(Ordering::Acquire));
+        let target_base = height_for(glass);
         if let Err(e) = apply(&window, glass) {
             tracing::warn!(
                 error = %e,
@@ -412,14 +434,20 @@ pub fn apply_via_app(app: &tauri::AppHandle, glass: bool) -> Result<(), String> 
                 "应用液态玻璃材质失败，浮窗退化为 CSS 兜底样式"
             );
         }
-        // 高度与材质同一批次落定，避免视觉跳变
+        // 高度与材质同一批次落定；基础档变化不能把已展开的详情区高度截掉。
         if let Some(w) = app2.get_webview_window(FLOAT_WINDOW_LABEL) {
             let scale = w.scale_factor().unwrap_or(1.0);
-            let cur_w = w
+            let (cur_w, cur_h) = w
                 .inner_size()
-                .map(|s| s.to_logical::<f64>(scale).width)
-                .unwrap_or(340.0);
-            let _ = w.set_size(tauri::LogicalSize::new(cur_w, height_for(glass)));
+                .map(|s| {
+                    let logical = s.to_logical::<f64>(scale);
+                    (logical.width, logical.height)
+                })
+                .unwrap_or((340.0, previous_base));
+            let target_h = height_preserving_detail(cur_h, previous_base, target_base);
+            if let Err(e) = w.set_size(tauri::LogicalSize::new(cur_w, target_h)) {
+                tracing::warn!(error = %e, "同步悬浮指标条玻璃高度失败");
+            }
         }
     })
     .map_err(|e| format!("主线程派发失败: {e}"))
@@ -454,5 +482,65 @@ pub fn float_glass_support() -> FloatGlassSupport {
         reason: tier.reason().to_string(),
         native_blur: tier.native_blur(),
         translucency: tier.translucency(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{height_preserving_detail, FLOAT_HEIGHT_GLASS, FLOAT_HEIGHT_PLAIN};
+
+    const DETAIL_HEIGHT: f64 = 212.0;
+
+    #[test]
+    fn glass_toggles_preserve_detail_height() {
+        assert_eq!(
+            height_preserving_detail(
+                FLOAT_HEIGHT_PLAIN + DETAIL_HEIGHT,
+                FLOAT_HEIGHT_PLAIN,
+                FLOAT_HEIGHT_GLASS,
+            ),
+            FLOAT_HEIGHT_GLASS + DETAIL_HEIGHT
+        );
+        assert_eq!(
+            height_preserving_detail(
+                FLOAT_HEIGHT_GLASS + DETAIL_HEIGHT,
+                FLOAT_HEIGHT_GLASS,
+                FLOAT_HEIGHT_PLAIN,
+            ),
+            FLOAT_HEIGHT_PLAIN + DETAIL_HEIGHT
+        );
+    }
+
+    #[test]
+    fn repeated_same_mode_apply_is_height_idempotent() {
+        for (base, current) in [
+            (FLOAT_HEIGHT_PLAIN, FLOAT_HEIGHT_PLAIN + DETAIL_HEIGHT),
+            (FLOAT_HEIGHT_GLASS, FLOAT_HEIGHT_GLASS + DETAIL_HEIGHT),
+        ] {
+            assert_eq!(
+                height_preserving_detail(current, base, base),
+                base + DETAIL_HEIGHT
+            );
+        }
+    }
+
+    #[test]
+    fn collapsed_or_undersized_window_uses_target_base() {
+        assert_eq!(
+            height_preserving_detail(FLOAT_HEIGHT_PLAIN, FLOAT_HEIGHT_PLAIN, FLOAT_HEIGHT_GLASS),
+            FLOAT_HEIGHT_GLASS
+        );
+        assert_eq!(
+            height_preserving_detail(FLOAT_HEIGHT_GLASS, FLOAT_HEIGHT_GLASS, FLOAT_HEIGHT_PLAIN),
+            FLOAT_HEIGHT_PLAIN
+        );
+        assert_eq!(
+            height_preserving_detail(
+                FLOAT_HEIGHT_PLAIN - 1.0,
+                FLOAT_HEIGHT_PLAIN,
+                FLOAT_HEIGHT_GLASS,
+            ),
+            FLOAT_HEIGHT_GLASS
+        );
     }
 }

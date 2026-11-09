@@ -14,6 +14,7 @@
  *   - 2026-07-17 @v0.6.0-beta.1: 初始创建 - 2s 轮询 + 自动推断
  *   - 2026-09-16 @v0.8.0: 轮询 2s → 1s（表情切换滞后从 ≤2s 收到 ≤1s；单次调用极轻，
  *     且 Rust 侧 get_current_foreground 本身不做重活）
+ *   - 2026-10-30 @v1.2.13: 修复 - single-flight，IPC 返回后复查手动状态，禁止旧结果清除新 override
  */
 import { onMounted, onBeforeUnmount } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
@@ -35,14 +36,16 @@ interface ForegroundOut {
 export function useForegroundWatcher(): void {
   let timer: number | null = null;
   let prev: ForegroundAppInfo | null = null;
+  let tickInFlight = false;
+  let disposed = false;
 
   async function tick(): Promise<void> {
-    // 桌宠关闭 / 用户手动 override 时跳过
-    if (!petStore.enabled) return;
-    if (petStore.override !== null) return;
+    if (disposed || tickInFlight || !petStore.enabled || petStore.override !== null) return;
+    tickInFlight = true;
 
     try {
       const fg = (await invoke('get_current_foreground')) as ForegroundOut;
+      if (disposed || !petStore.enabled || petStore.override !== null) return;
       const info: ForegroundAppInfo = {
         name: fg.name,
         process: fg.process_name,
@@ -58,16 +61,19 @@ export function useForegroundWatcher(): void {
     } catch (e) {
       // 静默失败（采样循环主路径有重试，桌宠轮询是辅助）
       log.warn('[pet] 前台应用轮询失败', e);
+    } finally {
+      tickInFlight = false;
     }
   }
 
   onMounted(() => {
     // 立即跑一次（桌宠启动时不延迟 2s）
-    tick();
+    void tick();
     timer = window.setInterval(tick, POLL_INTERVAL_MS);
   });
 
   onBeforeUnmount(() => {
+    disposed = true;
     if (timer !== null) {
       clearInterval(timer);
       timer = null;

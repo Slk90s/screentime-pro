@@ -35,6 +35,8 @@ use std::path::Path;
 // CoreFoundation-Sys（底层 FFI，跨版本稳定）：用于读取前台窗口标题（需「屏幕录制」权限）
 // 注意：core-foundation 0.10 移除了 CFArray 的 get_len/get_index 高层 API，
 // 故这里直接用 core_foundation_sys 的 C 函数，避免版本漂移导致编译失败。
+use core_foundation::array::CFArray;
+use core_foundation::base::TCFType;
 use core_foundation_sys::array::{CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef};
 use core_foundation_sys::base::{CFIndex, CFTypeRef};
 use core_foundation_sys::dictionary::{CFDictionaryGetValue, CFDictionaryRef};
@@ -115,13 +117,16 @@ pub fn get_foreground_window_title(pid: i32) -> Option<String> {
         let option: CGWindowListOption =
             kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
         // 注意：该 C 函数返回裸指针 CFArrayRef（非 Option），需手动判空
-        let list: CFArrayRef = CGWindowListCopyWindowInfo(option, kCGNullWindowID);
-        if list.is_null() {
+        let list_ref: CFArrayRef = CGWindowListCopyWindowInfo(option, kCGNullWindowID);
+        if list_ref.is_null() {
             return None;
         }
-        let count = CFArrayGetCount(list);
+        // SAFETY: `CGWindowListCopyWindowInfo` 遵循 Create Rule，非空返回值是调用方拥有的
+        // +1 CFArray；`wrap_under_create_rule` 接管这一次引用，并在所有返回路径自动释放。
+        let list: CFArray = CFArray::wrap_under_create_rule(list_ref);
+        let count = CFArrayGetCount(list.as_concrete_TypeRef());
         for i in 0..count {
-            let dict = CFArrayGetValueAtIndex(list, i) as CFDictionaryRef;
+            let dict = CFArrayGetValueAtIndex(list.as_concrete_TypeRef(), i) as CFDictionaryRef;
             if dict.is_null() {
                 continue;
             }

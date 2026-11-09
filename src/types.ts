@@ -271,6 +271,33 @@ export interface MetricsOut {
   net_tx_bps: number;
 }
 
+// ===== 悬浮窗网络详情：原生链路 + 可选质量探测 =====
+
+export type NetworkLink = "up" | "down" | "unknown";
+export type NetworkMedium = "ethernet" | "wifi" | "vpn" | "other" | "unknown";
+export type NetworkBand = "not_applicable" | "ghz24" | "ghz5" | "ghz6" | "other" | "unknown";
+export type NetworkInternet = "disabled" | "checking" | "online" | "unreachable" | "stale";
+
+export interface NetworkStatusOut {
+  link: NetworkLink;
+  medium: NetworkMedium;
+  band: NetworkBand;
+  vpn: boolean;
+  internet: NetworkInternet;
+  latency_p50_ms: number | null;
+  latency_p95_ms: number | null;
+  jitter_ms: number | null;
+  failure_pct: number | null;
+  attempts: number;
+  successes: number;
+  sampled_at_ms: number;
+}
+
+/** 主动质量探测独立配置；刻意不属于 StatusBarConfig，默认关闭。 */
+export interface NetworkProbeConfig {
+  enabled: boolean;
+}
+
 // ===== v0.8.0（2026-09-16）：屏幕截图 =====
 
 /** 截图配置（字段名与 Rust `ScreenshotConfig` 一致，Tauri v2 不转换结构体字段名） */

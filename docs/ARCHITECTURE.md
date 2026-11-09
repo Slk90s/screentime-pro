@@ -6,7 +6,11 @@
   本文件为文档无 SemVer 版本号，版本声明跟随 tauri.conf.json）
 
 修改历史：
-  - 2026-11-04 @v1.2.13: 新增 - 桌宠状态 SQLite、多盘、窗口 conf 单源与当前 IPC 91；同步发布候选说明。
+  - 2026-11-04 @v1.2.13: 新增 - 桌宠状态 SQLite、多盘、窗口 conf 单源与当前 IPC 94；同步发布候选说明。
+  - 2026-10-30 @v1.2.13: 修复 - 网络采样统一硬件优先/虚拟兜底与各接口独立差分，消除 VPN 重复计数和拓扑尖峰。
+  - 2026-10-30 @v1.2.13: 修复 - 导出死锁、计时、Linux 采集、macOS 泄漏、截图提交与前端并发竞态；新增独立磁盘查询。
+  - 2026-10-30 @v1.2.13: 新增 - 悬浮条网络详情与可选双端点 HTTPS 质量探测，IPC 95。
+  - 2026-10-30 @v1.2.13: 修复 - 二次审计回归清零，移除无消费者 show_float_window，IPC 94。
   - 2026-11-02 @v1.2.12: 修正 - 全量按钮与死代码审计后重写 §3.3 当前模块树，移除已删除的 2D sprite 文件与旧拖拽描述。
   - 2026-09-04 @v0.7.5: 修复 - 头部版本声明由 v0.7.0 更新为 v0.7.5（实际代码已是 v0.7.5）
   - 2026-09-04 @v0.7.5: 修复 - §5 IPC 契约表命令名与实际代码不一致（list_rules→get_rules、
@@ -103,7 +107,7 @@
 
 > 目的：给项目维护者与其他 Agent 提供"一张图看懂全貌"和"改哪里、不改哪里"指南。  
 > 与 README 区别：README 是用户面（怎么装、怎么用），本文件是工程面（怎么搭、怎么扩）。  
-> 最后更新：2026-11-04（同步至 **v1.2.13**，当前工作区 IPC **91**）。
+> 最后更新：2026-11-04（同步至 **v1.2.13**，当前工作区 IPC **94**）。
 > 本版覆盖：三端统一 Rust 拖拽与离屏回落、跨 DPI 终点持久化、会话接管、桌宠状态 SQLite 备份、
 > 多盘指标、窗口 conf 单源、截图/设置稳定性、macOS 多显示器全屏，以及无消费 IPC 与 Clippy 清零。
 > Windows 独立开发版已完成真实拖拽/离屏/松手验收；混合 DPI 双屏、macOS/Linux 实机与 CI/DMG
@@ -150,13 +154,14 @@
 > 默认 5% root reserved 的 ext4 在 Linux 上会比另两端**显示得更满**。⚠️ 这是**用户可见数值变化**，
 > 也正是它不并入 v1.2.11 的原因（见 [`RELEASE.md`](RELEASE.md)）。多盘枚举（`DiskVolume` +
 > 三端 `ffi_read_disks`，macOS 侧靠 `getfsstat` + 「类型/挂载点/只读位」三重过滤避开 APFS 同容器子卷）
-> 已落在 Rust 侧，**前端消费方尚未接**，故带 `#[allow(dead_code)]`，接入时必须移除该 allow。
+> 当时 v1.2.12 尚未接前端消费方；当前 `get_disk_volumes` 与设置页选盘已接入，历史 `#[allow(dead_code)]` 已移除。
 > **验证**：`cargo test --lib` **61 passed / 0 failed / 5 ignored**（本批次 +10：`window_bounds` 7 例、
 > `pet/drag` 3 例）/ `vue-tsc --noEmit` 零错误 / `cargo fmt -- --check` 干净（本轮 fmt 只重写两个新文件，零附带改动）/
 > `cargo clippy --lib -- -D warnings` **62 条 = 批次 0 基线，本批次新增 0**（`drag.rs` 首版自带的 3 条已修）；
 > Linux 分支走上述探针（正证 exit 0 + 反证 exit 101）。
 > IPC 对账 **91 = 91**（48 commands + 22 screenshot + 14 pet〔窗口/菜单 9 + 命中 3 + 拖拽 2〕
 > + 3 float_window + 3 app_update + 1 float_glass）；⚠️ 89→91 是**重新数出来的**，不是照文档递推。
+> 当前 v1.2.13 则为 **94 = 94**（50 commands + 21 screenshot + 17 pet + 2 float_window + 3 app_update + 1 float_glass），新增独立磁盘查询及网络详情状态/质量探测配置，并移除无消费者 `show_float_window`。
 > 真机验收（发版前必做）：Windows 拖动桌宠后运行日志 grep `原生拖拽不可用` **0 命中**；
 > 杀进程重启后桌宠按上次位置出现；把持久化位置手改 `(-5000,-5000)` 重启应落回可见区；
 > macOS 三条用例（快速横甩 400px 且光标一度离开宠物矩形 / 帧延迟对比 / 拖拽中光标出体后穿透态正确）。
@@ -176,7 +181,7 @@
 
 跨平台应用使用时长追踪（macOS / Windows / Linux），对标 iOS「屏幕使用时间」。**数据 100% 本地（SQLite bundled），零上传，隐私优先**。
 
-栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v1.2.12**（详见 [`RELEASE.md`](RELEASE.md)）。
+栈：**Tauri 2 + Rust + Vue 3 + TypeScript + Vite + Chart.js 4 + vue-i18n 9**。当前版本 **v1.2.13**（详见 [`RELEASE.md`](RELEASE.md)）。
 
 > ⚠️ 本节版本号在 v0.7.0 → v0.7.5 期间**长期未更新**（曾停留在 v0.7.0），与 `tauri.conf.json` 脱节。
 > 版本号唯一真实来源是 **`src-tauri/tauri.conf.json` 的 `version`**，改版本时务必回来同步本节。
@@ -217,7 +222,7 @@
 ### 3.1 Rust 后端（src-tauri/src/）
 | 模块 | 职责 | 改我会影响 |
 |------|------|------------|
-| `commands.rs` (~1148 行) | 主 IPC 命令路由（48 个 `#[tauri::command]` 在本文件）；`lib.rs` 的 `generate_handler!` 合计注册 **91** 个 = 本文件 48 + `screenshot/` 22 + `pet/` 14（窗口/菜单 9 + 命中 3 + 拖拽 2）+ `float_window.rs` 3 + `app_update.rs` 3 + `float_glass.rs` 1 | 前端 `api/*` 必须对齐字段名 |
+| `commands.rs` | 主 IPC 命令路由（50 个 `#[tauri::command]` 在本文件）；`lib.rs` 的 `generate_handler!` 合计注册 **94** 个 = 本文件 50 + `screenshot/` 21 + `pet/` 17 + `float_window.rs` 2 + `app_update.rs` 3 + `float_glass.rs` 1 | 前端 `api/*` 必须对齐字段名 |
 | `lib.rs` (~700 行) | Tauri Builder、插件注册（含 `tauri-plugin-global-shortcut`）、`generate_handler!` 命令注册、系统托盘（含「截图」菜单项） | **新命令必须在此注册**，否则 invoke 报不存在 |
 | `tracker/{macos,windows,linux}.rs` | 平台采样器（10s tick） | 跨平台数据一致性 |
 | `tracker/mod.rs` | trait 抽象 + 后台循环 | — |
@@ -231,7 +236,7 @@
 | **`pet/drag.rs`** | **v1.2.12 新增（整改批次 2）**：三平台统一的桌宠拖拽循环。`begin_drag` 起一条 8ms 线程，读**全局光标**（不再依赖 webview 收到 pointermove）自己 `set_position`，两轴位移都 <4px 时不发；`end_drag` 停循环并回传最终逻辑位置给前端写持久化。会话号 `generation` 让新的 `begin_drag` **接管**旧循环 | 桌宠拖拽流畅性。<br>⚠️ 循环里**不得出现窗口 getter**（`outer_position()` 等）：getter 走「发事件 + 阻塞等回」，在非主线程上会把主线程拖住；`set_position` 则是投递到主线程执行，安全。详见本文件 §9 |
 | **`pet/state.rs`** | 桌宠状态 SQLite 单键 JSON 持久化。`load_pet_state` 在缺行时校验并幂等插入旧 localStorage 快照；`save_pet_state` 校验后 UPSERT。备份 DTO 增加可选 `pet_state` | 解决桌宠开关/位置/喂食记录不进备份的问题；跨窗口实时同步仍走 localStorage，避免事件早于 SQLite 写入 |
 | **`window_bounds.rs`** | **v1.2.12 新增（整改 1.3）**：跨窗口共用的离屏几何 util（`monitor_rects` / `rect_visible` / `offscreen_target` / `clamp_to_visible_area` / `rect_from_logical`）。判「可见」要**两轴各 ≥1/3 重叠**；`offscreen_target` 是纯函数，便于单测 | 悬浮指标条与桌宠的位置恢复；改阈值会让 v1.2.1 那类 `(-695,159)` 陈旧坐标重新放行 |
-| **`system_load/`** | **v0.7.5 新增**：`MetricsSampler` 统一指标采样器，产原始系统指标（CPU / 内存 / 磁盘 / 网速，1s 采样、磁盘 30s 缓存）。**三端统一**只由「悬浮指标条」展示（v0.7.11 起；原 macOS 菜单栏文字指标 `set_title` 已整体移除）。**v0.8.0**：`fullscreen.rs` 补 macOS 真全屏识别（`CGWindowListCopyWindowInfo` + `CGDisplayBounds`） | 只影响悬浮指标条与桌宠全屏隐藏，不影响采样主流程 |
+| **`system_load/`** | **v0.7.5 新增**：`MetricsSampler` 统一指标采样器，产原始系统指标（CPU / 内存 / 磁盘 / 网速，1s 采样、磁盘 30s 缓存）。**三端统一**只由「悬浮指标条」展示（v0.7.11 起；原 macOS 菜单栏文字指标 `set_title` 已整体移除）。**v0.8.0**：`fullscreen.rs` 补 macOS 真全屏识别（`CGWindowListCopyWindowInfo` + `CGDisplayBounds`）。**v1.2.13**：网络采样按硬件接口优先、无硬件时虚拟兜底，并对每个接口独立差分；VPN/虚拟网卡不再与物理网卡重复累计，新接口历史计数也不会形成瞬时尖峰；`network_status` 另提供原生链路/介质/频段缓存与用户可选的 HTTPS p50/p95、jitter、失败率，IPC 不等待网络，探测失败不代表整台设备断网 | 悬浮条网络组展开详情；质量探测默认关闭，收起详情或隐藏浮窗后不再发起新请求 |
 | `logging.rs` | 统一日志订阅器 | 日志路径 / 级别 |
 
 > **`classifier.rs` 与 `categorizer.rs` 是两个不同东西**，勿混淆：
@@ -349,7 +354,7 @@ PetSkinRenderer.watchEffect → skinTick++
 
 ---
 
-## 5. IPC 契约（当前工作区 91 个命令；v1.2.12 发布版 91 个）
+## 5. IPC 契约（当前工作区 94 个命令；v1.2.12 发布版 91 个）
 
 Rust 端在 `commands.rs` / `pet/` 定义，**在 `lib.rs` 的 `generate_handler!` 注册**；前端通过 `src/api/*` 调用。**改 IPC 必须同时改两端，并记得注册。**
 
@@ -357,24 +362,24 @@ Rust 端在 `commands.rs` / `pet/` 定义，**在 `lib.rs` 的 `generate_handler
 |------|------|------|
 | 追踪 | `start_tracking` | 启动采样循环（启动后由应用生命周期托管） |
 | 实时 | `get_current_foreground` | 当前前台应用（v0.5→v0.6.1 字段名 bug 已修） |
-| 数据 | `get_overview` / `get_daily_summaries` / `get_daily_categories` / `get_month_summary` / `get_hourly_buckets` / `get_app_ranking` / `get_sessions` | Dashboard / Trends 用 |
+| 数据 | `get_overview` / `get_daily_summaries` / `get_daily_categories` / `get_month_summary` / `get_hourly_buckets` / `get_app_ranking` | Dashboard / Trends 用 |
 | 趋势 | `get_trends` | 周 / 月同比 |
 | 规则 | `get_rules` / `add_rule` / `update_rule` / `delete_rule` / `reclassify_all` | 归类规则 CRUD + 一键重算历史 |
 | 分类 | `get_categories` | 分类字典 |
-| 设置 | `get_settings` / `save_settings` / `set_idle_threshold` / `get_idle_threshold` | 配置与空闲阈值 |
-| 自启 | `set_autostart` / `is_autostart` / `get_autostart_pref` | 开机自启 |
-| 数据管理 | `export_all` / `export_data` / `import_data` / `prune_data` / `backup_and_prune_device` / `get_backup_config` / `save_backup_config` / `run_backup_now` | 导出导入、清理、本地自动备份 |
+| 设置 | `get_settings` / `save_settings` | 通用配置与空闲阈值（阈值在 SettingsOut 内，无独立 IPC） |
+| 自启 | `set_autostart` / `get_autostart_pref` | 开机自启 |
+| 数据管理 | `export_all` / `import_data` / `prune_data` / `backup_and_prune_device` / `get_backup_config` / `save_backup_config` / `run_backup_now` | 导出导入、清理、本地自动备份 |
 | 多设备 | `get_devices` / `list_devices_with_stats` | 多设备合并 |
 | 桌宠（`pet::`） | `create_pet_window` / `show_pet_window` / `hide_pet_window` / `move_pet_window` / `set_pet_cursor_passthrough` / `create_pet_menu_window` / `show_pet_menu_window` / `hide_pet_menu_window` / `move_pet_menu_window` | 桌宠窗口 + 右键菜单窗口（共 9 个） |
 | 桌宠命中与全局鼠标（`pet::hit_mask`） | `set_pet_hit_mask` / `set_pet_drag_lock` / `clear_pet_hit_mask` / `primary_button_down` | 32×32 alpha 命中网格 / 拖拽锁 / 清空 / 全局左键状态（共 4 个）。最后一个用于悬浮条等待原生拖拽真正松手。 |
 | 桌宠状态（`pet::state`） | `load_pet_state` / `save_pet_state` | SQLite 单键 JSON 持久化；缺行时幂等迁移 localStorage，导出/导入包含 `pet_state`。 |
 | 桌宠拖拽（`pet::drag`，**v1.2.12**） | `begin_drag` / `end_drag` | 三平台统一的 **Rust 侧拖拽循环**：`begin_drag{grabDx,grabDy}` 记抓取偏移并起 8ms 循环（读全局光标搬窗），`end_drag` 停循环并回传**最终逻辑位置**（前端据此写持久化）。<br>⚠️ `end_drag` 回的是循环自己记的最后一个目标值，**不是** `outer_position()` 的查询结果 —— `set_position` 异步投递，刚投出去的几帧还没落到 NSWindow，去问会拿到历史值，写进持久化就是「拖完回跳」的老毛病。**入参是 camelCase**（Tauri v2 的 `snake_case` 参数 ↔ JS `grabDx`）。 |
-| 截图（`screenshot::`） | `screenshot_get_config` / `screenshot_set_config` / `screenshot_trigger` / `screenshot_frame` / `screenshot_commit` / `screenshot_cancel` / `screenshot_list` / `screenshot_delete` / `screenshot_reveal` / `screenshot_thumbnail` / `screenshot_dir` / `screenshot_ocr` / `screenshot_copy_text` / `take_capture_ready` | **v0.8.0**：配置 / 触发 / 取整屏帧（标注背景）/ 提交（收前端合成 PNG）/ 取消 / 历史增删查 + 缩略图 + 目录（共 11 个）。`set_config` 返回 `ApplyResult`（快捷键真实注册结果）。<br>**v0.8.1**：+`screenshot_ocr`（对缓存帧的指定**物理像素**矩形做本地离线 OCR，入参 `x/y/width/height`，返回 `OcrOut{text,width,height,language}`）/ `screenshot_copy_text`（走 `arboard` 写系统剪贴板，避开 WebView 剪贴板权限）。<br>**v1.2.11**：+`take_capture_ready`（`.take()` 取走并清空 `ScreenshotState.pending_capture`，返回 `Option<CaptureReadyPayload>`）—— **这不是可选的便利接口，而是首次截图半屏的修复本体**：遮罩窗 `visible(false)` 懒创建时 WebView 还在加载 SPA，`emit_to` 即发即弃而监听器未注册，事件会被静默丢弃；前端必须在 `listen` 注册完成后**主动拉一次**兜底。详见 [`RELEASE.md`](RELEASE.md) §3.4(c)。合计 **14** 个 |
-| 系统指标 | `get_system_metrics` / `get_system_metrics_enabled` / `set_system_metrics_enabled` / `get_status_bar_config` / `set_status_bar_config` | CPU/内存/磁盘/网速，三端统一由悬浮指标条展示（v0.7.11 起） |
-| 悬浮指标条（`float_window::`） | `create_float_window` / `show_float_window` / `hide_float_window` / `move_float_window` / `resize_float_window` | 悬浮窗生命周期与位置尺寸（共 5 个） |
-| 权限 | `check_permissions` / `open_privacy_settings` | macOS 辅助功能 + 屏幕录制。`check_permissions` 返回 `{ accessibility, screen_capture }`（`db/models.rs:107`），**v1.2.10 起屏幕录制改双信号口径**（`CGPreflight` ∨ 窗口标题探针）与截图侧一致 —— 单信号会把「升级后授权失效」误判成「从未授权」。设置页**权限中心**（仅 macOS）复用它，刻意不轮询（未放行时会 fork `codesign`/`xattr`，1Hz 代价过高） |
+| 截图（`screenshot::`） | `screenshot_get_config` / `screenshot_set_config` / `screenshot_trigger` / `screenshot_trigger_delayed` / `screenshot_cancel_countdown` / `screenshot_frame` / `take_capture_ready` / `screenshot_commit` / `screenshot_cancel` / `screenshot_list` / `screenshot_delete` / `screenshot_delete_many` / `screenshot_reveal` / `screenshot_thumbnail` / `screenshot_dir` / `screenshot_ocr` / `screenshot_copy_text` / `ocr_engine_info` / `screenshot_permission_status` / `screenshot_request_permission` / `screenshot_open_permission_settings` | 配置、触发/延时、冻结帧、提交/取消、历史、OCR、引擎信息与 macOS 权限，共 **21** 个。`screenshot_commit` 必须携带 `captureSeq` 并通过活动帧校验与 single-flight 锁，过期/重复提交不得产生副作用。 |
+| 系统指标 | `get_system_metrics` / `get_disk_volumes` / `get_network_status` / `get_network_probe_config` / `set_network_probe_config` / `get_status_bar_config` / `set_status_bar_config` | CPU/内存/磁盘/网速与网络详情；磁盘查询不推进网络差分基准，质量探测默认关闭且后台单飞（共 7 个） |
+| 悬浮指标条（`float_window::`） | `move_float_window` / `resize_float_window` | 位置与尺寸（共 2 个；显隐由 Rust 统一控制，无 show/hide IPC） |
+| 权限 | `check_permissions` / `open_privacy_settings` / `restart_app` / `reset_permission` / `reset_screen_capture_permission` | macOS 辅助功能、屏幕录制、重启与按服务重置（共 5 个）。`check_permissions` 返回 `{ accessibility, screen_capture }`，屏幕录制沿用双信号口径。 |
 | 环境 | `check_webview2` / `open_webview2_download` / `reveal_path` | Windows WebView2 检测等 |
-| 元 | `check_for_update` / `open_url` / `export_logs` / `get_log_size` / `get_log_dir` | 版本告知、日志导出 |
+| 元 | `check_for_update` / `auto_check_update` / `dismiss_update` / `open_url` / `export_logs` / `get_log_size` / `get_log_dir` | 版本告知、自动检查/忽略与日志导出（共 7 个） |
 | 应用内升级（`app_update::`，**v1.2.11**） | `app_update_supported` / `check_app_update` / `install_app_update` | Tauri 官方 updater（ed25519 验签）。**与上面的 `check_for_update` 是两套并存的东西，别混用**：`check_for_update` 只「告知」有新版本并跳浏览器（macOS / deb / rpm 只能走这条）；`app_update::*` 才真正下载并安装（仅 Windows nsis / Linux AppImage）。<br>平台门控在 `install_supported()`：`bundle_type()` 是打包时 patch 进二进制的静态变量，**开发态为 `None`**，所以 `cargo run` 下判为不支持 —— 这是保守且正确的行为，不是 bug。<br>⚠️ **Windows 装完进程立即退出**（upstream `install_inner` 在 `ShellExecuteW` 后直接 `process::exit(0)`），`install_app_update` 的 Promise 永不 resolve，前端不得写「安装成功」提示；Linux 则由 Rust 侧装完调 `app.restart()`。 |
 
 完整列表（权威）：`src-tauri/src/lib.rs` 的 `.invoke_handler(tauri::generate_handler![...])`。
@@ -459,7 +464,7 @@ PetWindow.vue
 
 ### 7.5 拖拽与渲染性能
 
-- **拖拽跟手**：越过 4px 阈值才调用 Tauri 原生 `getCurrentWindow().startDragging()`，把拖拽交给 OS（零 IPC、零延迟）；未越阈值走点击交互，不吞单击/双击。
+- **拖拽跟手**：三端统一由 `pet/drag.rs` 的 8ms Rust 循环读取全局光标并移动窗口；前端只提交抓取偏移和会话序号，松手按最后目标持久化，不使用 `startDragging()`。
 - **透明置顶窗性能**：投影/滤镜**绝不**与 `transform` 动画放在同一元素（filter 会破坏 GPU 合成层，每帧重算投影）；投影放静态 `img` 层一次性光栅化，动画元素只做 `transform`。升温/抖动用 `transform` 抖动而非 `hue-rotate` 滤镜。
 
 ---
@@ -560,7 +565,7 @@ src-tauri/
 └── src/
     ├── main.rs          ← App 入口（仅转调 lib）
     ├── lib.rs           ← Tauri Builder / 插件（含 global-shortcut）/ generate_handler! 命令注册 / 托盘
-    ├── commands.rs      ← 主 IPC 命令路由（48 个）+ float_window（3）+ pet/（14：窗口/菜单 9 + hit_mask 3 + drag 2）+ screenshot/（22）+ app_update（3）+ float_glass（1）= 91
+    ├── commands.rs      ← 主 IPC 命令路由（50 个）+ float_window（2）+ pet/（17）+ screenshot/（21）+ app_update（3）+ float_glass（1）= 94
     ├── pet/             ← 桌宠 Rust 端（window / menu_window / hit_mask / drag）
     ├── screenshot/      ← v0.8.0 截图 Rust 端（mod：捕获 / 下发整屏帧 / 解码落库 / 快捷键；合成在前端 canvas）
     ├── tracker/         ← 平台采样（mod / platform / macos / windows / linux）
@@ -574,10 +579,10 @@ src-tauri/
 
 src-tauri/capabilities/
 ├── default.json         ← 主窗口（main）权限集
-├── pet.json             ← 桌宠窗口；**v1.2.12 补 `core:window:allow-start-dragging`**（缺它时 `startDragging()` 被 ACL 拒，原生拖拽从未真正生效）
-├── pet-menu.json        ← 桌宠右键菜单窗权限集
-├── float.json           ← 悬浮指标条（`allow-start-dragging` 早已存在，故它的原生拖拽一直可用）
-└── capture.json         ← v0.8.0 截图窗口（capture）权限集
+├── pet.json             ← 桌宠窗口；拖拽走 Rust 循环，不需要 `allow-start-dragging`；含日志权限
+├── pet-menu.json        ← 桌宠右键菜单窗权限集；含日志权限
+├── float.json           ← 悬浮指标条（保留原生 `allow-start-dragging`）；含日志权限
+└── capture.json         ← v0.8.0 截图窗口（capture）权限集；含日志权限
 
 src/
 ├── App.vue              ← 主窗口 / 桌宠 / 截图 分支根
@@ -619,7 +624,7 @@ sql/                     ← SQLite 迁移（已恢复入库，为数据库唯�
 | 各版本 `NOTES.md` | 发布说明草稿（**需人工**回填到 `build.yml` 的 `releaseBody`，见下） |
 
 > ⚠️ `build.yml` 的 `releaseBody` 是**硬编码死文本**，不会自动跟随版本。
-> 当前仓库三份（windows / linux / macos job）为 **v0.9.2 的文案**（发版时已同步）。
+> 当前仓库三份（windows / linux / macos job）为 **v1.2.13 的文案**（发版时已同步）。
 > 每次发版前必须手动替换为本版内容，否则线上 Release Notes 显示旧版本的内容。
 > 模板与完整流程见 [`RELEASE.md`](RELEASE.md) §3.1 / §5。
 

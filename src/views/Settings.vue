@@ -239,6 +239,28 @@
             {{ glassHint }}
           </p>
         </div>
+
+        <!-- 主动质量探测是独立 opt-in 配置，不随 StatusBarConfig 整体提交。 -->
+        <div class="sub-zone network-probe-settings">
+          <div class="form-row row between">
+            <label>{{ t("settings.networkProbeEnabled") }}</label>
+            <label class="toggle-switch" :class="{ on: networkProbeConfig.enabled }">
+              <input
+                type="checkbox"
+                :checked="networkProbeConfig.enabled"
+                :disabled="!networkProbeLoaded || networkProbeSaving"
+                :aria-label="t('settings.networkProbeEnabled')"
+                aria-describedby="network-probe-hint"
+                @change="onNetworkProbeEnabled($event)"
+              />
+              <span class="toggle-slider" />
+              <span class="toggle-state">
+                {{ networkProbeConfig.enabled ? t("settings.statusBarOn") : t("settings.statusBarOff") }}
+              </span>
+            </label>
+          </div>
+          <p id="network-probe-hint" class="field-hint">{{ networkProbeHintText }}</p>
+        </div>
       </div>
     </div>
 
@@ -355,7 +377,7 @@
               max="40"
               step="2"
               :disabled="!shotConfig.enabled"
-              @change="persistShotConfig"
+              @change="persistShotConfig('corner_radius')"
             />
           </div>
           <!-- v1.2.2：投影开关已移除（功能整体下线），此处只留圆角 -->
@@ -370,7 +392,7 @@
               min="10"
               max="5000"
               :disabled="!shotConfig.enabled"
-              @change="persistShotConfig"
+              @change="persistShotConfig('max_count')"
             />
           </div>
           <p class="field-hint">{{ t("settings.shotMaxCountHint") }}</p>
@@ -1053,6 +1075,7 @@ import type {
   BackupConfig,
   DeviceStats,
   DiskVolume,
+  NetworkProbeConfig,
   SettingsOut,
   StatusBarConfig,
   UpdateInfo,
@@ -1154,11 +1177,13 @@ onMounted(async () => {
       const un = await listen<StatusBarConfig>(
         "status-bar-config-changed",
         (e) => {
-          statusBarBaseline = e.payload;
+          // 托盘快照与保存确认共用 revision：使较早发出的 load/save 响应失效。
+          statusBarConfigRevision += 1;
+          statusBarBaseline = { ...e.payload };
           statusBarConfig.value =
             statusBarDirty.size > 0
               ? { ...e.payload, ...statusBarDelta() }
-              : e.payload;
+              : { ...e.payload };
         },
       );
       if (disposed) un();
@@ -1170,6 +1195,7 @@ onMounted(async () => {
   void initScreenshot();
   void initSettings();
   void loadDiskVolumes();
+  void loadNetworkProbeConfig();
   void refreshLogSize();
   // v1.2.10：权限状态只查这一次（+ 卡片上的手动刷新），不轮询 —— 见 loadPermissions 说明
   void loadPermissions();
@@ -1281,8 +1307,7 @@ watch(diskMode, (value) => localStorage.setItem(DISK_MODE_KEY, value));
 
 async function loadDiskVolumes() {
   try {
-    const m = await tracker.getSystemMetrics();
-    diskVolumes.value = m.disk_volumes ?? [];
+    diskVolumes.value = await tracker.getDiskVolumes();
   } catch (err) {
     log.warn("[Settings] 读取磁盘卷失败", err);
   }
@@ -1487,6 +1512,47 @@ const statusBarConfig = ref<StatusBarConfig>({
   float_glass: false,
 });
 
+// 主动网络质量探测：独立配置、默认关闭。加载完成前禁用，避免本地默认值覆盖权威配置。
+const networkProbeConfig = ref<NetworkProbeConfig>({ enabled: false });
+const networkProbeLoaded = ref(false);
+const networkProbeSaving = ref(false);
+const networkProbeLoadFailed = ref(false);
+const networkProbeHintText = computed(() =>
+  t(networkProbeLoadFailed.value ? "settings.networkProbeLoadFailed" : "settings.networkProbeHint"),
+);
+
+async function loadNetworkProbeConfig() {
+  networkProbeLoaded.value = false;
+  networkProbeLoadFailed.value = false;
+  try {
+    const loaded = await tracker.getNetworkProbeConfig();
+    networkProbeConfig.value = { enabled: loaded.enabled };
+    networkProbeLoaded.value = true;
+  } catch (err) {
+    networkProbeLoadFailed.value = true;
+    log.warn("[Settings] 加载网络质量探测配置失败", err);
+  }
+}
+
+async function onNetworkProbeEnabled(e: Event) {
+  const next = (e.target as HTMLInputElement).checked;
+  const previous = networkProbeConfig.value.enabled;
+  networkProbeConfig.value = { enabled: next };
+  networkProbeSaving.value = true;
+  try {
+    await tracker.setNetworkProbeConfig(next);
+  } catch (err) {
+    networkProbeConfig.value = { enabled: previous };
+    showAlert(
+      "warn",
+      t("settings.networkProbeEnabled"),
+      t("settings.saveFailedMsg", { err: err instanceof Error ? err.message : String(err) }),
+    );
+  } finally {
+    networkProbeSaving.value = false;
+  }
+}
+
 // ===== v1.2.2（2026-10-21）：液态玻璃能力探测 =====
 // `supported=false` 时开关置灰，并换用「不支持」文案（避免"开了没效果"的死开关）。
 // 探测在 loadStatusBarConfig 里一并发起（同一卡片、同一次进入设置页）。
@@ -1562,6 +1628,9 @@ const glassHint = computed(() => {
 //   提交方向，不在加载方向。
 let statusBarBaseline: StatusBarConfig | null = null;
 const statusBarDirty = new Set<keyof StatusBarConfig>();
+const statusBarRevisions = new Map<keyof StatusBarConfig, number>();
+let statusBarSaveQueue: Promise<void> = Promise.resolve();
+let statusBarConfigRevision = 0;
 let statusBarTouched = false;
 const statusBarLoaded = ref(false);
 
@@ -1572,10 +1641,12 @@ function statusBarDelta(): Partial<StatusBarConfig> {
   return delta as Partial<StatusBarConfig>;
 }
 
-/** 合成要提交给后端的完整配置：权威值打底 + 用户差量 */
-function statusBarPayload(): StatusBarConfig {
-  const base = statusBarBaseline ?? statusBarConfig.value;
-  return { ...base, ...statusBarDelta() };
+/** 记录一次用户编辑；revision 用来区分「值碰巧相同」的先后两次编辑。 */
+function markStatusBarDirty(key: keyof StatusBarConfig): number {
+  const revision = (statusBarRevisions.get(key) ?? 0) + 1;
+  statusBarRevisions.set(key, revision);
+  statusBarDirty.add(key);
+  return revision;
 }
 
 /**
@@ -1593,8 +1664,13 @@ function statusBarPayload(): StatusBarConfig {
  */
 async function ensureStatusBarBaseline() {
   if (statusBarBaseline) return;
+  const revisionAtStart = statusBarConfigRevision;
   try {
-    statusBarBaseline = await tracker.getStatusBarConfig();
+    const loaded = await tracker.getStatusBarConfig();
+    // 等待读取时到达的托盘快照更新，不能用较早的读结果将其覆盖。
+    if (revisionAtStart === statusBarConfigRevision || !statusBarBaseline) {
+      statusBarBaseline = { ...loaded };
+    }
     statusBarLoaded.value = true;
   } catch (err) {
     log.warn("[Settings] 提交前获取状态栏权威配置失败", err);
@@ -1614,19 +1690,24 @@ const statusBarChildrenDisabled = computed(
 );
 
 async function loadStatusBarConfig() {
+  const revisionAtStart = statusBarConfigRevision;
   // 两件事互不依赖，并发发起；任一失败只影响自己的 UI 分支
   await Promise.all([loadGlassSupport(), (async () => {
     try {
       const loaded = await tracker.getStatusBarConfig();
-      statusBarBaseline = loaded;
+      // 加载途中已有保存确认或托盘快照时，晚到的旧读结果不得反向覆盖。
+      if (revisionAtStart === statusBarConfigRevision || !statusBarBaseline) {
+        statusBarBaseline = { ...loaded };
+      }
+      const base = statusBarBaseline ?? loaded;
       if (statusBarDirty.size > 0) {
         // 只让「用户改过的键」覆盖权威值，其余一律以后端为准
-        statusBarConfig.value = { ...loaded, ...statusBarDelta() };
+        statusBarConfig.value = { ...base, ...statusBarDelta() };
         log.info(
           `[Settings] 状态栏配置加载晚于用户操作，已保留改动键：${[...statusBarDirty].join(",")}`,
         );
       } else {
-        statusBarConfig.value = loaded;
+        statusBarConfig.value = { ...base };
       }
     } catch (err) {
       log.warn("[Settings] 加载状态栏配置失败", err);
@@ -1636,10 +1717,52 @@ async function loadStatusBarConfig() {
   })()]);
 }
 
-/** 统一提交入口：合成「权威值 + 差量」后提交，避免把未加载的默认值写坏后端 */
-async function commitStatusBarConfig() {
-  await ensureStatusBarBaseline();
-  await tracker.setStatusBarConfig(statusBarPayload());
+/**
+ * 状态栏保存按域串行；调用时冻结字段值和 revision，执行时只叠加到最新权威基线。
+ * 成功只确认本次快照，失败也只回滚本次字段，后续编辑由 revision 保护。
+ */
+function commitStatusBarConfig<K extends keyof StatusBarConfig>(
+  key: K,
+  value: StatusBarConfig[K],
+  previous: StatusBarConfig[K],
+  revision: number,
+): Promise<void> {
+  const delta = { [key]: value } as Partial<StatusBarConfig>;
+  const run = async () => {
+    let rollbackValue = previous;
+    let configRevisionAtStart = statusBarConfigRevision;
+    try {
+      await ensureStatusBarBaseline();
+      const previousBaseline = { ...(statusBarBaseline as StatusBarConfig) };
+      rollbackValue = previousBaseline[key];
+      const snapshot: StatusBarConfig = { ...previousBaseline, ...delta };
+      configRevisionAtStart = statusBarConfigRevision;
+      await tracker.setStatusBarConfig(snapshot);
+
+      // 托盘事件会在保存途中推进 revision；旧响应只能确认自己的 dirty 字段，
+      // 不能把较新的托盘基线或界面整体覆盖回去。
+      const responseIsStale = configRevisionAtStart !== statusBarConfigRevision;
+      if (!responseIsStale) statusBarBaseline = { ...snapshot };
+      statusBarConfigRevision += 1;
+      if (statusBarRevisions.get(key) === revision) statusBarDirty.delete(key);
+      // 保留确认期间产生的新差量；绝不用实时整对象推进基线。
+      statusBarConfig.value = { ...(statusBarBaseline ?? snapshot), ...statusBarDelta() };
+    } catch (err) {
+      if (statusBarRevisions.get(key) === revision) {
+        statusBarDirty.delete(key);
+        if (configRevisionAtStart !== statusBarConfigRevision && statusBarBaseline) {
+          // 失败响应同样不能回滚掉等待期间到达的托盘状态。
+          statusBarConfig.value = { ...statusBarBaseline, ...statusBarDelta() };
+        } else {
+          statusBarConfig.value = { ...statusBarConfig.value, [key]: rollbackValue };
+        }
+      }
+      throw err;
+    }
+  };
+  const result = statusBarSaveQueue.then(run);
+  statusBarSaveQueue = result.then(() => undefined, () => undefined);
+  return result;
 }
 
 // 乐观更新：先翻 ref 再 await IPC，失败回滚（与 onAutostart 模式一致）
@@ -1647,16 +1770,11 @@ async function onStatusBarEnabled(e: Event) {
   const next = (e.target as HTMLInputElement).checked;
   const prev = statusBarConfig.value.enabled;
   statusBarTouched = true;
-  statusBarDirty.add("enabled");
+  const revision = markStatusBarDirty("enabled");
   statusBarConfig.value = { ...statusBarConfig.value, enabled: next };
   try {
-    await commitStatusBarConfig();
-    // 提交成功：后端已接受该值，把它并入基线并清 dirty（避免下次重复叠加）
-    statusBarBaseline = statusBarPayload();
-    statusBarDirty.delete("enabled");
+    await commitStatusBarConfig("enabled", next, prev, revision);
   } catch (err) {
-    statusBarConfig.value = { ...statusBarConfig.value, enabled: prev };
-    statusBarDirty.delete("enabled");
     showAlert(
       "warn",
       t("settings.statusBarOff"),
@@ -1673,15 +1791,11 @@ async function onStatusBarItem(
   const next = (e.target as HTMLInputElement).checked;
   const prev = statusBarConfig.value[key];
   statusBarTouched = true;
-  statusBarDirty.add(key);
+  const revision = markStatusBarDirty(key);
   statusBarConfig.value = { ...statusBarConfig.value, [key]: next };
   try {
-    await commitStatusBarConfig();
-    statusBarBaseline = statusBarPayload();
-    statusBarDirty.delete(key);
+    await commitStatusBarConfig(key, next, prev, revision);
   } catch (err) {
-    statusBarConfig.value = { ...statusBarConfig.value, [key]: prev };
-    statusBarDirty.delete(key);
     showAlert(
       "warn",
       t("settings.statusBarOff"),
@@ -1711,6 +1825,9 @@ const shotLoadingMore = ref(false);
 // （为什么不能用「整对象 + 布尔标记」，见 loadStatusBarConfig 顶部的踩坑记录）。
 let shotConfigBaseline: ScreenshotConfig | null = null;
 const shotConfigDirty = new Set<keyof ScreenshotConfig>();
+const shotConfigRevisions = new Map<keyof ScreenshotConfig, number>();
+let shotConfigSaveQueue: Promise<void> = Promise.resolve();
+let shotConfigAckVersion = 0;
 
 /** 取 dirty 键构成的差量对象（只有用户真正改过的字段） */
 function shotConfigDelta(): Partial<ScreenshotConfig> {
@@ -1719,10 +1836,12 @@ function shotConfigDelta(): Partial<ScreenshotConfig> {
   return delta as Partial<ScreenshotConfig>;
 }
 
-/** 合成要提交给后端的完整配置：权威值打底 + 用户差量 */
-function shotPayload(): ScreenshotConfig {
-  const base = shotConfigBaseline ?? shotConfig.value;
-  return { ...base, ...shotConfigDelta() };
+/** 记录一次截图配置编辑，并返回本次编辑的 revision。 */
+function markShotConfigDirty(key: keyof ScreenshotConfig): number {
+  const revision = (shotConfigRevisions.get(key) ?? 0) + 1;
+  shotConfigRevisions.set(key, revision);
+  shotConfigDirty.add(key);
+  return revision;
 }
 
 /**
@@ -1741,23 +1860,64 @@ async function ensureShotBaseline() {
   }
 }
 
-/** 统一提交入口：合成「权威值 + 差量」后提交 */
-async function commitShotConfig() {
-  await ensureShotBaseline();
-  return screenshot.setConfig(shotPayload());
+interface ShotCommitResult {
+  response: Awaited<ReturnType<typeof screenshot.setConfig>>;
+  previous: ScreenshotConfig;
+  snapshot: ScreenshotConfig;
+}
+
+/** 截图保存同样按域串行；每次请求只携带调用时冻结的一个字段差量。 */
+function commitShotConfig<K extends keyof ScreenshotConfig>(
+  key: K,
+  value: ScreenshotConfig[K],
+  previous: ScreenshotConfig[K],
+  revision: number,
+): Promise<ShotCommitResult> {
+  const delta = { [key]: value } as Partial<ScreenshotConfig>;
+  const run = async (): Promise<ShotCommitResult> => {
+    let rollbackValue = previous;
+    try {
+      await ensureShotBaseline();
+      const previousBaseline = { ...(shotConfigBaseline as ScreenshotConfig) };
+      rollbackValue = previousBaseline[key];
+      const snapshot: ScreenshotConfig = { ...previousBaseline, ...delta };
+      const response = await screenshot.setConfig(snapshot);
+
+      // applied=false 仅表示热键注册失败；后端已经保存并采用该配置快照。
+      shotConfigBaseline = { ...snapshot };
+      shotConfigAckVersion += 1;
+      if (shotConfigRevisions.get(key) === revision) shotConfigDirty.delete(key);
+      shotConfig.value = { ...snapshot, ...shotConfigDelta() };
+      return { response, previous: previousBaseline, snapshot };
+    } catch (err) {
+      if (shotConfigRevisions.get(key) === revision) {
+        shotConfig.value = { ...shotConfig.value, [key]: rollbackValue };
+        shotConfigDirty.delete(key);
+      }
+      throw err;
+    }
+  };
+  const result = shotConfigSaveQueue.then(run);
+  shotConfigSaveQueue = result.then(() => undefined, () => undefined);
+  return result;
 }
 
 async function loadShotConfig() {
+  const ackAtStart = shotConfigAckVersion;
   try {
     const loaded = await screenshot.getConfig();
-    shotConfigBaseline = loaded;
+    // 不让保存前发起、保存后才返回的读结果覆盖已确认快照。
+    if (ackAtStart === shotConfigAckVersion || !shotConfigBaseline) {
+      shotConfigBaseline = { ...loaded };
+    }
+    const base = shotConfigBaseline ?? loaded;
     if (shotConfigDirty.size > 0) {
-      shotConfig.value = { ...loaded, ...shotConfigDelta() };
+      shotConfig.value = { ...base, ...shotConfigDelta() };
       log.info(
         `[Settings] 截图配置加载晚于用户操作，已保留改动键：${[...shotConfigDirty].join(",")}`,
       );
     } else {
-      shotConfig.value = loaded;
+      shotConfig.value = { ...base };
     }
     shotDir.value = await screenshot.dir();
   } catch (err) {
@@ -1822,42 +1982,27 @@ const ocrEngineHint = computed(() => {
 async function onOcrEngine(kind: OcrEngineKind) {
   const prev = shotConfig.value.ocr_engine;
   if (prev === kind) return;
-  shotConfigDirty.add("ocr_engine");
+  const revision = markShotConfigDirty("ocr_engine");
   shotConfig.value = { ...shotConfig.value, ocr_engine: kind };
   try {
-    await commitShotConfig();
-    shotConfigBaseline = shotPayload();
-    shotConfigDirty.delete("ocr_engine");
+    await commitShotConfig("ocr_engine", kind, prev, revision);
     // 切换后重新探测一次：后端会顺带回报资源状态与当前生效引擎
     await loadOcrEngineInfo();
   } catch (err) {
-    shotConfig.value = { ...shotConfig.value, ocr_engine: prev };
-    shotConfigDirty.delete("ocr_engine");
     showAlert("warn", t("settings.shotTitle"), err instanceof Error ? err.message : String(err));
   }
 }
 
-/** 数值类改动：先乐观写 ref，再 await IPC，失败则回读真实配置纠偏
- *
- * v1.2.7：`corner_radius` / `max_count` 走的是 `v-model.number` **直接写 ref**，
- * 没有独立的 change handler，所以 dirty 键要在这里按「与基线是否不同」反推。
- * 否则用户在加载窗口内拖滑块，会被晚到的 `getConfig()` 整体覆盖（+= 丢更新）。
- */
-async function persistShotConfig() {
+/** 数值类改动：change 事件明确携带字段，v-model 已写入的新值在调用时冻结。 */
+async function persistShotConfig(key: "corner_radius" | "max_count") {
+  const next = shotConfig.value[key];
+  const prev = shotConfigBaseline?.[key] ?? DEFAULT_SCREENSHOT_CONFIG[key];
+  const revision = markShotConfigDirty(key);
   try {
-    await ensureShotBaseline();
-    for (const k of ["corner_radius", "max_count"] as const) {
-      if (shotConfigBaseline && shotConfig.value[k] !== shotConfigBaseline[k]) {
-        shotConfigDirty.add(k);
-      }
-    }
-    const snapshot = shotPayload();
-    const res = await screenshot.setConfig(snapshot);
-    shotConfigBaseline = snapshot;
-    shotConfigDirty.clear();
-    if (!res.applied && snapshot.enabled) {
+    const { response, snapshot } = await commitShotConfig(key, next, prev, revision);
+    if (!response.applied && snapshot.enabled) {
       // 快捷键没注册上（被系统/其他软件占用）——其余配置已保存，只是热键没生效
-      hotkeyError.value = t("settings.shotShortcutConflict") + " " + (res.error ?? "");
+      hotkeyError.value = t("settings.shotShortcutConflict") + " " + (response.error ?? "");
       await loadShotConfig();
     }
   } catch (err) {
@@ -2044,24 +2189,30 @@ async function applyHotkey(combo: string) {
     hotkeyError.value = "";
     return;
   }
-  shotConfigDirty.add("shortcut");
+  let revision = markShotConfigDirty("shortcut");
   shotConfig.value = { ...shotConfig.value, shortcut: combo };
   try {
-    const res = await commitShotConfig();
-    if (res.applied) {
-      shotConfigBaseline = shotPayload();
-      shotConfigDirty.delete("shortcut");
-      hotkeyError.value = "";
+    const { response, previous, snapshot } = await commitShotConfig(
+      "shortcut",
+      combo,
+      prev,
+      revision,
+    );
+    if (response.applied) {
+      if (shotConfigRevisions.get("shortcut") === revision) hotkeyError.value = "";
       return;
     }
-    hotkeyError.value = `${t("settings.shotShortcutConflict")} ${res.error ?? ""}`;
-    shotConfig.value = { ...shotConfig.value, shortcut: prev };
-    shotConfigDirty.delete("shortcut");
-    await commitShotConfig();
+    // 用户已录入更新的组合时，旧请求的失败不得把它回滚或再提交一次。
+    if (shotConfigRevisions.get("shortcut") !== revision) return;
+    hotkeyError.value = `${t("settings.shotShortcutConflict")} ${response.error ?? ""}`;
+    const restore = previous.shortcut;
+    revision = markShotConfigDirty("shortcut");
+    shotConfig.value = { ...shotConfig.value, shortcut: restore };
+    await commitShotConfig("shortcut", restore, snapshot.shortcut, revision);
   } catch (err) {
-    hotkeyError.value = err instanceof Error ? err.message : String(err);
-    shotConfig.value = { ...shotConfig.value, shortcut: prev };
-    shotConfigDirty.delete("shortcut");
+    if (shotConfigRevisions.get("shortcut") === revision) {
+      hotkeyError.value = err instanceof Error ? err.message : String(err);
+    }
   }
 }
 
@@ -2073,15 +2224,11 @@ async function resetHotkey() {
 async function onShotEnabled(e: Event) {
   const next = (e.target as HTMLInputElement).checked;
   const prev = shotConfig.value.enabled;
-  shotConfigDirty.add("enabled");
+  const revision = markShotConfigDirty("enabled");
   shotConfig.value = { ...shotConfig.value, enabled: next };
   try {
-    await commitShotConfig();
-    shotConfigBaseline = shotPayload();
-    shotConfigDirty.delete("enabled");
+    await commitShotConfig("enabled", next, prev, revision);
   } catch (err) {
-    shotConfig.value = { ...shotConfig.value, enabled: prev };
-    shotConfigDirty.delete("enabled");
     showAlert("warn", t("settings.shotTitle"), err instanceof Error ? err.message : String(err));
   }
 }
@@ -2089,15 +2236,11 @@ async function onShotEnabled(e: Event) {
 async function onShotToggle(e: Event, key: "auto_save") {
   const next = (e.target as HTMLInputElement).checked;
   const prev = shotConfig.value[key];
-  shotConfigDirty.add(key);
+  const revision = markShotConfigDirty(key);
   shotConfig.value = { ...shotConfig.value, [key]: next };
   try {
-    await commitShotConfig();
-    shotConfigBaseline = shotPayload();
-    shotConfigDirty.delete(key);
+    await commitShotConfig(key, next, prev, revision);
   } catch (err) {
-    shotConfig.value = { ...shotConfig.value, [key]: prev };
-    shotConfigDirty.delete(key);
     showAlert("warn", t("settings.shotTitle"), err instanceof Error ? err.message : String(err));
   }
 }
@@ -2310,7 +2453,7 @@ function confirmCleanAll() {
 //
 // ── v1.2.7：这一组字段也栽在同一个坑里（收尾审计发现的第三处）──
 // 症状（release 构建实测，进设置页 +17ms 就开始打字）：
-//     用户输入 '__race_probe_name__' → getSettings() 返回后被回填成 'DESKTOP-SV0FM39'
+//     用户输入 '__race_probe_name__' → getSettings() 返回后被回填成 'TEST-HOST'
 //   · 用户在设备名框里打的字被静默清空并填回旧值。更糟的是：若他接着点「保存」，
 //     保存回去的就是**旧名字**（因为 v-model 已被覆盖），用户会以为「改名不生效」。
 //   · `autostart` 更隐蔽：它有即时提交（onAutostart 直接写后端），若加载晚于点击，
@@ -2533,8 +2676,10 @@ async function onImport(e: Event) {
     const text = await file.text();
     const n = await tracker.importData(text);
     await petStore.init();
-    await emit("pet-store-updated");
-    await emit("pet-enabled-changed");
+    if (isTauri) {
+      await emit("pet-store-updated");
+      await emit("pet-enabled-changed");
+    }
     showAlert("info", t("settings.importSuccess"), t("settings.importedMsg", { n }));
   } catch (err) {
     log.error("导入失败", err);

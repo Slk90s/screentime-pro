@@ -19,6 +19,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "./tracker";
+import { mock } from "./mock";
 import type {
   CaptureReadyPayload,
   OcrEngineInfo,
@@ -54,6 +55,8 @@ export const DEFAULT_SCREENSHOT_CONFIG: ScreenshotConfig = {
 
 /** 提交参数：一张已经合成好的 PNG（含裁剪 / 标注 / 圆角） */
 export interface CommitArgs {
+  /** 本轮截图序号；Rust 用它拒绝旧会话与重复提交 */
+  captureSeq: number;
   /** PNG data URL 或裸 base64（Rust 侧两种都容忍） */
   pngBase64: string;
   /** 写入系统剪贴板 */
@@ -107,9 +110,17 @@ export const screenshot = {
       : Promise.resolve(null),
 
   commit: (args: CommitArgs): Promise<ScreenshotResult> =>
-    invoke<ScreenshotResult>("screenshot_commit", { ...args }),
+    isTauri
+      ? invoke<ScreenshotResult>("screenshot_commit", { ...args })
+      : Promise.resolve().then(() => mock("screenshot_commit", { ...args }) as ScreenshotResult),
 
-  cancel: (): Promise<void> => invoke<void>("screenshot_cancel"),
+  /** 取消指定序号的当前截图；旧会话迟到的取消由 Rust 安全忽略。 */
+  cancel: (captureSeq: number): Promise<void> =>
+    isTauri
+      ? invoke<void>("screenshot_cancel", { captureSeq })
+      : Promise.resolve().then(() => {
+          mock("screenshot_cancel", { captureSeq });
+        }),
 
   list: (limit = 60, offset = 0): Promise<ScreenshotOut[]> =>
     isTauri ? invoke<ScreenshotOut[]>("screenshot_list", { limit, offset }) : Promise.resolve([]),

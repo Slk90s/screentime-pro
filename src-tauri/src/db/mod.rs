@@ -938,7 +938,14 @@ impl AppDb {
         drop(dev_stmt);
         drop(stmt2);
         drop(stmt);
-        let pet_state = self.get_setting_result("pet_state")?;
+        // 当前连接已持锁，不能调用会再次获取 self.0 的 get_setting_result。
+        let pet_state = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key='pet_state'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
 
         Ok(ExportBundle {
             version: 1,
@@ -954,6 +961,19 @@ impl AppDb {
     ///
     /// 返回新导入的时段条数。
     pub fn import_data(&self, bundle: &ExportBundle) -> rusqlite::Result<usize> {
+        // 备份里的桌宠状态必须是 JSON object。校验必须先于任何 SQL 写入：
+        // 否则非法 pet_state 会在导入后污染设置，甚至已经写入部分设备/应用数据。
+        if let Some(json) = &bundle.pet_state {
+            serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(json)
+                .map(|_| ())
+                .map_err(|error| {
+                    rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("bundle.pet_state must be a JSON object: {error}"),
+                    )))
+                })?;
+        }
+
         let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         // 写入设备名映射
         for (id, name) in &bundle.devices {
@@ -1301,5 +1321,90 @@ impl AppDb {
         // 按总秒数倒序，最活跃的排前面
         out.sort_by_key(|a| std::cmp::Reverse(a.total_seconds));
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppDb;
+    use rusqlite::Connection;
+    use std::sync::{mpsc, Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
+
+    /// 回归：导出复用已持锁连接，必须完成且带上桌宠状态。
+    #[test]
+    fn export_all_filtered_completes_and_includes_pet_state() {
+        let conn = Connection::open_in_memory().expect("创建内存数据库");
+        AppDb::migrate(&conn).expect("初始化测试数据库");
+        let db = Arc::new(AppDb(Mutex::new(conn)));
+        let pet_state = r#"{"mood":"happy","level":7}"#;
+        db.set_setting("pet_state", pet_state)
+            .expect("写入桌宠状态");
+
+        let export_db = Arc::clone(&db);
+        let (tx, rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            tx.send(export_db.export_all_filtered(None))
+                .expect("返回导出结果");
+        });
+        let result = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("导出不得在数据库互斥锁上死锁");
+        worker.join().expect("导出线程不得 panic");
+        let bundle = result.expect("导出应成功");
+
+        assert_eq!(
+            bundle.pet_state.as_deref(),
+            Some(pet_state),
+            "导出必须包含 settings 中的 pet_state"
+        );
+    }
+
+    /// 回归：非法桌宠状态必须在首条 SQL 写入前拒绝，且不得覆盖现有设置。
+    #[test]
+    fn import_rejects_invalid_pet_state_before_writing_settings() {
+        for invalid in ["not-json", "null", "[]", r#""text""#, "42"] {
+            let conn = Connection::open_in_memory().expect("创建内存数据库");
+            AppDb::migrate(&conn).expect("初始化测试数据库");
+            let db = AppDb(Mutex::new(conn));
+            let original_pet_state = r#"{"mood":"happy","level":7}"#;
+            db.set_setting("pet_state", original_pet_state)
+                .expect("写入原桌宠状态");
+            db.set_setting("device_name:existing", "keep-me")
+                .expect("写入原设备名");
+
+            let mut bundle = db.export_all().expect("构造导入包");
+            bundle.pet_state = Some(invalid.to_string());
+            bundle
+                .devices
+                .insert("new-device".to_string(), "must-not-import".to_string());
+            bundle
+                .devices
+                .insert("existing".to_string(), "must-not-overwrite".to_string());
+
+            let error = db
+                .import_data(&bundle)
+                .expect_err(&format!("{invalid} 不应作为桌宠状态导入"));
+            assert!(
+                error.to_string().contains("bundle.pet_state"),
+                "错误应指出非法字段：{error}"
+            );
+            assert_eq!(
+                db.get_setting("pet_state").as_deref(),
+                Some(original_pet_state),
+                "{invalid} 不得覆盖原桌宠状态"
+            );
+            assert_eq!(
+                db.get_setting("device_name:existing").as_deref(),
+                Some("keep-me"),
+                "{invalid} 不得改写既有设备名"
+            );
+            assert_eq!(
+                db.get_setting("device_name:new-device"),
+                None,
+                "{invalid} 不得先写入设备映射再报错"
+            );
+        }
     }
 }

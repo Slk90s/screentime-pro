@@ -320,11 +320,10 @@ pub fn end_drag(
                 FallbackCorner::BottomRight,
                 DRAG_MARGIN,
             ) {
-                let should_apply = {
-                    let _frame = state.frame.lock().unwrap_or_else(|e| e.into_inner());
-                    state.generation.load(Ordering::SeqCst) == end_generation
-                };
-                if should_apply {
+                // 检查与投递必须处于同一临界区：否则 newer begin 可在两者间接管，
+                // 旧 end 随后仍会把新会话的窗口贴回主屏。
+                let _frame = state.frame.lock().unwrap_or_else(|e| e.into_inner());
+                if state.generation.load(Ordering::SeqCst) == end_generation {
                     // 回落到物理坐标 → 换算回逻辑像素回报前端（前端存的就是逻辑像素）
                     x = f64::from(rx) / scale;
                     y = f64::from(ry) / scale;

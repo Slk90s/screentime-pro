@@ -1,6 +1,7 @@
 /**
  * 设计思路：在非 Tauri 环境提供模拟统计与配置数据，支撑界面和图表脱离 Rust 独立调试。
  * 修改历史：2026-11-03 @v1.2.12: 新增 - 补充文件头设计说明与修改历史。
+ * 2026-10-30 @v1.2.13: 修复 - 规则 mock 真实增删改；补独立磁盘查询并移除不存在的命令。
  */
 // 浏览器预览模式下的模拟数据
 //
@@ -12,8 +13,11 @@ import type {
   DailySummaryOut,
   DayCategoryOut,
   DeviceInfo,
+  DiskVolume,
   ExportResult,
   HourlyBucketOut,
+  NetworkProbeConfig,
+  NetworkStatusOut,
   OverviewOut,
   PeriodStat,
   SettingsOut,
@@ -29,6 +33,31 @@ export const mockRules = [
   { id: 3, field: "process_name", match_type: "contains", pattern: "code", category_id: "dev", priority: 0, enabled: true },
   { id: 4, field: "window_title", match_type: "contains", pattern: "netflix", category_id: "entertainment", priority: 5, enabled: true },
 ];
+
+const mockDiskVolumes: DiskVolume[] = [
+  { mount: "C:", total_bytes: 200_000_000_000, used_bytes: 110_000_000_000, avail_bytes: 90_000_000_000, is_system: true },
+  { mount: "D:", total_bytes: 400_000_000_000, used_bytes: 100_000_000_000, avail_bytes: 300_000_000_000, is_system: false },
+];
+
+const mockNetworkProbeConfig: NetworkProbeConfig = { enabled: false };
+
+function mockNetworkStatus(): NetworkStatusOut {
+  const enabled = mockNetworkProbeConfig.enabled;
+  return {
+    link: "up",
+    medium: "wifi",
+    band: "ghz5",
+    vpn: false,
+    internet: enabled ? "online" : "disabled",
+    latency_p50_ms: enabled ? 28.4 : null,
+    latency_p95_ms: enabled ? 71.8 : null,
+    jitter_ms: enabled ? 6.2 : null,
+    failure_pct: enabled ? 4.2 : null,
+    attempts: enabled ? 24 : 0,
+    successes: enabled ? 23 : 0,
+    sampled_at_ms: enabled ? Date.now() : 0,
+  };
+}
 
 export const mockCategories: CategoryOut[] = [
   { id: "social", name: "社交", color: "#FF7E27" },
@@ -54,14 +83,50 @@ function dateMinusDays(i: number): string {
 
 export function mock(cmd: string, args?: Record<string, unknown>): unknown {
   switch (cmd) {
+    case "screenshot_commit":
+      // 浏览器预览没有 Rust 活动帧；明确失败，不能伪造剪贴板/落盘成功。
+      throw new Error("浏览器预览没有活动截图会话，无法提交");
+    case "screenshot_cancel":
+      // 与 Rust 的过期取消一致：预览没有活动原生会话，安全 no-op。
+      return null;
     case "get_categories":
       return mockCategories;
     case "get_rules":
-      return mockRules;
-    case "add_rule":
-      return mockRules.length + 1;
-    case "update_rule":
-    case "delete_rule":
+      return mockRules.map((rule) => ({ ...rule }));
+    case "add_rule": {
+      const id = Math.max(0, ...mockRules.map((rule) => rule.id)) + 1;
+      mockRules.push({
+        id,
+        field: args?.field as string,
+        match_type: args?.matchType as string,
+        pattern: args?.pattern as string,
+        category_id: args?.categoryId as string,
+        priority: args?.priority as number,
+        enabled: args?.enabled as boolean,
+      });
+      return id;
+    }
+    case "update_rule": {
+      const rule = args?.rule as Record<string, unknown>;
+      const index = mockRules.findIndex((item) => item.id === rule.id);
+      if (index < 0) throw new Error("规则不存在");
+      mockRules[index] = {
+        id: rule.id as number,
+        field: rule.field as string,
+        match_type: rule.matchType as string,
+        pattern: rule.pattern as string,
+        category_id: rule.categoryId as string,
+        priority: rule.priority as number,
+        enabled: rule.enabled as boolean,
+      };
+      return true;
+    }
+    case "delete_rule": {
+      const index = mockRules.findIndex((rule) => rule.id === args?.id);
+      if (index < 0) throw new Error("规则不存在");
+      mockRules.splice(index, 1);
+      return true;
+    }
     case "set_autostart":
     case "start_tracking":
       return true;
@@ -206,15 +271,19 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
         disk_usage: 0.55,
         disk_used_bytes: 110_000_000_000,
         disk_total_bytes: 200_000_000_000,
-        disk_volumes: [
-          { mount: "C:", total_bytes: 200_000_000_000, used_bytes: 110_000_000_000, avail_bytes: 90_000_000_000, is_system: true },
-          { mount: "D:", total_bytes: 400_000_000_000, used_bytes: 100_000_000_000, avail_bytes: 300_000_000_000, is_system: false },
-        ],
+        disk_volumes: mockDiskVolumes,
         net_rx_bps: 125_000,
         net_tx_bps: 42_000,
       };
-    case "get_system_metrics_enabled":
-      return true;
+    case "get_disk_volumes":
+      return mockDiskVolumes;
+    case "get_network_status":
+      return mockNetworkStatus();
+    case "get_network_probe_config":
+      return { ...mockNetworkProbeConfig };
+    case "set_network_probe_config":
+      mockNetworkProbeConfig.enabled = args?.enabled === true;
+      return null;
     case "get_log_size":
       return 1024 * 1024;
     // ⚠️ v1.1.1 删除 `case "get_idle_threshold"`：该 command 已由工作区他人改动移除，

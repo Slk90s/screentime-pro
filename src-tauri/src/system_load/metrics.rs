@@ -135,6 +135,11 @@ impl MetricsSampler {
         let _ = self.network.sample_rate();
     }
 
+    /// 仅读取磁盘卷缓存，不推进 CPU/网络差分基准。
+    pub fn disk_volumes(&self) -> Vec<DiskVolume> {
+        self.sample_disk_volumes_cached()
+    }
+
     pub fn sample_all(&self) -> MetricsSnapshot {
         let cpu_usage = self.cpu.cpu_usage().unwrap_or(0.0);
         let (mem_used, mem_total) = self.sample_memory();

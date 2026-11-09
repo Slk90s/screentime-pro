@@ -176,16 +176,16 @@
       <button class="tb" :title="t('shot.fullscreen')" @click="selectAll">
         <svg viewBox="0 0 20 20" width="18" height="18"><path d="M4 8V4h4M16 12v4h-4M4 12v4h4M16 8V4h-4" /></svg>
       </button>
-      <button class="tb" :title="t('shot.save')" :disabled="selTooSmall" @click="commit(false, true)">
+      <button class="tb" :title="t('shot.save')" :disabled="selTooSmall || committing" @click="commit(false, true)">
         <svg viewBox="0 0 20 20" width="18" height="18"><path d="M10 3v9m0 0l-3.5-3.5M10 12l3.5-3.5M4 16h12" /></svg>
       </button>
-      <button class="tb" :title="t('shot.copy')" :disabled="selTooSmall" @click="commit(true, false)">
+      <button class="tb" :title="t('shot.copy')" :disabled="selTooSmall || committing" @click="commit(true, false)">
         <svg viewBox="0 0 20 20" width="18" height="18"><rect x="7.5" y="7.5" width="9" height="9" rx="1.5" /><path d="M12.5 4.5h-8v9" /></svg>
       </button>
       <button class="tb tb--cancel" :title="t('shot.cancel')" @click="cancel">
         <svg viewBox="0 0 20 20" width="18" height="18"><path d="M6 6l8 8M14 6l-8 8" /></svg>
       </button>
-      <button class="tb tb--ok" :title="t('shot.confirm')" :disabled="selTooSmall" @click="commit(true, autoSave)">
+      <button class="tb tb--ok" :title="t('shot.confirm')" :disabled="selTooSmall || committing" @click="commit(true, autoSave)">
         <svg viewBox="0 0 20 20" width="18" height="18"><path d="M5 10.5l3.5 3.5L15 6.5" /></svg>
       </button>
     </div>
@@ -256,7 +256,6 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { screenshot } from "../api/screenshot";
 import type { CaptureReadyPayload, OcrEngineKind } from "../types";
 import { log } from "@/lib/logger";
@@ -1109,32 +1108,63 @@ function compose(): string | null {
   return c.toDataURL("image/png");
 }
 
-  async function cancel() {
-    try {
-      await screenshot.cancel();
-    } finally {
-      endSession();
-      reset();
-      await getCurrentWindow().hide();
-    }
+async function cancel() {
+  const currentMeta = meta.value;
+  const myGen = sessionGeneration;
+  if (!currentMeta) return;
+  const isCurrent = () => myGen === sessionGeneration && meta.value === currentMeta;
+
+  try {
+    // captureSeq 让 Rust 能识别并忽略迟到的旧取消；后端只在序号仍匹配时隐藏原生窗口。
+    await screenshot.cancel(currentMeta.seq);
+  } catch (err) {
+    // 取消失败时保留当前现场，允许显式重试；旧请求不得污染新会话。
+    if (isCurrent()) commitError.value = err instanceof Error ? err.message : String(err);
+    return;
   }
 
-  const commitError = ref("");
+  // 在途期间若已开启新会话，旧取消不得 reset 新 UI；原生 hide 已由后端按 seq 收尾。
+  if (!isCurrent()) return;
+  endSession();
+  reset();
+}
 
-  async function commit(copy: boolean, save: boolean) {
-    const png = compose();
-    if (!png) return;
-    commitError.value = "";
-    try {
-      await screenshot.commit({ pngBase64: png, copy, save });
-    } catch (err) {
-      commitError.value = err instanceof Error ? err.message : String(err);
-      return;
-    }
-    endSession();
-    reset();
-    await getCurrentWindow().hide();
+const committing = ref(false);
+const commitError = ref("");
+
+async function commit(copy: boolean, save: boolean) {
+  if (committing.value) return;
+  const currentMeta = meta.value;
+  const myGen = sessionGeneration;
+  if (!currentMeta || !base) {
+    commitError.value = t("shot.commitNotReady");
+    return;
   }
+  const png = compose();
+  if (!png) {
+    commitError.value = t("shot.commitInvalidSelection");
+    return;
+  }
+
+  const isCurrent = () => myGen === sessionGeneration && meta.value === currentMeta;
+  committing.value = true;
+  commitError.value = "";
+  try {
+    await screenshot.commit({ captureSeq: currentMeta.seq, pngBase64: png, copy, save });
+  } catch (err) {
+    // 失败保留选区与标注；过期请求的错误也不得污染新一轮会话。
+    if (isCurrent()) commitError.value = err instanceof Error ? err.message : String(err);
+    return;
+  } finally {
+    if (isCurrent()) committing.value = false;
+  }
+
+  // 在途期间可能已取消或开启新截图：旧提交不得结束或重置新会话。
+  // 原生 hide 由 Rust 在会话锁内完成，避免此处迟到的直接窗口调用误隐藏新一轮。
+  if (!isCurrent()) return;
+  endSession();
+  reset();
+}
 
 function reset() {
   meta.value = null;
@@ -1155,6 +1185,7 @@ function reset() {
   ocrLang.value = "";
   ocrCopied.value = false;
   ocrStale.value = false;
+  committing.value = false;
   commitError.value = "";
   base = null;
   drag = null;
@@ -1186,7 +1217,7 @@ function onKey(e: KeyboardEvent) {
     void cancel();
   } else if (e.key === "Enter") {
     e.preventDefault();
-    if (box.value) void commit(true, autoSave.value);
+    if (box.value && !committing.value) void commit(true, autoSave.value);
   } else if ((e.key === "a" || e.key === "A") && (e.ctrlKey || e.metaKey)) {
     e.preventDefault();
     selectAll();

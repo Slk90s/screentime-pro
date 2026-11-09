@@ -78,6 +78,7 @@
       :confirm-text="editingId === null ? t('rules.addBtn') : t('rules.saveBtn')"
       :cancel-text="t('common.cancel')"
       :close-on-confirm="false"
+      :busy="submitting"
       @confirm="submit"
       width="560px"
     >
@@ -243,6 +244,7 @@ function showAlert(
 
 // 表单状态：editingId 为 null 表示新增，否则为正在编辑的规则 id
 const editingId = ref<number | null>(null);
+const submitting = ref(false);
 const form = ref({
   field: "process_name",
   match_type: "contains",
@@ -267,42 +269,61 @@ function catColor(id: string): string {
   return categories.value.find((c) => c.id === id)?.color || "#888780";
 }
 
-// 提交：新增或保存修改（Modal @confirm 触发）
+// 提交：新增或保存修改（Modal @confirm 触发）；单次飞行，拦截连击与 Enter 重复确认。
 async function submit() {
-  const f = form.value;
-  if (!f.pattern.trim()) {
-    showAlert("warn", t("rules.validateFail"), t("rules.patternEmpty"));
-    return;
-  }
+  if (submitting.value) return;
+  submitting.value = true;
   try {
-    if (editingId.value === null) {
-      await tracker.addRule({
-        field: f.field,
-        matchType: f.match_type,
-        pattern: f.pattern.trim(),
-        categoryId: f.category_id,
-        priority: f.priority,
-        enabled: f.enabled,
-      });
-      showAlert("info", t("rules.added"), t("rules.addedMsg", { pattern: f.pattern }));
-    } else {
-      await tracker.updateRule({
-        id: editingId.value,
-        field: f.field,
-        matchType: f.match_type,
-        pattern: f.pattern.trim(),
-        categoryId: f.category_id,
-        priority: f.priority,
-        enabled: f.enabled,
-      });
-      showAlert("info", t("rules.updated"), t("rules.updatedMsg", { id: editingId.value }));
+    // 冻结本次提交，等待期间的新输入不会悄悄改变已发出的请求。
+    const draft = { ...form.value, pattern: form.value.pattern.trim() };
+    if (!draft.pattern) {
+      showAlert("warn", t("rules.validateFail"), t("rules.patternEmpty"));
+      return;
     }
-    await loadAll();
+    const id = editingId.value;
+    const pattern = draft.pattern;
+    try {
+      if (id === null) {
+        await tracker.addRule({
+          field: draft.field,
+          matchType: draft.match_type,
+          pattern: draft.pattern,
+          categoryId: draft.category_id,
+          priority: draft.priority,
+          enabled: draft.enabled,
+        });
+      } else {
+        await tracker.updateRule({
+          id,
+          field: draft.field,
+          matchType: draft.match_type,
+          pattern: draft.pattern,
+          categoryId: draft.category_id,
+          priority: draft.priority,
+          enabled: draft.enabled,
+        });
+      }
+    } catch (e: any) {
+      log.error("[Rules] submit failed:", e);
+      showAlert("warn", t("rules.opFailed"), t("rules.opFailedMsg", { err: e?.message || e }));
+      return;
+    }
+
+    // 写操作已经确认成功，先关闭并重置表单；刷新失败不能推翻成功状态或诱导重复提交。
     resetForm();
     formOpen.value = false;
-  } catch (e: any) {
-    log.error("[Rules] submit failed:", e);
-    showAlert("warn", t("rules.opFailed"), t("rules.opFailedMsg", { err: e?.message || e }));
+    if (id === null) {
+      showAlert("info", t("rules.added"), t("rules.addedMsg", { pattern }));
+    } else {
+      showAlert("info", t("rules.updated"), t("rules.updatedMsg", { id }));
+    }
+    try {
+      await loadAll();
+    } catch (e) {
+      log.error("[Rules] refresh after submit failed:", e);
+    }
+  } finally {
+    submitting.value = false;
   }
 }
 
@@ -347,11 +368,17 @@ function confirmRemove(id: number, pattern: string) {
     async () => {
       try {
         await tracker.deleteRule(id);
-        showAlert("info", t("rules.removed"), t("rules.removedMsg", { pattern }));
-        await loadAll();
       } catch (e: any) {
         log.error("[Rules] deleteRule failed:", e);
         showAlert("warn", t("rules.removeFailed"), t("rules.removeFailedMsg", { err: e?.message || e }));
+        return;
+      }
+      showAlert("info", t("rules.removed"), t("rules.removedMsg", { pattern }));
+      try {
+        await loadAll();
+      } catch (e) {
+        // 删除已成功，列表可稍后重新加载；不能显示删除失败而诱导重试。
+        log.error("[Rules] refresh after delete failed:", e);
       }
     }
   );

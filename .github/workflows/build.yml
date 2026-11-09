@@ -19,6 +19,18 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Validate release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED="v$(node -p "require('./package.json').version")"
+          CONF="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          [[ "$EXPECTED" == "v$CONF" ]] || {
+            echo "::error::package.json=$EXPECTED 与 tauri.conf.json=$CONF 不一致"; exit 1; }
+          if [[ "${GITHUB_REF}" == refs/tags/* && "${GITHUB_REF_NAME}" != "$EXPECTED" ]]; then
+            echo "::error::标签 $GITHUB_REF_NAME 与版本 $EXPECTED 不一致，已阻止产物/updater 分拆"
+            exit 1
+          fi
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Install frontend deps
@@ -53,6 +65,7 @@ jobs:
             - **桌宠状态入 SQLite**：开关、位置、皮肤、缩放、等级和喂食记录纳入备份，支持旧 localStorage 幂等迁移。
             - **多盘指标**：悬浮条支持系统盘、全部本地磁盘汇总和指定挂载点，选盘失效自动回退系统盘。
             - **窗口单源**：pet / pet-menu / float / capture 统一由 tauri.conf.json 声明，移除 Rust builder 重复定义。
+            - **网络详情**：悬浮条可展开链路、介质、2.4G/5G/6G、VPN 与 HTTPS p50/p95、抖动、失败率；默认关闭探测，双端点、单飞、过期降级。
 
             ## 🐞 稳定性修复
 
@@ -62,30 +75,39 @@ jobs:
             - 设置页所有配置提交前必须取得权威基线，读取失败禁止写入默认值；备份保留天数同步持久化。
             - 修复权限授权后重启误撤销、菜单位移重复累计、跨日喂食禁用、长按尾随单击、蜘蛛侠姿势图缺失。
             - macOS 全屏检测覆盖所有活动显示器，主屏和副屏游戏/视频全屏均可自动隐藏。
+            - 三端网速改为硬件接口优先、虚拟接口兜底并按接口差分，避免 VPN/虚拟网卡重复计数与接口变化虚假尖峰。
+            - 导出/备份复用持锁连接，修复全量导出与自动备份死锁；备份配置写库失败不再假成功。
+            - Linux X11 前台与 ScreenSaver 空闲采集恢复；空闲和无前台间隔不再计入使用时长；macOS 窗口枚举内存泄漏修复。
+            - 截图提交绑定 capture_seq 且 single-flight，双击和旧会话不得重复落盘或误清新帧；悬浮条启动显隐与慢轮询修复。
+            - 设置保存、堆叠弹窗、页面旧响应、桌宠手动状态与规则结果等并发竞态修复；辅助窗口日志权限补齐。
+            - 二次审计回归清零：规则编辑、截图 begin/commit/cancel 生命周期、玻璃显隐与隐藏探测、网络读失败基准、Linux 路由、pet_state 导入、短会话与拖拽竞态。
 
             ## 🧹 工程清理
 
-            - 删除 3 个无消费者 IPC；新增松手检测与桌宠状态读写，当前共 **91** 个命令。
+            - 删除 3 个无消费者 IPC；新增松手检测、桌宠状态读写、独立磁盘查询与网络详情状态/配置，并移除无消费者 show_float_window，当前共 **94** 个命令。
             - 'cargo clippy --all-targets -- -D warnings' **零警告**，源码设计思路与修改历史已补齐。
             - 清理旧 sprite 链路、无效监听、恒零参数、重复样式和过时架构说明。
 
             ## ✅ 验证
 
-            - 'cargo test --lib'：**65 passed / 0 failed / 5 ignored**
+            - 'cargo test --lib'：**106 passed / 0 failed / 7 ignored**
             - 'cargo clippy --all-targets -- -D warnings'：**零警告**
             - 'vue-tsc --noEmit'、'vite build'：通过
             - macOS 显示器枚举与 Linux 按键查询交叉探针：通过
             - Windows 独立开发版实测：400px 快甩、离屏回落、悬浮条松手、多盘入口、SQLite 位置与启用状态
+            - 浏览器实测：顶层弹窗 Escape、规则 mock 增删改、设置失败回滚、悬浮条慢请求最大并发 1、网络详情展开/收起
 
             ## ⚠️ 发版前边界
 
             - 混合 DPI 双屏拖拽与重启落点仍需实机验证。
             - macOS/Linux 的权限、全屏、X11 交互仍需实机复验。
+            - Wi-Fi 频段、双端点质量探测与混合 DPI 下的详情展开布局仍需实机复核。
             - GitHub CI 三平台构建、DMG 重传和 latest.json 需再次确认。
 
           releaseDraft: false
           prerelease: false
-          release: true
+          # 手动验收只产出 workflow artifacts，不创建 Release；只有 tag 推送才发布。
+          release: ${{ github.event_name == 'push' }}
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -103,6 +125,18 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Validate release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED="v$(node -p "require('./package.json').version")"
+          CONF="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          [[ "$EXPECTED" == "v$CONF" ]] || {
+            echo "::error::package.json=$EXPECTED 与 tauri.conf.json=$CONF 不一致"; exit 1; }
+          if [[ "${GITHUB_REF}" == refs/tags/* && "${GITHUB_REF_NAME}" != "$EXPECTED" ]]; then
+            echo "::error::标签 $GITHUB_REF_NAME 与版本 $EXPECTED 不一致，已阻止产物/updater 分拆"
+            exit 1
+          fi
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Install system dependencies
@@ -148,6 +182,7 @@ jobs:
             - **桌宠状态入 SQLite**：开关、位置、皮肤、缩放、等级和喂食记录纳入备份，支持旧 localStorage 幂等迁移。
             - **多盘指标**：悬浮条支持系统盘、全部本地磁盘汇总和指定挂载点，选盘失效自动回退系统盘。
             - **窗口单源**：pet / pet-menu / float / capture 统一由 tauri.conf.json 声明，移除 Rust builder 重复定义。
+            - **网络详情**：悬浮条可展开链路、介质、2.4G/5G/6G、VPN 与 HTTPS p50/p95、抖动、失败率；默认关闭探测，双端点、单飞、过期降级。
 
             ## 🐞 稳定性修复
 
@@ -157,30 +192,39 @@ jobs:
             - 设置页所有配置提交前必须取得权威基线，读取失败禁止写入默认值；备份保留天数同步持久化。
             - 修复权限授权后重启误撤销、菜单位移重复累计、跨日喂食禁用、长按尾随单击、蜘蛛侠姿势图缺失。
             - macOS 全屏检测覆盖所有活动显示器，主屏和副屏游戏/视频全屏均可自动隐藏。
+            - 三端网速改为硬件接口优先、虚拟接口兜底并按接口差分，避免 VPN/虚拟网卡重复计数与接口变化虚假尖峰。
+            - 导出/备份复用持锁连接，修复全量导出与自动备份死锁；备份配置写库失败不再假成功。
+            - Linux X11 前台与 ScreenSaver 空闲采集恢复；空闲和无前台间隔不再计入使用时长；macOS 窗口枚举内存泄漏修复。
+            - 截图提交绑定 capture_seq 且 single-flight，双击和旧会话不得重复落盘或误清新帧；悬浮条启动显隐与慢轮询修复。
+            - 设置保存、堆叠弹窗、页面旧响应、桌宠手动状态与规则结果等并发竞态修复；辅助窗口日志权限补齐。
+            - 二次审计回归清零：规则编辑、截图 begin/commit/cancel 生命周期、玻璃显隐与隐藏探测、网络读失败基准、Linux 路由、pet_state 导入、短会话与拖拽竞态。
 
             ## 🧹 工程清理
 
-            - 删除 3 个无消费者 IPC；新增松手检测与桌宠状态读写，当前共 **91** 个命令。
+            - 删除 3 个无消费者 IPC；新增松手检测、桌宠状态读写、独立磁盘查询与网络详情状态/配置，并移除无消费者 show_float_window，当前共 **94** 个命令。
             - 'cargo clippy --all-targets -- -D warnings' **零警告**，源码设计思路与修改历史已补齐。
             - 清理旧 sprite 链路、无效监听、恒零参数、重复样式和过时架构说明。
 
             ## ✅ 验证
 
-            - 'cargo test --lib'：**65 passed / 0 failed / 5 ignored**
+            - 'cargo test --lib'：**106 passed / 0 failed / 7 ignored**
             - 'cargo clippy --all-targets -- -D warnings'：**零警告**
             - 'vue-tsc --noEmit'、'vite build'：通过
             - macOS 显示器枚举与 Linux 按键查询交叉探针：通过
             - Windows 独立开发版实测：400px 快甩、离屏回落、悬浮条松手、多盘入口、SQLite 位置与启用状态
+            - 浏览器实测：顶层弹窗 Escape、规则 mock 增删改、设置失败回滚、悬浮条慢请求最大并发 1、网络详情展开/收起
 
             ## ⚠️ 发版前边界
 
             - 混合 DPI 双屏拖拽与重启落点仍需实机验证。
             - macOS/Linux 的权限、全屏、X11 交互仍需实机复验。
+            - Wi-Fi 频段、双端点质量探测与混合 DPI 下的详情展开布局仍需实机复核。
             - GitHub CI 三平台构建、DMG 重传和 latest.json 需再次确认。
 
           releaseDraft: false
           prerelease: false
-          release: true
+          # 手动验收只产出 workflow artifacts，不创建 Release；只有 tag 推送才发布。
+          release: ${{ github.event_name == 'push' }}
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -199,6 +243,18 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Validate release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED="v$(node -p "require('./package.json').version")"
+          CONF="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          [[ "$EXPECTED" == "v$CONF" ]] || {
+            echo "::error::package.json=$EXPECTED 与 tauri.conf.json=$CONF 不一致"; exit 1; }
+          if [[ "${GITHUB_REF}" == refs/tags/* && "${GITHUB_REF_NAME}" != "$EXPECTED" ]]; then
+            echo "::error::标签 $GITHUB_REF_NAME 与版本 $EXPECTED 不一致，已阻止产物/updater 分拆"
+            exit 1
+          fi
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Install frontend deps
@@ -231,6 +287,7 @@ jobs:
             - **桌宠状态入 SQLite**：开关、位置、皮肤、缩放、等级和喂食记录纳入备份，支持旧 localStorage 幂等迁移。
             - **多盘指标**：悬浮条支持系统盘、全部本地磁盘汇总和指定挂载点，选盘失效自动回退系统盘。
             - **窗口单源**：pet / pet-menu / float / capture 统一由 tauri.conf.json 声明，移除 Rust builder 重复定义。
+            - **网络详情**：悬浮条可展开链路、介质、2.4G/5G/6G、VPN 与 HTTPS p50/p95、抖动、失败率；默认关闭探测，双端点、单飞、过期降级。
 
             ## 🐞 稳定性修复
 
@@ -240,25 +297,33 @@ jobs:
             - 设置页所有配置提交前必须取得权威基线，读取失败禁止写入默认值；备份保留天数同步持久化。
             - 修复权限授权后重启误撤销、菜单位移重复累计、跨日喂食禁用、长按尾随单击、蜘蛛侠姿势图缺失。
             - macOS 全屏检测覆盖所有活动显示器，主屏和副屏游戏/视频全屏均可自动隐藏。
+            - 三端网速改为硬件接口优先、虚拟接口兜底并按接口差分，避免 VPN/虚拟网卡重复计数与接口变化虚假尖峰。
+            - 导出/备份复用持锁连接，修复全量导出与自动备份死锁；备份配置写库失败不再假成功。
+            - Linux X11 前台与 ScreenSaver 空闲采集恢复；空闲和无前台间隔不再计入使用时长；macOS 窗口枚举内存泄漏修复。
+            - 截图提交绑定 capture_seq 且 single-flight，双击和旧会话不得重复落盘或误清新帧；悬浮条启动显隐与慢轮询修复。
+            - 设置保存、堆叠弹窗、页面旧响应、桌宠手动状态与规则结果等并发竞态修复；辅助窗口日志权限补齐。
+            - 二次审计回归清零：规则编辑、截图 begin/commit/cancel 生命周期、玻璃显隐与隐藏探测、网络读失败基准、Linux 路由、pet_state 导入、短会话与拖拽竞态。
 
             ## 🧹 工程清理
 
-            - 删除 3 个无消费者 IPC；新增松手检测与桌宠状态读写，当前共 **91** 个命令。
+            - 删除 3 个无消费者 IPC；新增松手检测、桌宠状态读写、独立磁盘查询与网络详情状态/配置，并移除无消费者 show_float_window，当前共 **94** 个命令。
             - 'cargo clippy --all-targets -- -D warnings' **零警告**，源码设计思路与修改历史已补齐。
             - 清理旧 sprite 链路、无效监听、恒零参数、重复样式和过时架构说明。
 
             ## ✅ 验证
 
-            - 'cargo test --lib'：**65 passed / 0 failed / 5 ignored**
+            - 'cargo test --lib'：**106 passed / 0 failed / 7 ignored**
             - 'cargo clippy --all-targets -- -D warnings'：**零警告**
             - 'vue-tsc --noEmit'、'vite build'：通过
             - macOS 显示器枚举与 Linux 按键查询交叉探针：通过
             - Windows 独立开发版实测：400px 快甩、离屏回落、悬浮条松手、多盘入口、SQLite 位置与启用状态
+            - 浏览器实测：顶层弹窗 Escape、规则 mock 增删改、设置失败回滚、悬浮条慢请求最大并发 1、网络详情展开/收起
 
             ## ⚠️ 发版前边界
 
             - 混合 DPI 双屏拖拽与重启落点仍需实机验证。
             - macOS/Linux 的权限、全屏、X11 交互仍需实机复验。
+            - Wi-Fi 频段、双端点质量探测与混合 DPI 下的详情展开布局仍需实机复核。
             - GitHub CI 三平台构建、DMG 重传和 latest.json 需再次确认。
 
           releaseDraft: false
@@ -318,6 +383,7 @@ jobs:
           hdiutil create -volname "ScreenTime Pro" -srcfolder /tmp/stp_stage -ov -format UDZO "$DMG"
           echo "Injected 修复门禁.command + 首次打开必读.txt into DMG"
       - name: Upload injected DMG to Release (overwrite stale one)
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -368,6 +434,8 @@ jobs:
   # ⚠️ `signature` 必须是 .sig 文件的**内容**，不是路径、不是 URL。
   #   写成路径的话客户端会验签失败，且报错发生在下载完之后，用户已经白等一次。
   updater-json:
+    # latest.json 只随正式 tag 发布上传；手动验收不触碰 Release 资产。
+    if: github.event_name == 'push'
     needs: [windows, linux]
     runs-on: ubuntu-24.04
     steps:

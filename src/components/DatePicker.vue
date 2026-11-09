@@ -271,18 +271,27 @@ function goToday(): void {
 // ---- 本月统计概括（v0.7.0） ----
 const monthSummary = ref<MonthSummaryOut | null>(null);
 const summaryLoading = ref(false);
+let monthSummaryRequestGeneration = 0;
 
 async function loadMonthSummary(): Promise<void> {
+  const generation = ++monthSummaryRequestGeneration;
+  const input = Object.freeze({
+    year: viewYear.value,
+    month: viewMonth.value + 1,
+  });
   summaryLoading.value = true;
   try {
-    monthSummary.value = await tracker.monthSummary(
-      viewYear.value,
-      viewMonth.value + 1,
-    );
+    const nextSummary = await tracker.monthSummary(input.year, input.month);
+    if (generation !== monthSummaryRequestGeneration) return;
+    monthSummary.value = nextSummary;
   } catch {
-    monthSummary.value = null;
+    if (generation === monthSummaryRequestGeneration) {
+      monthSummary.value = null;
+    }
   } finally {
-    summaryLoading.value = false;
+    if (generation === monthSummaryRequestGeneration) {
+      summaryLoading.value = false;
+    }
   }
 }
 
