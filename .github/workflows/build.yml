@@ -1,7 +1,13 @@
 name: Build ScreenTime Pro (all platforms)
 
 on:
+  # 触发模型（v1.2.13 起）：
+  #   - main 分支推送 / 手动 dispatch：只构建三平台产物（build-only），**不创建/修改 Release**。
+  #   - v* 标签推送：走 tauri-action 正式发版（创建 Release + 上传注入版 DMG + 汇总 latest.json）。
+  # 步骤级用 github.ref_type 区分：tag → 发版；非 tag（main 推送 / dispatch）→ build-only。
   push:
+    branches:
+      - "main"
     tags:
       - "v*"
   workflow_dispatch:
@@ -36,12 +42,12 @@ jobs:
       - name: Install frontend deps
         run: npm ci --no-audit --no-fund
       - name: Build Tauri (Windows, build only)
-        if: github.event_name == 'workflow_dispatch'
+        if: github.ref_type != 'tag'
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: npx --no-install tauri build --ci --target x86_64-pc-windows-msvc --bundles nsis
       - name: Build Tauri (Windows)
-        if: github.event_name == 'push'
+        if: github.ref_type == 'tag'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -76,7 +82,7 @@ jobs:
           releaseDraft: false
           prerelease: false
           # 手动验收只产出 workflow artifacts，不创建 Release；只有 tag 推送才发布。
-          release: ${{ github.event_name == 'push' }}
+          release: true
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -118,12 +124,12 @@ jobs:
       - name: Install frontend deps
         run: npm ci --no-audit --no-fund
       - name: Build Tauri (Linux, build only)
-        if: github.event_name == 'workflow_dispatch'
+        if: github.ref_type != 'tag'
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: npx --no-install tauri build --ci --target x86_64-unknown-linux-gnu
       - name: Build Tauri (Linux)
-        if: github.event_name == 'push'
+        if: github.ref_type == 'tag'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -162,7 +168,7 @@ jobs:
           releaseDraft: false
           prerelease: false
           # 手动验收只产出 workflow artifacts，不创建 Release；只有 tag 推送才发布。
-          release: ${{ github.event_name == 'push' }}
+          release: true
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -198,12 +204,12 @@ jobs:
       - name: Install frontend deps
         run: npm ci --no-audit --no-fund
       - name: Build Tauri (macOS, build only)
-        if: github.event_name == 'workflow_dispatch'
+        if: github.ref_type != 'tag'
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: npx --no-install tauri build --ci --target aarch64-apple-darwin
       - name: Build Tauri (macOS)
-        if: github.event_name == 'push'
+        if: github.ref_type == 'tag'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -290,7 +296,7 @@ jobs:
           hdiutil create -volname "ScreenTime Pro" -srcfolder /tmp/stp_stage -ov -format UDZO "$DMG"
           echo "Injected 修复门禁.command + 首次打开必读.txt into DMG"
       - name: Upload injected DMG to Release (overwrite stale one)
-        if: github.event_name == 'push'
+        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -342,7 +348,7 @@ jobs:
   #   写成路径的话客户端会验签失败，且报错发生在下载完之后，用户已经白等一次。
   updater-json:
     # latest.json 只随正式 tag 发布上传；手动验收不触碰 Release 资产。
-    if: github.event_name == 'push'
+    if: github.ref_type == 'tag'
     needs: [windows, linux]
     runs-on: ubuntu-24.04
     steps:
