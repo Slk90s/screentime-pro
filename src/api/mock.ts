@@ -39,23 +39,34 @@ const mockDiskVolumes: DiskVolume[] = [
   { mount: "D:", total_bytes: 400_000_000_000, used_bytes: 100_000_000_000, avail_bytes: 300_000_000_000, is_system: false },
 ];
 
-const mockNetworkProbeConfig: NetworkProbeConfig = { enabled: false };
+const mockNetworkProbeConfig: NetworkProbeConfig = {
+  enabled: false,
+  public_ip_enabled: false,
+};
 
 function mockNetworkStatus(): NetworkStatusOut {
   const enabled = mockNetworkProbeConfig.enabled;
+  const publicIpEnabled = mockNetworkProbeConfig.public_ip_enabled;
   return {
     link: "up",
-    medium: "wifi",
+    // 预览默认覆盖最完整的 VPN 标签：VPN · Wi-Fi（TUN）。
+    medium: "vpn",
     band: "ghz5",
-    vpn: false,
+    vpn: true,
+    physical_medium: "wifi",
+    tunnel: "tun",
+    local_ip: "192.168.31.42",
     internet: enabled ? "online" : "disabled",
     latency_p50_ms: enabled ? 28.4 : null,
     latency_p95_ms: enabled ? 71.8 : null,
     jitter_ms: enabled ? 6.2 : null,
     failure_pct: enabled ? 4.2 : null,
+    packet_loss_pct: enabled ? 0.8 : null,
     attempts: enabled ? 24 : 0,
     successes: enabled ? 23 : 0,
     sampled_at_ms: enabled ? Date.now() : 0,
+    public_ip: publicIpEnabled ? "203.0.113.42" : null,
+    region: publicIpEnabled ? "Shanghai, CN" : null,
   };
 }
 
@@ -281,9 +292,16 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
       return mockNetworkStatus();
     case "get_network_probe_config":
       return { ...mockNetworkProbeConfig };
-    case "set_network_probe_config":
-      mockNetworkProbeConfig.enabled = args?.enabled === true;
+    case "set_network_probe_config": {
+      const enabled = args?.enabled;
+      const publicIpEnabled = args?.publicIpEnabled;
+      if (typeof enabled !== "boolean" || typeof publicIpEnabled !== "boolean") {
+        throw new Error("set_network_probe_config 需要 enabled 和 public_ip_enabled");
+      }
+      mockNetworkProbeConfig.enabled = enabled;
+      mockNetworkProbeConfig.public_ip_enabled = publicIpEnabled;
       return null;
+    }
     case "get_log_size":
       return 1024 * 1024;
     // ⚠️ v1.1.1 删除 `case "get_idle_threshold"`：该 command 已由工作区他人改动移除，

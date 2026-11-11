@@ -206,8 +206,13 @@ export const tracker = {
   // 网络详情仅在浮窗展开时读取；质量探测配置与状态栏配置分开持久化。
   getNetworkStatus: () => call<NetworkStatusOut>("get_network_status"),
   getNetworkProbeConfig: () => call<NetworkProbeConfig>("get_network_probe_config"),
-  setNetworkProbeConfig: (enabled: boolean) =>
-    call<void>("set_network_probe_config", { enabled }),
+  // 两个独立授权必须作为同一份权威快照提交，避免保存一项时覆盖另一项。
+  // Rust 参数 public_ip_enabled 按 Tauri v2 规则在 JS 侧使用 camelCase。
+  setNetworkProbeConfig: (enabled: boolean, publicIpEnabled: boolean) =>
+    call<void>("set_network_probe_config", {
+      enabled,
+      publicIpEnabled,
+    }),
   // ===== v0.7.6：状态栏配置（总开关 + 3 个子项）=====
   getStatusBarConfig: () => call<StatusBarConfig>("get_status_bar_config"),
   setStatusBarConfig: (config: StatusBarConfig) =>

@@ -2170,6 +2170,7 @@ pub fn get_network_probe_config(
 pub fn set_network_probe_config(
     state: tauri::State<'_, Arc<AppState>>,
     enabled: bool,
+    public_ip_enabled: bool,
 ) -> Result<(), String> {
     state
         .db
@@ -2178,8 +2179,21 @@ pub fn set_network_probe_config(
             if enabled { "true" } else { "false" },
         )
         .map_err(|e| e.to_string())?;
+    state
+        .db
+        .set_setting(
+            "network_public_ip_enabled",
+            if public_ip_enabled { "true" } else { "false" },
+        )
+        .map_err(|e| e.to_string())?;
     state.network_status.set_probe_enabled(enabled);
-    crate::logging::audit("network_probe_config", &format!("enabled={enabled}"));
+    state
+        .network_status
+        .set_public_ip_enabled(public_ip_enabled);
+    crate::logging::audit(
+        "network_probe_config",
+        &format!("enabled={enabled} public_ip_enabled={public_ip_enabled}"),
+    );
     Ok(())
 }
 

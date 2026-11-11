@@ -409,6 +409,9 @@ pub fn run() {
             let network_status = system_load::network_status::NetworkStatusSampler::new(
                 db.get_setting("network_probe_enabled").as_deref() == Some("true"),
             );
+            network_status.set_public_ip_enabled(
+                db.get_setting("network_public_ip_enabled").as_deref() == Some("true"),
+            );
             let app_state = Arc::new(AppState {
                 db,
                 tracker,

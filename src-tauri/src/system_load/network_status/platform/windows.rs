@@ -1,14 +1,14 @@
 //! Windows 原生链路状态：默认路由、接口介质、链路状态与当前 Wi-Fi BSS 频段。
 //!
 //! Cargo.toml 目前只启用了 IpHelper/Ndis，未启用 WinSock/WiFi。这里复用已启用的
-//! `GetIfEntry2`/`FreeMibTable`，其余少量 API 使用与系统头文件一致的窄 FFI 声明，
+//! `GetIfEntry2`/`GetIfTable2`/`FreeMibTable`，其余少量 API 使用与系统头文件一致的窄 FFI 声明，
 //! 因而无需新增 Cargo feature。WLAN 查询只读当前连接和驱动缓存的 BSS 列表，绝不扫描，
 //! 也不通过 SSID 猜测频段。
 
-use super::{Band, LinkState, Medium, NativeBackend, NativeStatus};
+use super::{Band, LinkState, Medium, NativeBackend, NativeStatus, TunnelKind};
 use std::ffi::c_void;
 use windows::core::GUID;
-use windows::Win32::NetworkManagement::IpHelper::{FreeMibTable, GetIfEntry2, MIB_IF_ROW2};
+use windows::Win32::NetworkManagement::IpHelper::{FreeMibTable, GetIfEntry2, GetIfTable2, MIB_IF_ROW2};
 use windows::Win32::NetworkManagement::Ndis::NET_LUID_LH;
 
 const ERROR_SUCCESS: u32 = 0;
@@ -23,6 +23,7 @@ const IF_TYPE_FASTETHER_FX: u32 = 69;
 const IF_TYPE_IEEE80211: u32 = 71;
 const IF_TYPE_GIGABITETHERNET: u32 = 117;
 const IF_TYPE_TUNNEL: u32 = 131;
+const IF_ROW_FLAG_HARDWARE_INTERFACE: u8 = 0x01;
 
 const WLAN_API_VERSION_2_0: u32 = 2;
 const WLAN_INTF_OPCODE_CURRENT_CONNECTION: i32 = 7;
@@ -48,11 +49,19 @@ impl NativeBackend for Backend {
             _ => Band::NotApplicable,
         };
 
+        let vpn = medium == Medium::Vpn;
         NativeStatus {
             link,
             medium,
             band,
-            vpn: medium == Medium::Vpn,
+            vpn,
+            physical_medium: vpn.then(active_physical_medium).flatten(),
+            tunnel: if vpn {
+                classify_tunnel(row.Type, &row.Alias, &row.Description)
+            } else {
+                TunnelKind::NotApplicable
+            },
+            local_ip: None,
         }
     }
 }
@@ -163,32 +172,72 @@ fn classify_medium(if_type: u32, alias: &[u16], description: &[u16]) -> Medium {
     if if_type == IF_TYPE_IEEE80211 {
         return Medium::Wifi;
     }
-    if if_type == IF_TYPE_TUNNEL
-        || if_type == IF_TYPE_PPP
-        || contains_vpn_name(alias)
-        || contains_vpn_name(description)
-    {
+    if classify_tunnel(if_type, alias, description) != TunnelKind::NotApplicable {
         return Medium::Vpn;
     }
-    if matches!(
-        if_type,
-        IF_TYPE_ETHERNET_CSMACD
-            | IF_TYPE_FASTETHER
-            | IF_TYPE_FASTETHER_FX
-            | IF_TYPE_GIGABITETHERNET
-    ) {
+    if is_ethernet_type(if_type) {
         Medium::Ethernet
     } else {
         Medium::Other
     }
 }
 
-fn contains_vpn_name(value: &[u16]) -> bool {
+fn classify_tunnel(if_type: u32, alias: &[u16], description: &[u16]) -> TunnelKind {
+    if if_type == IF_TYPE_PPP {
+        return TunnelKind::Ppp;
+    }
+
+    let alias = wide_string(alias);
+    let description = wide_string(description);
+    let names = [alias.as_str(), description.as_str()];
+    if names.iter().any(|name| {
+        name.contains("wireguard") || name.contains("wire guard") || name.contains("tailscale")
+    }) {
+        return TunnelKind::Wireguard;
+    }
+
+    let is_tap = names
+        .iter()
+        .any(|name| contains_interface_word(name, "tap"));
+    let is_tun = names
+        .iter()
+        .any(|name| name.contains("wintun") || contains_interface_word(name, "tun"));
+    match (is_tap, is_tun) {
+        (true, false) => return TunnelKind::Tap,
+        (false, true) => return TunnelKind::Tun,
+        // TUN/TAP 只说明驱动支持两种模式，无法据此猜测当前模式。
+        (true, true) => return TunnelKind::Other,
+        (false, false) => {}
+    }
+
+    if if_type == IF_TYPE_TUNNEL || names.iter().any(|name| contains_vpn_name(name)) {
+        TunnelKind::Other
+    } else {
+        TunnelKind::NotApplicable
+    }
+}
+
+fn wide_string(value: &[u16]) -> String {
     let length = value
         .iter()
         .position(|character| *character == 0)
         .unwrap_or(value.len());
-    let value = String::from_utf16_lossy(&value[..length]).to_lowercase();
+    String::from_utf16_lossy(&value[..length]).to_lowercase()
+}
+
+/// 按完整接口词匹配，避免把 generic “Tunnel” 中的 “tun” 误判为 TUN。
+fn contains_interface_word(value: &str, expected: &str) -> bool {
+    value
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|word| {
+            word == expected
+                || word.strip_prefix(expected).is_some_and(|suffix| {
+                    !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit())
+                })
+        })
+}
+
+fn contains_vpn_name(value: &str) -> bool {
     const VPN_MARKERS: &[&str] = &[
         "vpn",
         "wireguard",
@@ -206,6 +255,65 @@ fn contains_vpn_name(value: &[u16]) -> bool {
         "tunnel",
     ];
     VPN_MARKERS.iter().any(|marker| value.contains(marker))
+}
+
+fn is_ethernet_type(if_type: u32) -> bool {
+    matches!(
+        if_type,
+        IF_TYPE_ETHERNET_CSMACD
+            | IF_TYPE_FASTETHER
+            | IF_TYPE_FASTETHER_FX
+            | IF_TYPE_GIGABITETHERNET
+    )
+}
+
+fn active_physical_medium() -> Option<Medium> {
+    let mut raw_table = std::ptr::null_mut();
+    // SAFETY: `raw_table` 是有效的输出指针；成功时返回的内存由下面的 guard 释放。
+    let result = unsafe { GetIfTable2(&mut raw_table) };
+    let table = MibTable::new(raw_table);
+    if result.0 != ERROR_SUCCESS {
+        return None;
+    }
+    let table = table?;
+
+    // SAFETY: 成功返回的表在 guard 生命周期内有效；Table 是可变长数组的首元素。
+    let (count, entries) = unsafe {
+        (
+            (*table.0).NumEntries as usize,
+            std::ptr::addr_of!((*table.0).Table).cast::<MIB_IF_ROW2>(),
+        )
+    };
+    // SAFETY: entries 指向系统返回的连续 NumEntries 行，slice 不越过 guard 生命周期。
+    let rows = unsafe { std::slice::from_raw_parts(entries, count) };
+    physical_medium_from_rows(rows)
+}
+
+fn physical_medium_from_rows(rows: &[MIB_IF_ROW2]) -> Option<Medium> {
+    let mut detected = None;
+    for row in rows {
+        if row.OperStatus.0 != 1
+            || row.InterfaceAndOperStatusFlags._bitfield & IF_ROW_FLAG_HARDWARE_INTERFACE == 0
+            || classify_tunnel(row.Type, &row.Alias, &row.Description) != TunnelKind::NotApplicable
+        {
+            continue;
+        }
+        let medium = if row.Type == IF_TYPE_IEEE80211 {
+            Medium::Wifi
+        } else if is_ethernet_type(row.Type) {
+            Medium::Ethernet
+        } else {
+            continue;
+        };
+
+        match detected {
+            None => detected = Some(medium),
+            Some(current) if current == medium => {}
+            // Wi-Fi 与以太网同时活动时无法仅凭接口表确定 VPN 的底层链路。
+            Some(_) => return None,
+        }
+    }
+    detected
 }
 
 fn current_wifi_band(interface_guid: GUID) -> Band {
@@ -300,17 +408,17 @@ fn current_bssid(client: *mut c_void, interface_guid: &GUID) -> Option<[u8; 6]> 
     Some(attributes.association.bssid)
 }
 
-struct MibTable(*mut MibIpForwardTable2);
+struct MibTable<T>(*mut T);
 
-impl MibTable {
-    fn new(pointer: *mut MibIpForwardTable2) -> Option<Self> {
+impl<T> MibTable<T> {
+    fn new(pointer: *mut T) -> Option<Self> {
         (!pointer.is_null()).then_some(Self(pointer))
     }
 }
 
-impl Drop for MibTable {
+impl<T> Drop for MibTable<T> {
     fn drop(&mut self) {
-        // SAFETY: 此指针只由成功的 GetIpForwardTable2 返回，并且 guard 只释放一次。
+        // SAFETY: 此指针只由成功的 MIB 表查询返回，并且 guard 只释放一次。
         unsafe { FreeMibTable(self.0.cast()) }
     }
 }
@@ -578,6 +686,8 @@ extern "system" {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows::Win32::NetworkManagement::IpHelper::MIB_IF_ROW2_0;
+    use windows::Win32::NetworkManagement::Ndis::IF_OPER_STATUS;
 
     fn route(
         interface_index: u32,
@@ -592,6 +702,25 @@ mod tests {
             prefix_length,
             metric,
             loopback,
+        }
+    }
+
+    fn wide(value: &str) -> Vec<u16> {
+        value.encode_utf16().chain(Some(0)).collect()
+    }
+
+    fn test_interface_row(if_type: u32, oper_status: i32, hardware: bool) -> MIB_IF_ROW2 {
+        MIB_IF_ROW2 {
+            Type: if_type,
+            OperStatus: IF_OPER_STATUS(oper_status),
+            InterfaceAndOperStatusFlags: MIB_IF_ROW2_0 {
+                _bitfield: if hardware {
+                    IF_ROW_FLAG_HARDWARE_INTERFACE
+                } else {
+                    0
+                },
+            },
+            ..Default::default()
         }
     }
 
@@ -665,6 +794,65 @@ mod tests {
             Medium::Ethernet
         );
         assert_eq!(classify_medium(1, &empty, &empty), Medium::Other);
+    }
+
+    #[test]
+    fn tunnel_classification_distinguishes_generic_tun_tap_and_wireguard() {
+        let empty = [0_u16; 1];
+        for (alias, description, expected) in [
+            ("Meta Tunnel", "", TunnelKind::Other),
+            ("", "TUN", TunnelKind::Tun),
+            ("TAP-Windows Adapter V9", "", TunnelKind::Tap),
+            ("", "WireGuard Tunnel", TunnelKind::Wireguard),
+        ] {
+            let alias = wide(alias);
+            let description = wide(description);
+            assert_eq!(
+                classify_medium(IF_TYPE_ETHERNET_CSMACD, &alias, &description),
+                Medium::Vpn
+            );
+            assert_eq!(
+                classify_tunnel(IF_TYPE_ETHERNET_CSMACD, &alias, &description),
+                expected
+            );
+        }
+
+        assert_eq!(
+            classify_tunnel(IF_TYPE_PPP, &empty, &empty),
+            TunnelKind::Ppp
+        );
+        assert_eq!(
+            classify_tunnel(IF_TYPE_ETHERNET_CSMACD, &empty, &empty),
+            TunnelKind::NotApplicable
+        );
+        let tun_tap = wide("TUN/TAP");
+        assert_eq!(
+            classify_tunnel(IF_TYPE_ETHERNET_CSMACD, &tun_tap, &empty),
+            TunnelKind::Other
+        );
+    }
+
+    #[test]
+    fn physical_medium_uses_only_unambiguous_active_hardware_rows() {
+        let tunnel = test_interface_row(IF_TYPE_TUNNEL, 1, false);
+        let wifi = test_interface_row(IF_TYPE_IEEE80211, 1, true);
+        let ethernet = test_interface_row(IF_TYPE_ETHERNET_CSMACD, 1, true);
+        let inactive_ethernet = test_interface_row(IF_TYPE_ETHERNET_CSMACD, 2, true);
+        let virtual_wifi = test_interface_row(IF_TYPE_IEEE80211, 1, false);
+        let mut vpn_with_hardware_flag = test_interface_row(IF_TYPE_ETHERNET_CSMACD, 1, true);
+        let vpn_alias = wide("Meta Tunnel");
+        vpn_with_hardware_flag.Alias[..vpn_alias.len()].copy_from_slice(&vpn_alias);
+
+        assert_eq!(
+            physical_medium_from_rows(&[tunnel, inactive_ethernet, vpn_with_hardware_flag, wifi]),
+            Some(Medium::Wifi)
+        );
+        assert_eq!(
+            physical_medium_from_rows(&[ethernet]),
+            Some(Medium::Ethernet)
+        );
+        assert_eq!(physical_medium_from_rows(&[virtual_wifi]), None);
+        assert_eq!(physical_medium_from_rows(&[wifi, ethernet]), None);
     }
 
     #[test]

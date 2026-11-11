@@ -240,7 +240,7 @@
           </p>
         </div>
 
-        <!-- 主动质量探测是独立 opt-in 配置，不随 StatusBarConfig 整体提交。 -->
+        <!-- 质量探测与公网信息查询分别 opt-in；保存时提交同一份权威双字段快照。 -->
         <div class="sub-zone network-probe-settings">
           <div class="form-row row between">
             <label>{{ t("settings.networkProbeEnabled") }}</label>
@@ -251,7 +251,7 @@
                 :disabled="!networkProbeLoaded || networkProbeSaving"
                 :aria-label="t('settings.networkProbeEnabled')"
                 aria-describedby="network-probe-hint"
-                @change="onNetworkProbeEnabled($event)"
+                @change="onNetworkProbeToggle($event, 'enabled')"
               />
               <span class="toggle-slider" />
               <span class="toggle-state">
@@ -260,6 +260,27 @@
             </label>
           </div>
           <p id="network-probe-hint" class="field-hint">{{ networkProbeHintText }}</p>
+
+          <div class="form-row row between network-public-ip-row">
+            <label>{{ t("settings.networkPublicIpEnabled") }}</label>
+            <label class="toggle-switch" :class="{ on: networkProbeConfig.public_ip_enabled }">
+              <input
+                type="checkbox"
+                :checked="networkProbeConfig.public_ip_enabled"
+                :disabled="!networkProbeLoaded || networkProbeSaving"
+                :aria-label="t('settings.networkPublicIpEnabled')"
+                aria-describedby="network-public-ip-hint"
+                @change="onNetworkProbeToggle($event, 'public_ip_enabled')"
+              />
+              <span class="toggle-slider" />
+              <span class="toggle-state">
+                {{ networkProbeConfig.public_ip_enabled ? t("settings.statusBarOn") : t("settings.statusBarOff") }}
+              </span>
+            </label>
+          </div>
+          <p id="network-public-ip-hint" class="field-hint network-public-ip-hint">
+            {{ t("settings.networkPublicIpHint") }}
+          </p>
         </div>
       </div>
     </div>
@@ -1512,8 +1533,11 @@ const statusBarConfig = ref<StatusBarConfig>({
   float_glass: false,
 });
 
-// 主动网络质量探测：独立配置、默认关闭。加载完成前禁用，避免本地默认值覆盖权威配置。
-const networkProbeConfig = ref<NetworkProbeConfig>({ enabled: false });
+// 两项主动网络查询均独立 opt-in、默认关闭。加载完成前禁用，避免本地默认值覆盖权威配置。
+const networkProbeConfig = ref<NetworkProbeConfig>({
+  enabled: false,
+  public_ip_enabled: false,
+});
 const networkProbeLoaded = ref(false);
 const networkProbeSaving = ref(false);
 const networkProbeLoadFailed = ref(false);
@@ -1526,26 +1550,32 @@ async function loadNetworkProbeConfig() {
   networkProbeLoadFailed.value = false;
   try {
     const loaded = await tracker.getNetworkProbeConfig();
-    networkProbeConfig.value = { enabled: loaded.enabled };
+    // 两个开关都以同一次后端读取为准，不用本地缺省值补写未加载字段。
+    networkProbeConfig.value = {
+      enabled: loaded.enabled,
+      public_ip_enabled: loaded.public_ip_enabled,
+    };
     networkProbeLoaded.value = true;
   } catch (err) {
     networkProbeLoadFailed.value = true;
-    log.warn("[Settings] 加载网络质量探测配置失败", err);
+    log.warn("[Settings] 加载网络探测配置失败", err);
   }
 }
 
-async function onNetworkProbeEnabled(e: Event) {
+async function onNetworkProbeToggle(e: Event, key: keyof NetworkProbeConfig) {
   const next = (e.target as HTMLInputElement).checked;
-  const previous = networkProbeConfig.value.enabled;
-  networkProbeConfig.value = { enabled: next };
+  const previous = { ...networkProbeConfig.value };
+  const snapshot: NetworkProbeConfig = { ...previous, [key]: next };
+  networkProbeConfig.value = snapshot;
+  // 保存期间锁住两个开关，确保失败回滚不会覆盖另一次较新的用户编辑。
   networkProbeSaving.value = true;
   try {
-    await tracker.setNetworkProbeConfig(next);
+    await tracker.setNetworkProbeConfig(snapshot.enabled, snapshot.public_ip_enabled);
   } catch (err) {
-    networkProbeConfig.value = { enabled: previous };
+    networkProbeConfig.value = previous;
     showAlert(
       "warn",
-      t("settings.networkProbeEnabled"),
+      t(key === "enabled" ? "settings.networkProbeEnabled" : "settings.networkPublicIpEnabled"),
       t("settings.saveFailedMsg", { err: err instanceof Error ? err.message : String(err) }),
     );
   } finally {
@@ -3150,6 +3180,15 @@ async function onInstallUpdate() {
 .sub-zone.disabled {
   opacity: 0.45;
   pointer-events: none;
+}
+.network-public-ip-row {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.network-public-ip-hint {
+  /* 第三方服务与公网 IP 提示必须始终可读，不能随开关状态淡化。 */
+  color: var(--text-dim, #86868b);
 }
 /* v0.7.6：状态栏子项复选框（基础原生 checkbox + 大点击区） */
 .check-input {

@@ -275,6 +275,14 @@ export interface MetricsOut {
 
 export type NetworkLink = "up" | "down" | "unknown";
 export type NetworkMedium = "ethernet" | "wifi" | "vpn" | "other" | "unknown";
+export type NetworkTunnel =
+  | "not_applicable"
+  | "tun"
+  | "tap"
+  | "wireguard"
+  | "ppp"
+  | "other"
+  | "unknown";
 export type NetworkBand = "not_applicable" | "ghz24" | "ghz5" | "ghz6" | "other" | "unknown";
 export type NetworkInternet = "disabled" | "checking" | "online" | "unreachable" | "stale";
 
@@ -283,19 +291,30 @@ export interface NetworkStatusOut {
   medium: NetworkMedium;
   band: NetworkBand;
   vpn: boolean;
+  /** VPN 出口下可可靠关联的物理介质；无法关联时为 null。 */
+  physical_medium: NetworkMedium | null;
+  tunnel: NetworkTunnel;
+  /** 默认路由出口的本机地址，不是公网 IP。 */
+  local_ip: string | null;
   internet: NetworkInternet;
   latency_p50_ms: number | null;
   latency_p95_ms: number | null;
   jitter_ms: number | null;
   failure_pct: number | null;
+  /** 系统 ping 实测丢包率；不可用或权限不足时为 null。 */
+  packet_loss_pct: number | null;
   attempts: number;
   successes: number;
   sampled_at_ms: number;
+  /** 仅在独立公网信息开关开启时由 ipinfo.io 查询。 */
+  public_ip: string | null;
+  region: string | null;
 }
 
-/** 主动质量探测独立配置；刻意不属于 StatusBarConfig，默认关闭。 */
+/** 质量探测与公网 IP/地区查询分别 opt-in；刻意不属于 StatusBarConfig。 */
 export interface NetworkProbeConfig {
   enabled: boolean;
+  public_ip_enabled: boolean;
 }
 
 // ===== v0.8.0（2026-09-16）：屏幕截图 =====

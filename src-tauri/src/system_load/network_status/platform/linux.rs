@@ -1,6 +1,6 @@
 use std::{fs, path::Path, process::Command};
 
-use super::{Band, LinkState, Medium, NativeBackend, NativeStatus};
+use super::{Band, LinkState, Medium, NativeBackend, NativeStatus, TunnelKind};
 
 pub(crate) struct Backend;
 
@@ -36,12 +36,20 @@ impl NativeBackend for Backend {
             Medium::Ethernet | Medium::Vpn => Band::NotApplicable,
             Medium::Other | Medium::Unknown => Band::Unknown,
         };
+        let physical_medium = if medium == Medium::Vpn {
+            active_physical_medium(Path::new("/sys/class/net"))
+        } else {
+            confirmed_physical_medium(link, medium, sysfs.join("device").exists())
+        };
 
         NativeStatus {
             link,
             medium,
             band,
             vpn: medium == Medium::Vpn,
+            physical_medium,
+            tunnel: classify_tunnel(&interface),
+            local_ip: None,
         }
     }
 }
@@ -99,11 +107,30 @@ fn parse_ipv6_default_route(input: &str) -> Option<String> {
     best.map(|(interface, _)| interface)
 }
 
-fn classify_medium(interface: &str, native_type: Option<u32>, wireless: bool) -> Medium {
-    if ["tun", "wg", "ppp", "utun", "tailscale", "zt", "tap"]
+fn classify_tunnel(interface: &str) -> TunnelKind {
+    if ["tun", "utun"]
         .iter()
         .any(|prefix| interface.starts_with(prefix))
     {
+        TunnelKind::Tun
+    } else if interface.starts_with("tap") {
+        TunnelKind::Tap
+    } else if interface.starts_with("wg") {
+        TunnelKind::Wireguard
+    } else if interface.starts_with("ppp") {
+        TunnelKind::Ppp
+    } else if ["tailscale", "zt"]
+        .iter()
+        .any(|prefix| interface.starts_with(prefix))
+    {
+        TunnelKind::Other
+    } else {
+        TunnelKind::NotApplicable
+    }
+}
+
+fn classify_medium(interface: &str, native_type: Option<u32>, wireless: bool) -> Medium {
+    if classify_tunnel(interface) != TunnelKind::NotApplicable {
         return Medium::Vpn;
     }
     if wireless {
@@ -122,6 +149,50 @@ fn classify_medium(interface: &str, native_type: Option<u32>, wireless: bool) ->
         Some(_) => Medium::Other,
         None => Medium::Unknown,
     }
+}
+
+fn confirmed_physical_medium(link: LinkState, medium: Medium, has_device: bool) -> Option<Medium> {
+    if link != LinkState::Up || !has_device {
+        return None;
+    }
+    match medium {
+        Medium::Ethernet | Medium::Wifi => Some(medium),
+        Medium::Vpn | Medium::Other | Medium::Unknown => None,
+    }
+}
+
+/// A tunnel does not reveal which lower interface carries it. Report a medium only
+/// when every active, hardware-backed physical candidate agrees on that medium.
+fn active_physical_medium(sysfs_root: &Path) -> Option<Medium> {
+    let entries = fs::read_dir(sysfs_root).ok()?;
+    let mut result = None;
+    for entry in entries.filter_map(Result::ok) {
+        let sysfs = entry.path();
+        if !matches!(
+            fs::read_to_string(sysfs.join("operstate")),
+            Ok(state) if state.trim() == "up"
+        ) {
+            continue;
+        }
+        let interface = entry.file_name();
+        let interface = interface.to_string_lossy();
+        let native_type = fs::read_to_string(sysfs.join("type"))
+            .ok()
+            .and_then(|value| value.trim().parse::<u32>().ok());
+        let wireless = sysfs.join("wireless").exists() || sysfs.join("phy80211").exists();
+        let medium = classify_medium(&interface, native_type, wireless);
+        let Some(candidate) =
+            confirmed_physical_medium(LinkState::Up, medium, sysfs.join("device").exists())
+        else {
+            continue;
+        };
+        match result {
+            None => result = Some(candidate),
+            Some(current) if current == candidate => {}
+            Some(_) => return None,
+        }
+    }
+    result
 }
 
 fn parse_default_route(input: &str) -> Option<(String, u32)> {
@@ -236,6 +307,54 @@ mod tests {
         assert_eq!(classify_medium("eth0", Some(1), false), Medium::Ethernet);
         assert_eq!(classify_medium("wlan0", Some(1), true), Medium::Wifi);
         assert_eq!(classify_medium("mystery0", None, false), Medium::Unknown);
+    }
+
+    #[test]
+    fn tunnel_classification_covers_linux_vpn_conventions() {
+        let cases = [
+            ("tun0", TunnelKind::Tun),
+            ("utun1", TunnelKind::Tun),
+            ("tap0", TunnelKind::Tap),
+            ("wg0", TunnelKind::Wireguard),
+            ("ppp0", TunnelKind::Ppp),
+            ("tailscale0", TunnelKind::Other),
+            ("ztabc123", TunnelKind::Other),
+            ("eth0", TunnelKind::NotApplicable),
+            ("wlan0", TunnelKind::NotApplicable),
+            ("br0", TunnelKind::NotApplicable),
+        ];
+        for (interface, expected) in cases {
+            assert_eq!(
+                classify_tunnel(interface),
+                expected,
+                "interface {interface}"
+            );
+        }
+    }
+
+    #[test]
+    fn physical_medium_requires_active_identifiable_hardware() {
+        assert_eq!(
+            confirmed_physical_medium(LinkState::Up, Medium::Ethernet, true),
+            Some(Medium::Ethernet)
+        );
+        assert_eq!(
+            confirmed_physical_medium(LinkState::Up, Medium::Wifi, true),
+            Some(Medium::Wifi)
+        );
+        for link in [LinkState::Down, LinkState::Unknown] {
+            assert_eq!(
+                confirmed_physical_medium(link, Medium::Ethernet, true),
+                None
+            );
+        }
+        assert_eq!(
+            confirmed_physical_medium(LinkState::Up, Medium::Ethernet, false),
+            None
+        );
+        for medium in [Medium::Vpn, Medium::Other, Medium::Unknown] {
+            assert_eq!(confirmed_physical_medium(LinkState::Up, medium, true), None);
+        }
     }
 
     #[test]

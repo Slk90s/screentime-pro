@@ -35,7 +35,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Install frontend deps
         run: npm ci --no-audit --no-fund
+      - name: Build Tauri (Windows, build only)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: npx --no-install tauri build --ci --target x86_64-pc-windows-msvc --bundles nsis
       - name: Build Tauri (Windows)
+        if: github.event_name == 'push'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -56,53 +62,16 @@ jobs:
           releaseBody: |
             ### 屏幕时间管家 ScreenTime Pro — v1.2.13
 
-            > 本版合并桌宠/悬浮条、截图与设置稳定性、多盘与状态架构整改，并完成一轮工程清零。
+            本版新增网络详情，并集中修复截图、备份、规则编辑、悬浮条和网络采样问题。
 
-            ## ⭐ 核心变更
+            主要更新：
+            - 网络详情支持链路、介质、频段、VPN、IP/地区、时延、抖动和 ICMP 丢包率；质量探测默认关闭，公网 IP/地区需单独开启。
+            - 修复截图会话冲突、备份导出死锁、规则编辑失败、玻璃详情裁切和隐藏后继续探测。
+            - 优化设置保存、拖拽、弹窗、页面切换及 Windows/macOS/Linux 兼容性。
 
-            - **三端统一拖拽**：Rust 全局光标循环，解决快速横甩掉队、松手回跳、跨 DPI 落点、最后一帧和旧会话误收尾。
-            - **启动与边界**：桌宠启动恢复、离屏回落、菜单拖拽加速、悬浮条起点保存与反复离屏问题全部处理。
-            - **桌宠状态入 SQLite**：开关、位置、皮肤、缩放、等级和喂食记录纳入备份，支持旧 localStorage 幂等迁移。
-            - **多盘指标**：悬浮条支持系统盘、全部本地磁盘汇总和指定挂载点，选盘失效自动回退系统盘。
-            - **窗口单源**：pet / pet-menu / float / capture 统一由 tauri.conf.json 声明，移除 Rust builder 重复定义。
-            - **网络详情**：悬浮条可展开链路、介质、2.4G/5G/6G、VPN 与 HTTPS p50/p95、抖动、失败率；默认关闭探测，双端点、单飞、过期降级。
+            验证：Rust **111 项测试通过**，Clippy 零警告，vue-tsc 和 vite build 通过；三平台交叉检查通过。
 
-            ## 🐞 稳定性修复
-
-            - 截图提交失败保留选区与标注并显示错误，成功才清场。
-            - 图片 decode、OCR 请求和选区增加会话守卫，旧结果不得覆盖新状态或冒充当前文本。
-            - 文字标注支持独立颜色与字号；历史多选、单删、显示按钮不再冒泡改变选择。
-            - 设置页所有配置提交前必须取得权威基线，读取失败禁止写入默认值；备份保留天数同步持久化。
-            - 修复权限授权后重启误撤销、菜单位移重复累计、跨日喂食禁用、长按尾随单击、蜘蛛侠姿势图缺失。
-            - macOS 全屏检测覆盖所有活动显示器，主屏和副屏游戏/视频全屏均可自动隐藏。
-            - 三端网速改为硬件接口优先、虚拟接口兜底并按接口差分，避免 VPN/虚拟网卡重复计数与接口变化虚假尖峰。
-            - 导出/备份复用持锁连接，修复全量导出与自动备份死锁；备份配置写库失败不再假成功。
-            - Linux X11 前台与 ScreenSaver 空闲采集恢复；空闲和无前台间隔不再计入使用时长；macOS 窗口枚举内存泄漏修复。
-            - 截图提交绑定 capture_seq 且 single-flight，双击和旧会话不得重复落盘或误清新帧；悬浮条启动显隐与慢轮询修复。
-            - 设置保存、堆叠弹窗、页面旧响应、桌宠手动状态与规则结果等并发竞态修复；辅助窗口日志权限补齐。
-            - 二次审计回归清零：规则编辑、截图 begin/commit/cancel 生命周期、玻璃显隐与隐藏探测、网络读失败基准、Linux 路由、pet_state 导入、短会话与拖拽竞态。
-
-            ## 🧹 工程清理
-
-            - 删除 3 个无消费者 IPC；新增松手检测、桌宠状态读写、独立磁盘查询与网络详情状态/配置，并移除无消费者 show_float_window，当前共 **94** 个命令。
-            - 'cargo clippy --all-targets -- -D warnings' **零警告**，源码设计思路与修改历史已补齐。
-            - 清理旧 sprite 链路、无效监听、恒零参数、重复样式和过时架构说明。
-
-            ## ✅ 验证
-
-            - 'cargo test --lib'：**106 passed / 0 failed / 7 ignored**
-            - 'cargo clippy --all-targets -- -D warnings'：**零警告**
-            - 'vue-tsc --noEmit'、'vite build'：通过
-            - macOS 显示器枚举与 Linux 按键查询交叉探针：通过
-            - Windows 独立开发版实测：400px 快甩、离屏回落、悬浮条松手、多盘入口、SQLite 位置与启用状态
-            - 浏览器实测：顶层弹窗 Escape、规则 mock 增删改、设置失败回滚、悬浮条慢请求最大并发 1、网络详情展开/收起
-
-            ## ⚠️ 发版前边界
-
-            - 混合 DPI 双屏拖拽与重启落点仍需实机验证。
-            - macOS/Linux 的权限、全屏、X11 交互仍需实机复验。
-            - Wi-Fi 频段、双端点质量探测与混合 DPI 下的详情展开布局仍需实机复核。
-            - GitHub CI 三平台构建、DMG 重传和 latest.json 需再次确认。
+            仍需实机确认：Wi-Fi 频段、混合 DPI 布局，以及 macOS/Linux 的原生网络与截图行为。
 
           releaseDraft: false
           prerelease: false
@@ -148,7 +117,13 @@ jobs:
             libpipewire-0.3-dev libgbm-dev libegl1-mesa-dev
       - name: Install frontend deps
         run: npm ci --no-audit --no-fund
+      - name: Build Tauri (Linux, build only)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: npx --no-install tauri build --ci --target x86_64-unknown-linux-gnu
       - name: Build Tauri (Linux)
+        if: github.event_name == 'push'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -173,53 +148,16 @@ jobs:
           releaseBody: |
             ### 屏幕时间管家 ScreenTime Pro — v1.2.13
 
-            > 本版合并桌宠/悬浮条、截图与设置稳定性、多盘与状态架构整改，并完成一轮工程清零。
+            本版新增网络详情，并集中修复截图、备份、规则编辑、悬浮条和网络采样问题。
 
-            ## ⭐ 核心变更
+            主要更新：
+            - 网络详情支持链路、介质、频段、VPN、IP/地区、时延、抖动和 ICMP 丢包率；质量探测默认关闭，公网 IP/地区需单独开启。
+            - 修复截图会话冲突、备份导出死锁、规则编辑失败、玻璃详情裁切和隐藏后继续探测。
+            - 优化设置保存、拖拽、弹窗、页面切换及 Windows/macOS/Linux 兼容性。
 
-            - **三端统一拖拽**：Rust 全局光标循环，解决快速横甩掉队、松手回跳、跨 DPI 落点、最后一帧和旧会话误收尾。
-            - **启动与边界**：桌宠启动恢复、离屏回落、菜单拖拽加速、悬浮条起点保存与反复离屏问题全部处理。
-            - **桌宠状态入 SQLite**：开关、位置、皮肤、缩放、等级和喂食记录纳入备份，支持旧 localStorage 幂等迁移。
-            - **多盘指标**：悬浮条支持系统盘、全部本地磁盘汇总和指定挂载点，选盘失效自动回退系统盘。
-            - **窗口单源**：pet / pet-menu / float / capture 统一由 tauri.conf.json 声明，移除 Rust builder 重复定义。
-            - **网络详情**：悬浮条可展开链路、介质、2.4G/5G/6G、VPN 与 HTTPS p50/p95、抖动、失败率；默认关闭探测，双端点、单飞、过期降级。
+            验证：Rust **111 项测试通过**，Clippy 零警告，vue-tsc 和 vite build 通过；三平台交叉检查通过。
 
-            ## 🐞 稳定性修复
-
-            - 截图提交失败保留选区与标注并显示错误，成功才清场。
-            - 图片 decode、OCR 请求和选区增加会话守卫，旧结果不得覆盖新状态或冒充当前文本。
-            - 文字标注支持独立颜色与字号；历史多选、单删、显示按钮不再冒泡改变选择。
-            - 设置页所有配置提交前必须取得权威基线，读取失败禁止写入默认值；备份保留天数同步持久化。
-            - 修复权限授权后重启误撤销、菜单位移重复累计、跨日喂食禁用、长按尾随单击、蜘蛛侠姿势图缺失。
-            - macOS 全屏检测覆盖所有活动显示器，主屏和副屏游戏/视频全屏均可自动隐藏。
-            - 三端网速改为硬件接口优先、虚拟接口兜底并按接口差分，避免 VPN/虚拟网卡重复计数与接口变化虚假尖峰。
-            - 导出/备份复用持锁连接，修复全量导出与自动备份死锁；备份配置写库失败不再假成功。
-            - Linux X11 前台与 ScreenSaver 空闲采集恢复；空闲和无前台间隔不再计入使用时长；macOS 窗口枚举内存泄漏修复。
-            - 截图提交绑定 capture_seq 且 single-flight，双击和旧会话不得重复落盘或误清新帧；悬浮条启动显隐与慢轮询修复。
-            - 设置保存、堆叠弹窗、页面旧响应、桌宠手动状态与规则结果等并发竞态修复；辅助窗口日志权限补齐。
-            - 二次审计回归清零：规则编辑、截图 begin/commit/cancel 生命周期、玻璃显隐与隐藏探测、网络读失败基准、Linux 路由、pet_state 导入、短会话与拖拽竞态。
-
-            ## 🧹 工程清理
-
-            - 删除 3 个无消费者 IPC；新增松手检测、桌宠状态读写、独立磁盘查询与网络详情状态/配置，并移除无消费者 show_float_window，当前共 **94** 个命令。
-            - 'cargo clippy --all-targets -- -D warnings' **零警告**，源码设计思路与修改历史已补齐。
-            - 清理旧 sprite 链路、无效监听、恒零参数、重复样式和过时架构说明。
-
-            ## ✅ 验证
-
-            - 'cargo test --lib'：**106 passed / 0 failed / 7 ignored**
-            - 'cargo clippy --all-targets -- -D warnings'：**零警告**
-            - 'vue-tsc --noEmit'、'vite build'：通过
-            - macOS 显示器枚举与 Linux 按键查询交叉探针：通过
-            - Windows 独立开发版实测：400px 快甩、离屏回落、悬浮条松手、多盘入口、SQLite 位置与启用状态
-            - 浏览器实测：顶层弹窗 Escape、规则 mock 增删改、设置失败回滚、悬浮条慢请求最大并发 1、网络详情展开/收起
-
-            ## ⚠️ 发版前边界
-
-            - 混合 DPI 双屏拖拽与重启落点仍需实机验证。
-            - macOS/Linux 的权限、全屏、X11 交互仍需实机复验。
-            - Wi-Fi 频段、双端点质量探测与混合 DPI 下的详情展开布局仍需实机复核。
-            - GitHub CI 三平台构建、DMG 重传和 latest.json 需再次确认。
+            仍需实机确认：Wi-Fi 频段、混合 DPI 布局，以及 macOS/Linux 的原生网络与截图行为。
 
           releaseDraft: false
           prerelease: false
@@ -259,7 +197,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Install frontend deps
         run: npm ci --no-audit --no-fund
+      - name: Build Tauri (macOS, build only)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: npx --no-install tauri build --ci --target aarch64-apple-darwin
       - name: Build Tauri (macOS)
+        if: github.event_name == 'push'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -278,53 +222,16 @@ jobs:
           releaseBody: |
             ### 屏幕时间管家 ScreenTime Pro — v1.2.13
 
-            > 本版合并桌宠/悬浮条、截图与设置稳定性、多盘与状态架构整改，并完成一轮工程清零。
+            本版新增网络详情，并集中修复截图、备份、规则编辑、悬浮条和网络采样问题。
 
-            ## ⭐ 核心变更
+            主要更新：
+            - 网络详情支持链路、介质、频段、VPN、IP/地区、时延、抖动和 ICMP 丢包率；质量探测默认关闭，公网 IP/地区需单独开启。
+            - 修复截图会话冲突、备份导出死锁、规则编辑失败、玻璃详情裁切和隐藏后继续探测。
+            - 优化设置保存、拖拽、弹窗、页面切换及 Windows/macOS/Linux 兼容性。
 
-            - **三端统一拖拽**：Rust 全局光标循环，解决快速横甩掉队、松手回跳、跨 DPI 落点、最后一帧和旧会话误收尾。
-            - **启动与边界**：桌宠启动恢复、离屏回落、菜单拖拽加速、悬浮条起点保存与反复离屏问题全部处理。
-            - **桌宠状态入 SQLite**：开关、位置、皮肤、缩放、等级和喂食记录纳入备份，支持旧 localStorage 幂等迁移。
-            - **多盘指标**：悬浮条支持系统盘、全部本地磁盘汇总和指定挂载点，选盘失效自动回退系统盘。
-            - **窗口单源**：pet / pet-menu / float / capture 统一由 tauri.conf.json 声明，移除 Rust builder 重复定义。
-            - **网络详情**：悬浮条可展开链路、介质、2.4G/5G/6G、VPN 与 HTTPS p50/p95、抖动、失败率；默认关闭探测，双端点、单飞、过期降级。
+            验证：Rust **111 项测试通过**，Clippy 零警告，vue-tsc 和 vite build 通过；三平台交叉检查通过。
 
-            ## 🐞 稳定性修复
-
-            - 截图提交失败保留选区与标注并显示错误，成功才清场。
-            - 图片 decode、OCR 请求和选区增加会话守卫，旧结果不得覆盖新状态或冒充当前文本。
-            - 文字标注支持独立颜色与字号；历史多选、单删、显示按钮不再冒泡改变选择。
-            - 设置页所有配置提交前必须取得权威基线，读取失败禁止写入默认值；备份保留天数同步持久化。
-            - 修复权限授权后重启误撤销、菜单位移重复累计、跨日喂食禁用、长按尾随单击、蜘蛛侠姿势图缺失。
-            - macOS 全屏检测覆盖所有活动显示器，主屏和副屏游戏/视频全屏均可自动隐藏。
-            - 三端网速改为硬件接口优先、虚拟接口兜底并按接口差分，避免 VPN/虚拟网卡重复计数与接口变化虚假尖峰。
-            - 导出/备份复用持锁连接，修复全量导出与自动备份死锁；备份配置写库失败不再假成功。
-            - Linux X11 前台与 ScreenSaver 空闲采集恢复；空闲和无前台间隔不再计入使用时长；macOS 窗口枚举内存泄漏修复。
-            - 截图提交绑定 capture_seq 且 single-flight，双击和旧会话不得重复落盘或误清新帧；悬浮条启动显隐与慢轮询修复。
-            - 设置保存、堆叠弹窗、页面旧响应、桌宠手动状态与规则结果等并发竞态修复；辅助窗口日志权限补齐。
-            - 二次审计回归清零：规则编辑、截图 begin/commit/cancel 生命周期、玻璃显隐与隐藏探测、网络读失败基准、Linux 路由、pet_state 导入、短会话与拖拽竞态。
-
-            ## 🧹 工程清理
-
-            - 删除 3 个无消费者 IPC；新增松手检测、桌宠状态读写、独立磁盘查询与网络详情状态/配置，并移除无消费者 show_float_window，当前共 **94** 个命令。
-            - 'cargo clippy --all-targets -- -D warnings' **零警告**，源码设计思路与修改历史已补齐。
-            - 清理旧 sprite 链路、无效监听、恒零参数、重复样式和过时架构说明。
-
-            ## ✅ 验证
-
-            - 'cargo test --lib'：**106 passed / 0 failed / 7 ignored**
-            - 'cargo clippy --all-targets -- -D warnings'：**零警告**
-            - 'vue-tsc --noEmit'、'vite build'：通过
-            - macOS 显示器枚举与 Linux 按键查询交叉探针：通过
-            - Windows 独立开发版实测：400px 快甩、离屏回落、悬浮条松手、多盘入口、SQLite 位置与启用状态
-            - 浏览器实测：顶层弹窗 Escape、规则 mock 增删改、设置失败回滚、悬浮条慢请求最大并发 1、网络详情展开/收起
-
-            ## ⚠️ 发版前边界
-
-            - 混合 DPI 双屏拖拽与重启落点仍需实机验证。
-            - macOS/Linux 的权限、全屏、X11 交互仍需实机复验。
-            - Wi-Fi 频段、双端点质量探测与混合 DPI 下的详情展开布局仍需实机复核。
-            - GitHub CI 三平台构建、DMG 重传和 latest.json 需再次确认。
+            仍需实机确认：Wi-Fi 频段、混合 DPI 布局，以及 macOS/Linux 的原生网络与截图行为。
 
           releaseDraft: false
           prerelease: false

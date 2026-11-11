@@ -8,6 +8,8 @@ pub mod platform;
 
 use platform::{Backend, LinkState, NativeBackend, NativeStatus};
 use std::collections::VecDeque;
+use std::net::{IpAddr, UdpSocket};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -16,9 +18,17 @@ const PROBE_URLS: &[&str] = &[
     "https://www.gstatic.com/generate_204",
     "https://connect.rom.miui.com/generate_204",
 ];
-const PROBE_INTERVAL: Duration = Duration::from_secs(5);
+const PROBE_WARMUP_INTERVAL: Duration = Duration::from_secs(2);
+const PROBE_INTERVAL: Duration = Duration::from_secs(10);
 const PROBE_FAILURE_INTERVAL: Duration = Duration::from_secs(15);
+const PROBE_MAX_FAILURE_INTERVAL: Duration = Duration::from_secs(60);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+const PUBLIC_INFO_URL: &str = "https://ipinfo.io/json";
+const PUBLIC_INFO_INTERVAL: Duration = Duration::from_secs(300);
+const PUBLIC_INFO_FAILURE_INTERVAL: Duration = Duration::from_secs(60);
+const PACKET_LOSS_INTERVAL: Duration = Duration::from_secs(15);
+const PACKET_LOSS_FAILURE_INTERVAL: Duration = Duration::from_secs(60);
+const PACKET_LOSS_HOST: &str = "1.1.1.1";
 const PROBE_STALE_AFTER: Duration = Duration::from_secs(15);
 const PROBE_WINDOW: Duration = Duration::from_secs(300);
 const NATIVE_CACHE_FOR: Duration = Duration::from_secs(10);
@@ -45,11 +55,18 @@ pub struct NetworkStatusOut {
     pub attempts: u32,
     pub successes: u32,
     pub sampled_at_ms: u64,
+    /// 仅在用户单独开启公网信息查询时返回；默认 null。
+    pub public_ip: Option<String>,
+    pub region: Option<String>,
+    /// 系统 ping 实测丢包率；不可用或权限不足时为 null。
+    pub packet_loss_pct: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct NetworkProbeConfig {
     pub enabled: bool,
+    /// 公网 IP/地区查询独立开关，与质量探测分开授权。
+    pub public_ip_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -71,6 +88,7 @@ struct ProbeInner {
     history: VecDeque<Attempt>,
     latest: Option<ProbeResult>,
     next_due: Option<Instant>,
+    consecutive_failures: u32,
 }
 
 #[derive(Default)]
@@ -79,6 +97,41 @@ struct ProbeState {
     in_flight: AtomicBool,
     generation: AtomicU64,
     inner: Mutex<ProbeInner>,
+}
+
+#[derive(Default)]
+struct PublicInfoInner {
+    next_due: Option<Instant>,
+    public_ip: Option<String>,
+    region: Option<String>,
+}
+
+#[derive(Default)]
+struct PublicInfoState {
+    enabled: AtomicBool,
+    in_flight: AtomicBool,
+    generation: AtomicU64,
+    inner: Mutex<PublicInfoInner>,
+}
+
+#[derive(Default)]
+struct PacketLossInner {
+    next_due: Option<Instant>,
+    value: Option<f64>,
+}
+
+#[derive(Default)]
+struct PacketLossState {
+    in_flight: AtomicBool,
+    inner: Mutex<PacketLossInner>,
+}
+
+#[derive(serde::Deserialize)]
+struct PublicInfoResponse {
+    ip: String,
+    city: Option<String>,
+    region: Option<String>,
+    country: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -131,13 +184,19 @@ impl ProbeState {
                     inner.history.pop_front();
                 }
             }
-            inner.next_due = Some(
-                now + if success {
-                    PROBE_INTERVAL
+            let interval = if success {
+                inner.consecutive_failures = 0;
+                if inner.history.len() < 5 {
+                    PROBE_WARMUP_INTERVAL
                 } else {
-                    PROBE_FAILURE_INTERVAL
-                },
-            );
+                    PROBE_INTERVAL
+                }
+            } else {
+                inner.consecutive_failures = inner.consecutive_failures.saturating_add(1).min(4);
+                let exponent = inner.consecutive_failures.saturating_sub(1);
+                (PROBE_FAILURE_INTERVAL * (1u32 << exponent)).min(PROBE_MAX_FAILURE_INTERVAL)
+            };
+            inner.next_due = Some(now + interval);
         }
         self.in_flight.store(false, Ordering::Release);
     }
@@ -237,10 +296,120 @@ fn wall_now_ms() -> u64 {
         .map_or(0, |duration| duration.as_millis() as u64)
 }
 
+fn local_ip_address() -> Option<String> {
+    for (bind, destination) in [("0.0.0.0:0", "1.1.1.1:80"), ("[::]:0", "[2001:db8::1]:80")] {
+        let Ok(socket) = UdpSocket::bind(bind) else {
+            continue;
+        };
+        if socket.connect(destination).is_ok() {
+            if let Ok(address) = socket.local_addr() {
+                return Some(address.ip().to_string());
+            }
+        }
+    }
+    None
+}
+
+fn region_from_response(response: PublicInfoResponse) -> Option<String> {
+    let locality = response.region.or(response.city);
+    let text = match (locality, response.country) {
+        (Some(locality), Some(country)) => format!("{locality}, {country}"),
+        (Some(locality), None) => locality,
+        (None, Some(country)) => country,
+        (None, None) => return None,
+    };
+    Some(text.chars().take(96).collect())
+}
+
+impl PublicInfoState {
+    fn finish(&self, generation: u64, response: Option<PublicInfoResponse>) {
+        let now = Instant::now();
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if generation == self.generation.load(Ordering::Acquire) {
+            match response {
+                Some(response) => {
+                    inner.public_ip = response
+                        .ip
+                        .parse::<IpAddr>()
+                        .ok()
+                        .map(|address| address.to_string());
+                    inner.region = region_from_response(response);
+                }
+                None => {
+                    inner.public_ip = None;
+                    inner.region = None;
+                }
+            }
+            inner.next_due = Some(
+                now + if inner.public_ip.is_some() {
+                    PUBLIC_INFO_INTERVAL
+                } else {
+                    PUBLIC_INFO_FAILURE_INTERVAL
+                },
+            );
+        }
+        self.in_flight.store(false, Ordering::Release);
+    }
+
+    fn snapshot(&self) -> (Option<String>, Option<String>) {
+        if !self.enabled.load(Ordering::Acquire) {
+            return (None, None);
+        }
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        (inner.public_ip.clone(), inner.region.clone())
+    }
+}
+
+impl PacketLossState {
+    fn finish(&self, value: Option<f64>) {
+        let now = Instant::now();
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.value = value;
+        inner.next_due = Some(
+            now + if value.is_some() {
+                PACKET_LOSS_INTERVAL
+            } else {
+                PACKET_LOSS_FAILURE_INTERVAL
+            },
+        );
+        self.in_flight.store(false, Ordering::Release);
+    }
+
+    fn snapshot(&self) -> Option<f64> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).value
+    }
+}
+
+fn loss_from_ping_output(input: &str) -> Option<f64> {
+    let received = input
+        .lines()
+        .filter(|line| line.to_lowercase().contains("ttl="))
+        .count();
+    if received > 4 {
+        return None;
+    }
+    Some((4 - received) as f64 * 25.0)
+}
+
+fn measure_packet_loss() -> Option<f64> {
+    #[cfg(target_os = "windows")]
+    let args = ["-n", "4", "-w", "1000", PACKET_LOSS_HOST];
+    #[cfg(target_os = "macos")]
+    let args = ["-c", "4", "-W", "1000", PACKET_LOSS_HOST];
+    #[cfg(target_os = "linux")]
+    let args = ["-c", "4", "-W", "1", PACKET_LOSS_HOST];
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    return None;
+    let output = Command::new("ping").args(args).output().ok()?;
+    loss_from_ping_output(&String::from_utf8_lossy(&output.stdout))
+}
+
 /// 网络详情采样器；所有外部请求都在后台单飞执行，调用方只读缓存。
 pub struct NetworkStatusSampler {
     native_cache: Mutex<Option<(Instant, NativeStatus)>>,
     probe: Arc<ProbeState>,
+    public_info: Arc<PublicInfoState>,
+    packet_loss: Arc<PacketLossState>,
     client: Option<reqwest::Client>,
 }
 
@@ -256,6 +425,8 @@ impl NetworkStatusSampler {
         Self {
             native_cache: Mutex::new(None),
             probe,
+            public_info: Arc::new(PublicInfoState::default()),
+            packet_loss: Arc::new(PacketLossState::default()),
             client,
         }
     }
@@ -264,7 +435,25 @@ impl NetworkStatusSampler {
     pub fn probe_config(&self) -> NetworkProbeConfig {
         NetworkProbeConfig {
             enabled: self.probe.enabled.load(Ordering::Acquire),
+            public_ip_enabled: self.public_info.enabled.load(Ordering::Acquire),
         }
+    }
+
+    /// 独立设置公网 IP/地区查询；相同值不清空缓存，实际切换时丢弃旧请求结果。
+    pub fn set_public_ip_enabled(&self, enabled: bool) {
+        let mut inner = self
+            .public_info
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if self.public_info.enabled.load(Ordering::Acquire) == enabled {
+            return;
+        }
+        self.public_info.enabled.store(enabled, Ordering::Release);
+        self.public_info.generation.fetch_add(1, Ordering::AcqRel);
+        inner.public_ip = None;
+        inner.region = None;
+        inner.next_due = enabled.then(Instant::now);
     }
 
     /// 更新质量探测开关；相同值不重排采样，实际切换时使在途旧结果失效。
@@ -277,18 +466,27 @@ impl NetworkStatusSampler {
         self.probe.generation.fetch_add(1, Ordering::AcqRel);
         inner.history.clear();
         inner.latest = None;
+        inner.consecutive_failures = 0;
         inner.next_due = enabled.then(Instant::now);
+        let mut packet_loss = self
+            .packet_loss
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        packet_loss.value = None;
+        packet_loss.next_due = enabled.then(Instant::now);
     }
 
     fn native(&self) -> NativeStatus {
         let mut cache = self.native_cache.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((sampled_at, status)) = *cache {
+        if let Some((sampled_at, status)) = cache.as_ref() {
             if sampled_at.elapsed() < NATIVE_CACHE_FOR {
-                return status;
+                return status.clone();
             }
         }
-        let status = Backend::snapshot();
-        *cache = Some((Instant::now(), status));
+        let mut status = Backend::snapshot();
+        status.local_ip = local_ip_address();
+        *cache = Some((Instant::now(), status.clone()));
         status
     }
 
@@ -336,10 +534,86 @@ impl NetworkStatusSampler {
         });
     }
 
+    fn maybe_spawn_public_info(&self, link: LinkState) {
+        if link == LinkState::Down {
+            return;
+        }
+        let (generation, client) = {
+            let inner = self
+                .public_info
+                .inner
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let due = inner.next_due.map_or(true, |due| Instant::now() >= due);
+            if !self.public_info.enabled.load(Ordering::Acquire)
+                || !due
+                || self.public_info.in_flight.load(Ordering::Acquire)
+            {
+                return;
+            }
+            self.public_info.in_flight.store(true, Ordering::Release);
+            (
+                self.public_info.generation.load(Ordering::Acquire),
+                self.client.clone(),
+            )
+        };
+        let Some(client) = client else {
+            self.public_info.in_flight.store(false, Ordering::Release);
+            return;
+        };
+        let public_info = Arc::clone(&self.public_info);
+        tauri::async_runtime::spawn(async move {
+            let response = client
+                .get(PUBLIC_INFO_URL)
+                .timeout(PROBE_TIMEOUT)
+                .send()
+                .await;
+            let parsed = match response {
+                Ok(response) if response.status().is_success() => {
+                    response.json::<PublicInfoResponse>().await.ok()
+                }
+                _ => None,
+            };
+            public_info.finish(generation, parsed);
+        });
+    }
+
+    fn maybe_spawn_packet_loss(&self, link: LinkState) {
+        if link == LinkState::Down || !self.probe.enabled.load(Ordering::Acquire) {
+            return;
+        }
+        {
+            let mut inner = self
+                .packet_loss
+                .inner
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let due = inner.next_due.map_or(true, |due| Instant::now() >= due);
+            if !due || self.packet_loss.in_flight.load(Ordering::Acquire) {
+                return;
+            }
+            self.packet_loss.in_flight.store(true, Ordering::Release);
+            inner.next_due = Some(Instant::now() + PACKET_LOSS_INTERVAL);
+        }
+        let packet_loss = Arc::clone(&self.packet_loss);
+        tauri::async_runtime::spawn_blocking(move || {
+            packet_loss.finish(measure_packet_loss());
+        });
+    }
+
     /// 读取缓存并视采样到期情况派生后台探测，不等待任何网络请求。
     pub fn snapshot(&self) -> NetworkStatusOut {
         let native = self.native();
         self.maybe_spawn_probe(native.link);
+        self.maybe_spawn_public_info(native.link);
+        self.maybe_spawn_packet_loss(native.link);
+        let (public_ip, region) = self.public_info.snapshot();
+        let packet_loss_pct = self
+            .probe
+            .enabled
+            .load(Ordering::Acquire)
+            .then(|| self.packet_loss.snapshot())
+            .flatten();
         let probing_enabled = self.probe.enabled.load(Ordering::Acquire);
         let mut probe = if probing_enabled {
             self.probe.snapshot()
@@ -371,6 +645,9 @@ impl NetworkStatusSampler {
             attempts: probe.attempts,
             successes: probe.successes,
             sampled_at_ms: probe.sampled_at_ms,
+            public_ip,
+            region,
+            packet_loss_pct,
         }
     }
 }
@@ -554,6 +831,83 @@ mod tests {
         let mut sampler = NetworkStatusSampler::new(true);
         sampler.client = None;
         assert_eq!(sampler.snapshot().internet, InternetState::Stale);
+    }
+
+    fn next_delay_secs(probe: &ProbeState) -> u64 {
+        probe
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .next_due
+            .map(|due| due.duration_since(Instant::now()).as_secs())
+            .unwrap_or(u64::MAX)
+    }
+
+    #[test]
+    fn schedule_warms_up_quickly_and_backs_off_to_one_minute() {
+        let probe = ProbeState::default();
+        for _ in 0..4 {
+            succeed(&probe, 20.0);
+            assert!(next_delay_secs(&probe) <= 2);
+        }
+        succeed(&probe, 20.0);
+        assert!(next_delay_secs(&probe) <= 10);
+        probe.finish(probe.generation.load(Ordering::Acquire), false, 3_000.0, 0);
+        assert!(next_delay_secs(&probe) <= 15);
+        probe.finish(probe.generation.load(Ordering::Acquire), false, 3_000.0, 0);
+        assert!(next_delay_secs(&probe) <= 30);
+        probe.finish(probe.generation.load(Ordering::Acquire), false, 3_000.0, 0);
+        assert!(next_delay_secs(&probe) <= 60);
+        probe.finish(probe.generation.load(Ordering::Acquire), false, 3_000.0, 0);
+        assert!(next_delay_secs(&probe) <= 60);
+    }
+
+    #[test]
+    fn public_info_region_is_bounded_and_old_completion_is_discarded() {
+        let response = PublicInfoResponse {
+            ip: "203.0.113.8".to_string(),
+            city: Some("Shanghai".to_string()),
+            region: Some("Shanghai".to_string()),
+            country: Some("CN".to_string()),
+        };
+        assert_eq!(
+            region_from_response(response),
+            Some("Shanghai, CN".to_string())
+        );
+
+        let sampler = NetworkStatusSampler::new(false);
+        sampler.set_public_ip_enabled(true);
+        let generation = sampler.public_info.generation.load(Ordering::Acquire);
+        sampler.set_public_ip_enabled(false);
+        sampler.public_info.finish(
+            generation,
+            Some(PublicInfoResponse {
+                ip: "203.0.113.8".to_string(),
+                city: None,
+                region: None,
+                country: Some("CN".to_string()),
+            }),
+        );
+        assert_eq!(sampler.public_info.snapshot(), (None, None));
+    }
+
+    #[test]
+    fn packet_loss_counts_ttl_replies_not_http_failures() {
+        let windows = "来自 1.1.1.1 的回复: 字节=32 时间<1ms TTL=128\n来自 1.1.1.1 的回复: 字节=32 时间=2ms TTL=128";
+        assert_eq!(loss_from_ping_output(windows), Some(50.0));
+        let unix = "64 bytes from 1.1.1.1: icmp_seq=0 ttl=128\n64 bytes from 1.1.1.1: icmp_seq=1 ttl=128\n64 bytes from 1.1.1.1: icmp_seq=2 ttl=128\n64 bytes from 1.1.1.1: icmp_seq=3 ttl=128";
+        assert_eq!(loss_from_ping_output(unix), Some(0.0));
+        assert_eq!(loss_from_ping_output("Request timeout"), Some(100.0));
+        assert_eq!(
+            loss_from_ping_output("TTL=1\nTTL=1\nTTL=1\nTTL=1\nTTL=1"),
+            None
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn live_packet_loss_probe() {
+        println!("packet_loss_pct={:?}", measure_packet_loss());
     }
 
     #[test]

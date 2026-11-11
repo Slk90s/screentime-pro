@@ -176,7 +176,7 @@
       {
         'is-glass': cfg.float_glass,
         'has-blur': cfg.float_glass && nativeBlur,
-        'has-network-detail': networkDetailOpen,
+        'has-network-detail': networkDetailLayoutOpen,
       },
     ]"
     @pointerdown="onPointerDown"
@@ -232,59 +232,91 @@
       <span v-if="!hasAny && !shotEnabled" class="f-item"><b class="f-dim">ScreenTime Pro</b></span>
     </div>
 
-    <section
-      v-if="networkDetailOpen"
-      id="float-network-detail"
-      class="f-network-detail"
-      :aria-label="t('float.network.details')"
-      @pointerdown.stop
-    >
-      <dl class="f-network-grid">
-        <div class="f-network-stat">
-          <dt>{{ t("float.network.link") }}</dt>
-          <dd>{{ networkLinkLabel }}</dd>
+    <Transition name="f-network-detail">
+      <section
+        v-if="networkDetailOpen"
+        id="float-network-detail"
+        class="f-network-detail"
+        :aria-label="t('float.network.details')"
+        @pointerdown.stop
+      >
+        <dl class="f-network-grid">
+          <div class="f-network-stat">
+            <dt>{{ t("float.network.link") }}</dt>
+            <dd :data-state="networkStatus?.link ?? 'unknown'">{{ networkLinkLabel }}</dd>
+          </div>
+          <div class="f-network-stat">
+            <dt>{{ t("float.network.medium") }}</dt>
+            <dd>{{ networkMediumLabel }}</dd>
+          </div>
+          <div class="f-network-stat">
+            <dt>{{ t("float.network.band") }}</dt>
+            <dd>{{ networkBandLabel }}</dd>
+          </div>
+          <div class="f-network-stat">
+            <dt>{{ t("float.network.vpn") }}</dt>
+            <dd>
+              {{ networkStatus ? t(networkStatus.vpn ? "float.network.vpnOn" : "float.network.vpnOff") : t("float.network.linkUnknown") }}
+            </dd>
+          </div>
+        </dl>
+        <dl class="f-network-addresses">
+          <div class="f-network-stat">
+            <dt>{{ t("float.network.localIp") }}</dt>
+            <dd>{{ networkTextOrUnknown(networkStatus?.local_ip) }}</dd>
+          </div>
+          <div class="f-network-stat">
+            <dt>{{ t("float.network.publicIp") }}</dt>
+            <dd>{{ networkTextOrUnknown(networkStatus?.public_ip) }}</dd>
+          </div>
+          <div class="f-network-stat">
+            <dt>{{ t("float.network.region") }}</dt>
+            <dd>{{ networkTextOrUnknown(networkStatus?.region) }}</dd>
+          </div>
+        </dl>
+        <div class="f-network-quality-head">
+          <span>{{ t("float.network.quality") }}</span>
+          <span class="f-network-internet" :data-state="networkStatus?.internet ?? 'unknown'">
+            {{ networkInternetLabel }}
+          </span>
         </div>
-        <div class="f-network-stat">
-          <dt>{{ t("float.network.medium") }}</dt>
-          <dd>{{ networkMediumLabel }}</dd>
-        </div>
-        <div class="f-network-stat">
-          <dt>{{ t("float.network.band") }}</dt>
-          <dd>{{ networkBandLabel }}</dd>
-        </div>
-        <div class="f-network-stat">
-          <dt>{{ t("float.network.vpn") }}</dt>
-          <dd>
-            {{ networkStatus ? t(networkStatus.vpn ? "float.network.vpnOn" : "float.network.vpnOff") : t("float.network.linkUnknown") }}
-          </dd>
-        </div>
-      </dl>
-      <div class="f-network-quality-head">
-        <span>{{ t("float.network.quality") }}</span>
-        <span class="f-network-internet" :data-state="networkStatus?.internet ?? 'unknown'">
-          {{ networkInternetLabel }}
-        </span>
-      </div>
-      <dl class="f-network-grid">
-        <div class="f-network-stat">
-          <dt>{{ t("float.network.p50") }}</dt>
-          <dd>{{ qualityMs(networkStatus?.latency_p50_ms) }}</dd>
-        </div>
-        <div class="f-network-stat">
-          <dt>{{ t("float.network.p95") }}</dt>
-          <dd>{{ qualityMs(networkStatus?.latency_p95_ms) }}</dd>
-        </div>
-        <div class="f-network-stat">
-          <dt>{{ t("float.network.jitter") }}</dt>
-          <dd>{{ qualityMs(networkStatus?.jitter_ms) }}</dd>
-        </div>
-        <div class="f-network-stat">
-          <dt>{{ t("float.network.failure") }}</dt>
-          <dd>{{ qualityFailure(networkStatus?.failure_pct) }}</dd>
-        </div>
-      </dl>
-      <p class="f-network-explanation">{{ networkExplanation }}</p>
-    </section>
+        <dl class="f-network-grid">
+          <div class="f-network-stat">
+            <dt>{{ t("float.network.p50") }}</dt>
+            <dd :data-state="latencyState(networkStatus?.latency_p50_ms)">
+              {{ qualityMs(networkStatus?.latency_p50_ms) }}
+            </dd>
+          </div>
+          <div class="f-network-stat">
+            <dt>{{ t("float.network.p95") }}</dt>
+            <dd :data-state="latencyState(networkStatus?.latency_p95_ms, true)">
+              {{ qualityMs(networkStatus?.latency_p95_ms) }}
+            </dd>
+          </div>
+          <div class="f-network-stat">
+            <dt>{{ t("float.network.jitter") }}</dt>
+            <dd :data-state="jitterState(networkStatus?.jitter_ms)">
+              {{ qualityMs(networkStatus?.jitter_ms) }}
+            </dd>
+          </div>
+          <div class="f-network-stat">
+            <dt>{{ t("float.network.failure") }}</dt>
+            <dd :data-state="failureState(networkStatus?.failure_pct)">
+              {{ qualityFailure(networkStatus?.failure_pct) }}
+            </dd>
+          </div>
+          <div class="f-network-stat">
+            <dt>{{ t("float.network.packetLoss") }}</dt>
+            <dd :data-state="failureState(networkStatus?.packet_loss_pct)">
+              {{ qualityFailure(networkStatus?.packet_loss_pct) }}
+            </dd>
+          </div>
+        </dl>
+        <p class="f-network-explanation">
+          {{ networkExplanation }} {{ t("float.network.explainSampling") }}
+        </p>
+      </section>
+    </Transition>
   </div>
 </template>
 
@@ -303,6 +335,7 @@ import type {
   NetworkLink,
   NetworkMedium,
   NetworkStatusOut,
+  NetworkTunnel,
   StatusBarConfig,
 } from "../types";
 import { log } from "@/lib/logger";
@@ -332,7 +365,9 @@ const BAR_W = 340;
  */
 const WIDTH_SLACK = 2;
 /** 展开区固定高度；宽度仍只由顶部指标行测量，避免详情文案引起横向呼吸。 */
-const NETWORK_DETAIL_HEIGHT = 212;
+const NETWORK_DETAIL_HEIGHT = 304;
+/** 与详情离场 CSS 同步；期间窗口保持展开高度，不能被 1Hz tick 提前压回。 */
+const NETWORK_DETAIL_TRANSITION_MS = 180;
 const POS_KEY = "float_pos";
 
 /** v1.2.8：内层内容容器（宽度测量基准）。
@@ -353,13 +388,16 @@ const cfg = ref<StatusBarConfig>({
 const metrics = ref<MetricsOut | null>(null);
 const networkStatus = ref<NetworkStatusOut | null>(null);
 const networkExpanded = ref(false);
+/** 布局/窗口展开态：折叠动画的 180ms 内保持 true，与轮询所用的逻辑展开态分离。 */
+const networkDetailLayoutOpen = ref(false);
 const baseHeight = computed(() => (cfg.value.float_glass ? 44 : 36));
 const networkDetailOpen = computed(() => networkExpanded.value && cfg.value.show_net);
 const targetHeight = computed(
-  () => baseHeight.value + (networkDetailOpen.value ? NETWORK_DETAIL_HEIGHT : 0),
+  () => baseHeight.value + (networkDetailLayoutOpen.value ? NETWORK_DETAIL_HEIGHT : 0),
 );
 const diskMode = ref(localStorage.getItem("screentime-disk-mode") || "system");
 let timer: number | null = null;
+let networkCollapseTimer: number | null = null;
 // 慢 IPC 时跳过新 tick，避免并发采样推进网络基准、旧响应覆盖新状态。
 let tickInFlight = false;
 /** 上次已应用的内容尺寸，避免每秒无谓 IPC；高度变化不能只依赖 ResizeObserver。 */
@@ -525,6 +563,12 @@ const NETWORK_MEDIUM_KEYS: Record<NetworkMedium, string> = {
   other: "float.network.mediumOther",
   unknown: "float.network.mediumUnknown",
 };
+const NETWORK_TUNNEL_LABELS: Partial<Record<NetworkTunnel, string>> = {
+  tun: "TUN",
+  tap: "TAP",
+  wireguard: "WireGuard",
+  ppp: "PPP",
+};
 const NETWORK_BAND_KEYS: Record<NetworkBand, string> = {
   not_applicable: "float.network.bandNotApplicable",
   ghz24: "float.network.band24",
@@ -548,9 +592,23 @@ const networkToggleLabel = computed(() => {
 const networkLinkLabel = computed(() =>
   t(NETWORK_LINK_KEYS[networkStatus.value?.link ?? "unknown"]),
 );
-const networkMediumLabel = computed(() =>
-  t(NETWORK_MEDIUM_KEYS[networkStatus.value?.medium ?? "unknown"]),
-);
+const networkMediumLabel = computed(() => {
+  const status = networkStatus.value;
+  if (!status) return t("float.network.mediumUnknown");
+  if (status.medium !== "vpn") return t(NETWORK_MEDIUM_KEYS[status.medium]);
+
+  let label = t("float.network.mediumVpn");
+  const physical = status.physical_medium;
+  // 后端只在能可靠关联时给物理介质；null/unknown 不做猜测，也不重复“VPN · VPN”。
+  if (physical && physical !== "unknown" && physical !== "vpn") {
+    label += ` · ${t(NETWORK_MEDIUM_KEYS[physical])}`;
+  }
+  const tunnel =
+    status.tunnel === "other"
+      ? t("float.network.mediumOther")
+      : NETWORK_TUNNEL_LABELS[status.tunnel];
+  return tunnel ? `${label}（${tunnel}）` : label;
+});
 const networkBandLabel = computed(() =>
   t(NETWORK_BAND_KEYS[networkStatus.value?.band ?? "unknown"]),
 );
@@ -559,6 +617,33 @@ const networkInternetLabel = computed(() =>
     ? t(NETWORK_INTERNET_KEYS[networkStatus.value.internet])
     : t("float.network.internetUnknown"),
 );
+
+function networkTextOrUnknown(value: string | null | undefined): string {
+  return value?.trim() || "—";
+}
+
+type NetworkQualityState = "good" | "fair" | "poor" | "unknown";
+
+/** 延迟分档：p95 允许更高的尾部延迟；未知/null 永远使用中性色。 */
+function latencyState(value: number | null | undefined, p95 = false): NetworkQualityState {
+  if (value == null || !Number.isFinite(value)) return "unknown";
+  const ms = Math.max(0, value);
+  const goodMax = p95 ? 100 : 50;
+  const fairMax = p95 ? 250 : 120;
+  return ms <= goodMax ? "good" : ms <= fairMax ? "fair" : "poor";
+}
+
+function jitterState(value: number | null | undefined): NetworkQualityState {
+  if (value == null || !Number.isFinite(value)) return "unknown";
+  const ms = Math.max(0, value);
+  return ms <= 10 ? "good" : ms <= 30 ? "fair" : "poor";
+}
+
+function failureState(value: number | null | undefined): NetworkQualityState {
+  if (value == null || !Number.isFinite(value)) return "unknown";
+  const pct = Math.max(0, Math.min(100, value));
+  return pct <= 1 ? "good" : pct <= 5 ? "fair" : "poor";
+}
 
 function qualityMs(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return "—";
@@ -616,7 +701,6 @@ async function onShot(): Promise<void> {
 
 async function onNetworkToggle(): Promise<void> {
   networkExpanded.value = !networkDetailOpen.value;
-  if (!networkExpanded.value) networkStatus.value = null;
   await fitWidth();
   // 展开后立即复用现有 single-flight tick；折叠后 tick 不会请求网络详情。
   if (networkExpanded.value) void tick();
@@ -683,6 +767,31 @@ async function runFitWidth(): Promise<void> {
   }
 }
 
+// 逻辑展开态立即关闭网络采样；布局展开态则等离场动画结束后再收缩窗口。
+// 因此 tick → fitWidth() 在折叠的 180ms 内仍会读到完整高度，不会把动画截断。
+watch(
+  networkDetailOpen,
+  (open) => {
+    if (networkCollapseTimer !== null) {
+      clearTimeout(networkCollapseTimer);
+      networkCollapseTimer = null;
+    }
+    if (open) {
+      // 快速“折叠→展开”会取消待执行的收缩，窗口高度保持不动。
+      networkDetailLayoutOpen.value = true;
+      return;
+    }
+    if (!networkDetailLayoutOpen.value) return;
+    networkCollapseTimer = window.setTimeout(() => {
+      networkCollapseTimer = null;
+      networkDetailLayoutOpen.value = false;
+      // 离场期间保留最后一帧数值，避免详情先跳成“未知/—”再淡出。
+      networkStatus.value = null;
+    }, NETWORK_DETAIL_TRANSITION_MS);
+  },
+  { flush: "sync" },
+);
+
 // DOM 内容行的 ResizeObserver 只覆盖宽度；展开/折叠与玻璃档切换需要显式观察高度。
 watch(targetHeight, () => {
   void fitWidth();
@@ -692,7 +801,6 @@ watch(
   (show) => {
     if (!show) {
       networkExpanded.value = false;
-      networkStatus.value = null;
     }
   },
 );
@@ -841,6 +949,7 @@ onMounted(async () => {
 });
 onBeforeUnmount(() => {
   if (timer !== null) clearInterval(timer);
+  if (networkCollapseTimer !== null) clearTimeout(networkCollapseTimer);
   resizeObs?.disconnect();
   resizeObs = null;
 });
@@ -947,6 +1056,23 @@ onBeforeUnmount(() => {
   cursor: default;
   overflow: hidden;
 }
+.f-network-detail-enter-active,
+.f-network-detail-leave-active {
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
+  transform-origin: top center;
+}
+.f-network-detail-enter-from,
+.f-network-detail-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+.f-network-detail-enter-to,
+.f-network-detail-leave-from {
+  opacity: 1;
+  transform: translateY(0);
+}
 .f-network-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -970,6 +1096,20 @@ onBeforeUnmount(() => {
   line-height: 15px;
   overflow-wrap: anywhere;
 }
+.f-network-addresses {
+  display: grid;
+  gap: 2px;
+  margin: 4px 0 0;
+}
+.f-network-addresses .f-network-stat {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+}
+.f-network-addresses dd {
+  overflow-wrap: anywhere;
+}
 .f-network-quality-head {
   display: flex;
   align-items: center;
@@ -984,9 +1124,32 @@ onBeforeUnmount(() => {
 .f-network-internet {
   flex: none;
 }
-.f-network-internet[data-state="unreachable"],
+.f-network-stat dd,
+.f-network-internet {
+  transition: color 0.18s ease;
+}
+/* 状态色均选暗底高对比亮色；亮底玻璃档在文末使用对应的深色版本。 */
+.f-network-stat dd[data-state="up"],
+.f-network-stat dd[data-state="good"],
+.f-network-internet[data-state="online"] {
+  color: #8debb0;
+}
+.f-network-stat dd[data-state="fair"],
 .f-network-internet[data-state="stale"] {
   color: #ffd8a8;
+}
+.f-network-stat dd[data-state="down"],
+.f-network-stat dd[data-state="poor"],
+.f-network-internet[data-state="unreachable"] {
+  color: #ffaaa5;
+}
+.f-network-internet[data-state="checking"] {
+  color: #9ee8ff;
+}
+.f-network-stat dd[data-state="unknown"],
+.f-network-internet[data-state="disabled"],
+.f-network-internet[data-state="unknown"] {
+  color: rgba(255, 255, 255, 0.72);
 }
 .f-network-explanation {
   margin: 6px 0 0;
@@ -1506,9 +1669,27 @@ onBeforeUnmount(() => {
   .float-bar.is-glass.has-blur .f-network-stat dd {
     color: #1c1c1e;
   }
-  .float-bar.is-glass.has-blur .f-network-internet[data-state="unreachable"],
+  .float-bar.is-glass.has-blur .f-network-stat dd[data-state="up"],
+  .float-bar.is-glass.has-blur .f-network-stat dd[data-state="good"],
+  .float-bar.is-glass.has-blur .f-network-internet[data-state="online"] {
+    color: #0d5a35;
+  }
+  .float-bar.is-glass.has-blur .f-network-stat dd[data-state="fair"],
   .float-bar.is-glass.has-blur .f-network-internet[data-state="stale"] {
     color: #7a4405;
+  }
+  .float-bar.is-glass.has-blur .f-network-stat dd[data-state="down"],
+  .float-bar.is-glass.has-blur .f-network-stat dd[data-state="poor"],
+  .float-bar.is-glass.has-blur .f-network-internet[data-state="unreachable"] {
+    color: #a32121;
+  }
+  .float-bar.is-glass.has-blur .f-network-internet[data-state="checking"] {
+    color: #055a70;
+  }
+  .float-bar.is-glass.has-blur .f-network-stat dd[data-state="unknown"],
+  .float-bar.is-glass.has-blur .f-network-internet[data-state="disabled"],
+  .float-bar.is-glass.has-blur .f-network-internet[data-state="unknown"] {
+    color: rgba(0, 0, 0, 0.62);
   }
   .float-bar.is-glass.has-blur .f-net-toggle:focus-visible {
     outline-color: rgba(0, 0, 0, 0.72);

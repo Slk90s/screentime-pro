@@ -30,11 +30,28 @@ pub enum Band {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TunnelKind {
+    NotApplicable,
+    Tun,
+    Tap,
+    Wireguard,
+    Ppp,
+    Other,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct NativeStatus {
     pub link: LinkState,
     pub medium: Medium,
     pub band: Band,
     pub vpn: bool,
+    /// 能可靠关联时才给出底层物理介质；无法关联时为 null，绝不猜测。
+    pub physical_medium: Option<Medium>,
+    pub tunnel: TunnelKind,
+    /// 默认路由出口的本机地址，不是公网 IP。
+    pub local_ip: Option<String>,
 }
 
 impl Default for NativeStatus {
@@ -44,6 +61,9 @@ impl Default for NativeStatus {
             medium: Medium::Unknown,
             band: Band::Unknown,
             vpn: false,
+            physical_medium: None,
+            tunnel: TunnelKind::Unknown,
+            local_ip: None,
         }
     }
 }

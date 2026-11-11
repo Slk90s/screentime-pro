@@ -4,7 +4,7 @@
 //! its link state. CoreWLAN is used only for the current channel band of that
 //! interface; this module never requests an SSID/BSSID and never starts a scan.
 
-use super::{Band, LinkState, Medium, NativeBackend, NativeStatus};
+use super::{Band, LinkState, Medium, NativeBackend, NativeStatus, TunnelKind};
 use core_foundation_sys::array::{CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef};
 use core_foundation_sys::base::{CFGetTypeID, CFIndex, CFRelease, CFTypeID, CFTypeRef};
 use core_foundation_sys::dictionary::{
@@ -32,15 +32,25 @@ impl NativeBackend for Backend {
         let Some(store) = dynamic_store() else {
             return NativeStatus::default();
         };
-        let Some(interface) = primary_interface(&store) else {
+        let primary = primary_interfaces(&store);
+        let interfaces = network_interfaces().unwrap_or_default();
+        let Some(interface) = select_primary_interface(&primary, &interfaces) else {
             return NativeStatus::default();
         };
 
-        let native_type = interface_type(&interface);
-        let medium = medium_from_interface(&interface, native_type.as_deref());
-        let link = link_state(&store, &interface).unwrap_or(LinkState::Unknown);
+        let native_type = native_type_for(&interfaces, interface);
+        let medium = medium_from_interface(interface, native_type);
+        let tunnel = tunnel_from_interface(interface, native_type);
+        let link = link_state(&store, interface).unwrap_or(LinkState::Unknown);
+        let physical_medium = if medium == Medium::Vpn {
+            active_physical_medium(&store, &primary, interface, &interfaces)
+        } else if link == LinkState::Up {
+            physical_medium_from_type(native_type)
+        } else {
+            None
+        };
         let band = match medium {
-            Medium::Wifi => wifi_band(&interface),
+            Medium::Wifi => wifi_band(interface),
             Medium::Ethernet | Medium::Vpn | Medium::Other => Band::NotApplicable,
             Medium::Unknown => Band::Unknown,
         };
@@ -50,6 +60,10 @@ impl NativeBackend for Backend {
             medium,
             band,
             vpn: medium == Medium::Vpn,
+            physical_medium,
+            tunnel,
+            // The shared sampler resolves the route-local address independently.
+            local_ip: None,
         }
     }
 }
@@ -200,19 +214,20 @@ fn dictionary_bool(dictionary: &OwnedCf, key: &str) -> Option<bool> {
     Some(unsafe { CFBooleanGetValue(value.cast()) })
 }
 
-fn primary_interface(store: &OwnedCf) -> Option<String> {
-    // Prefer the IPv4 global service, but still work on IPv6-only routes.
+fn primary_interfaces(store: &OwnedCf) -> Vec<String> {
+    // Keep both address-family choices: a VPN may be primary for only one of them.
+    let mut primary = Vec::new();
     for key in ["State:/Network/Global/IPv4", "State:/Network/Global/IPv6"] {
         let Some(global) = copy_store_value(store, key) else {
             continue;
         };
         if let Some(interface) = dictionary_string(&global, "PrimaryInterface") {
-            if !interface.is_empty() {
-                return Some(interface);
+            if !interface.is_empty() && !primary.contains(&interface) {
+                primary.push(interface);
             }
         }
     }
-    None
+    primary
 }
 
 fn link_state(store: &OwnedCf, interface: &str) -> Option<LinkState> {
@@ -224,13 +239,19 @@ fn link_state(store: &OwnedCf, interface: &str) -> Option<LinkState> {
     }
 }
 
-fn interface_type(interface_name: &str) -> Option<String> {
+struct InterfaceInfo {
+    name: String,
+    native_type: Option<String>,
+}
+
+fn network_interfaces() -> Option<Vec<InterfaceInfo>> {
     // SAFETY: `SCNetworkInterfaceCopyAll` has no arguments. Its Copy-rule array is
     // immediately null-checked and placed under Core Foundation ownership.
     let interfaces = OwnedCf::from_created(unsafe { SCNetworkInterfaceCopyAll() }.cast())?;
     // SAFETY: SystemConfiguration guarantees a CFArray from CopyAll; the OwnedCf
     // keeps that array alive for this count and all subsequent element reads.
     let count = unsafe { CFArrayGetCount(interfaces.0.cast()) };
+    let mut result = Vec::new();
 
     for index in 0..count {
         // SAFETY: `index` is within the count obtained from this exact live array.
@@ -240,44 +261,151 @@ fn interface_type(interface_name: &str) -> Option<String> {
             continue;
         }
         // SAFETY: array elements are SCNetworkInterface objects kept alive by the
-        // array. The returned BSD name is a borrowed CFString (or null).
+        // array. Both returned strings are borrowed and copied before the array drops.
         let bsd_name = unsafe { SCNetworkInterfaceGetBSDName(interface) };
-        if cf_string_to_string(bsd_name.cast()).as_deref() != Some(interface_name) {
+        let Some(name) = cf_string_to_string(bsd_name.cast()) else {
             continue;
-        }
-        // SAFETY: `interface` is the matched live SCNetworkInterface; the returned
-        // interface-type string is borrowed and copied before the array is dropped.
+        };
         let native_type = unsafe { SCNetworkInterfaceGetInterfaceType(interface) };
-        return cf_string_to_string(native_type.cast());
+        result.push(InterfaceInfo {
+            name,
+            native_type: cf_string_to_string(native_type.cast()),
+        });
     }
-    None
+    Some(result)
 }
 
-fn is_vpn_interface_name(name: &str) -> bool {
-    [
-        "utun",
-        "ppp",
-        "ipsec",
-        "tun",
-        "tap",
-        "wg",
-        "wireguard",
-        "vpn",
-        "tailscale",
-    ]
-    .iter()
-    .any(|prefix| name.starts_with(prefix))
+fn native_type_for<'a>(interfaces: &'a [InterfaceInfo], name: &str) -> Option<&'a str> {
+    interfaces
+        .iter()
+        .find(|interface| interface.name == name)
+        .and_then(|interface| interface.native_type.as_deref())
+}
+
+fn select_primary_interface<'a>(
+    primary: &'a [String],
+    interfaces: &[InterfaceInfo],
+) -> Option<&'a str> {
+    // Do not let an IPv4 physical route hide an IPv6 VPN route (or vice versa).
+    primary
+        .iter()
+        .find(|name| medium_from_interface(name, native_type_for(interfaces, name)) == Medium::Vpn)
+        .or_else(|| primary.first())
+        .map(String::as_str)
+}
+
+fn physical_medium_from_type(native_type: Option<&str>) -> Option<Medium> {
+    match native_type {
+        Some("IEEE80211") => Some(Medium::Wifi),
+        Some("Ethernet") => Some(Medium::Ethernet),
+        // Bond/VLAN and name-only fallbacks are not confirmed physical hardware.
+        _ => None,
+    }
+}
+
+fn merge_physical_medium(current: &mut Option<Medium>, candidate: Medium) -> bool {
+    match current {
+        Some(current) if *current != candidate => false,
+        Some(_) => true,
+        None => {
+            *current = Some(candidate);
+            true
+        }
+    }
+}
+
+fn active_physical_medium(
+    store: &OwnedCf,
+    primary: &[String],
+    selected: &str,
+    interfaces: &[InterfaceInfo],
+) -> Option<Medium> {
+    let mut found = None;
+
+    // A non-VPN global primary identifies the underlying route more reliably than
+    // interface enumeration. It still must have an explicitly active link.
+    for name in primary.iter().filter(|name| name.as_str() != selected) {
+        let Some(candidate) = physical_medium_from_type(native_type_for(interfaces, name)) else {
+            continue;
+        };
+        if link_state(store, name) != Some(LinkState::Up) {
+            continue;
+        }
+        if !merge_physical_medium(&mut found, candidate) {
+            return None;
+        }
+    }
+    if found.is_some() {
+        return found;
+    }
+
+    // With full-tunnel VPNs there may be no physical global primary left. Accept
+    // enumeration only when every active physical interface agrees on the medium;
+    // simultaneous Wi-Fi and Ethernet remains ambiguous and returns None.
+    for interface in interfaces
+        .iter()
+        .filter(|interface| interface.name != selected)
+    {
+        let Some(candidate) = physical_medium_from_type(interface.native_type.as_deref()) else {
+            continue;
+        };
+        if link_state(store, &interface.name) != Some(LinkState::Up) {
+            continue;
+        }
+        if !merge_physical_medium(&mut found, candidate) {
+            return None;
+        }
+    }
+    found
+}
+
+fn tunnel_from_vpn_name(lower_name: &str) -> Option<TunnelKind> {
+    if ["utun", "tun"]
+        .iter()
+        .any(|prefix| lower_name.starts_with(prefix))
+    {
+        Some(TunnelKind::Tun)
+    } else if lower_name.starts_with("tap") {
+        Some(TunnelKind::Tap)
+    } else if lower_name.starts_with("ppp") {
+        Some(TunnelKind::Ppp)
+    } else if ["wg", "wireguard", "tailscale"]
+        .iter()
+        .any(|prefix| lower_name.starts_with(prefix))
+    {
+        Some(TunnelKind::Wireguard)
+    } else if ["ipsec", "vpn", "zt"]
+        .iter()
+        .any(|prefix| lower_name.starts_with(prefix))
+    {
+        Some(TunnelKind::Other)
+    } else {
+        None
+    }
+}
+
+fn vpn_tunnel_kind(lower_name: &str, native_type: Option<&str>) -> Option<TunnelKind> {
+    // A known BSD name describes the actual tunnel device more specifically than
+    // the SystemConfiguration service type (for example, IKEv2 over utun).
+    if let Some(tunnel) = tunnel_from_vpn_name(lower_name) {
+        return Some(tunnel);
+    }
+    let native_type = native_type?.to_ascii_lowercase();
+    match native_type.as_str() {
+        "l2tp" | "pptp" | "ppp" => Some(TunnelKind::Ppp),
+        "ipsec" | "ikev2" => Some(TunnelKind::Other),
+        _ => None,
+    }
+}
+
+fn tunnel_from_interface(name: &str, native_type: Option<&str>) -> TunnelKind {
+    vpn_tunnel_kind(&name.to_ascii_lowercase(), native_type).unwrap_or(TunnelKind::NotApplicable)
 }
 
 /// Maps SystemConfiguration's interface type, with conservative BSD-name fallback.
 fn medium_from_interface(name: &str, native_type: Option<&str>) -> Medium {
     let lower_name = name.to_ascii_lowercase();
-    if is_vpn_interface_name(&lower_name)
-        || matches!(
-            native_type,
-            Some("IPSec" | "L2TP" | "PPTP" | "PPP" | "IKEv2")
-        )
-    {
+    if vpn_tunnel_kind(&lower_name, native_type).is_some() {
         return Medium::Vpn;
     }
 
@@ -426,6 +554,95 @@ mod tests {
             Medium::Other,
             "known Apple pseudo-interfaces are other, not Ethernet/Wi-Fi"
         );
+    }
+
+    #[test]
+    fn vpn_names_and_native_types_preserve_tunnel_kind() {
+        let cases = [
+            ("utun0", None, TunnelKind::Tun),
+            ("utun4", Some("IPSec"), TunnelKind::Tun),
+            ("tun0", None, TunnelKind::Tun),
+            ("tap0", None, TunnelKind::Tap),
+            ("ppp0", Some("PPP"), TunnelKind::Ppp),
+            ("ipsec0", Some("IPSec"), TunnelKind::Other),
+            ("wg0", None, TunnelKind::Wireguard),
+            ("wireguard0", None, TunnelKind::Wireguard),
+            ("tailscale0", None, TunnelKind::Wireguard),
+            ("zt7nnig26", None, TunnelKind::Other),
+            ("en0", Some("L2TP"), TunnelKind::Ppp),
+            ("en0", Some("PPTP"), TunnelKind::Ppp),
+            ("en0", Some("PPP"), TunnelKind::Ppp),
+            ("en0", Some("IKEv2"), TunnelKind::Other),
+        ];
+        for (name, native_type, expected) in cases {
+            assert_eq!(
+                medium_from_interface(name, native_type),
+                Medium::Vpn,
+                "interface {name}, native type {native_type:?}"
+            );
+            assert_eq!(
+                tunnel_from_interface(name, native_type),
+                expected,
+                "interface {name}, native type {native_type:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_vpn_interfaces_do_not_report_a_tunnel() {
+        for (name, native_type) in [
+            ("en0", Some("IEEE80211")),
+            ("en7", Some("Ethernet")),
+            ("awdl0", None),
+            ("mystery0", None),
+        ] {
+            assert_eq!(
+                tunnel_from_interface(name, native_type),
+                TunnelKind::NotApplicable
+            );
+        }
+    }
+
+    #[test]
+    fn primary_selection_does_not_hide_vpn_behind_other_address_family() {
+        let primary = vec![String::from("en0"), String::from("utun2")];
+        let interfaces = vec![
+            InterfaceInfo {
+                name: String::from("en0"),
+                native_type: Some(String::from("IEEE80211")),
+            },
+            InterfaceInfo {
+                name: String::from("utun2"),
+                native_type: Some(String::from("IPSec")),
+            },
+        ];
+        assert_eq!(
+            select_primary_interface(&primary, &interfaces),
+            Some("utun2")
+        );
+    }
+
+    #[test]
+    fn physical_medium_requires_a_specific_hardware_type() {
+        assert_eq!(
+            physical_medium_from_type(Some("IEEE80211")),
+            Some(Medium::Wifi)
+        );
+        assert_eq!(
+            physical_medium_from_type(Some("Ethernet")),
+            Some(Medium::Ethernet)
+        );
+        for native_type in [Some("Bond"), Some("VLAN"), Some("FireWire"), None] {
+            assert_eq!(physical_medium_from_type(native_type), None);
+        }
+    }
+
+    #[test]
+    fn conflicting_active_physical_media_are_rejected() {
+        let mut found = None;
+        assert!(merge_physical_medium(&mut found, Medium::Wifi));
+        assert!(merge_physical_medium(&mut found, Medium::Wifi));
+        assert!(!merge_physical_medium(&mut found, Medium::Ethernet));
     }
 
     #[test]
