@@ -8,7 +8,9 @@
 use super::{Band, LinkState, Medium, NativeBackend, NativeStatus, TunnelKind};
 use std::ffi::c_void;
 use windows::core::GUID;
-use windows::Win32::NetworkManagement::IpHelper::{FreeMibTable, GetIfEntry2, GetIfTable2, MIB_IF_ROW2};
+use windows::Win32::NetworkManagement::IpHelper::{
+    FreeMibTable, GetIfEntry2, GetIfTable2, MIB_IF_ROW2,
+};
 use windows::Win32::NetworkManagement::Ndis::NET_LUID_LH;
 
 const ERROR_SUCCESS: u32 = 0;
@@ -46,6 +48,7 @@ impl NativeBackend for Backend {
         let band = match medium {
             Medium::Wifi if link == LinkState::Up => current_wifi_band(row.InterfaceGuid),
             Medium::Wifi => Band::Unknown,
+            Medium::Unknown => Band::Unknown,
             _ => Band::NotApplicable,
         };
 

@@ -33,8 +33,8 @@ impl NativeBackend for Backend {
         let medium = classify_medium(&interface, native_type, wireless);
         let band = match medium {
             Medium::Wifi => wifi_band(&interface),
-            Medium::Ethernet | Medium::Vpn => Band::NotApplicable,
-            Medium::Other | Medium::Unknown => Band::Unknown,
+            Medium::Ethernet | Medium::Vpn | Medium::Other => Band::NotApplicable,
+            Medium::Unknown => Band::Unknown,
         };
         let physical_medium = if medium == Medium::Vpn {
             active_physical_medium(Path::new("/sys/class/net"))
@@ -115,14 +115,12 @@ fn classify_tunnel(interface: &str) -> TunnelKind {
         TunnelKind::Tun
     } else if interface.starts_with("tap") {
         TunnelKind::Tap
-    } else if interface.starts_with("wg") {
+    } else if interface.starts_with("wg") || interface.starts_with("tailscale") {
+        // Tailscale 基于 WireGuard，与 macOS/Windows 一致归为 Wireguard。
         TunnelKind::Wireguard
     } else if interface.starts_with("ppp") {
         TunnelKind::Ppp
-    } else if ["tailscale", "zt"]
-        .iter()
-        .any(|prefix| interface.starts_with(prefix))
-    {
+    } else if interface.starts_with("zt") {
         TunnelKind::Other
     } else {
         TunnelKind::NotApplicable
@@ -136,8 +134,12 @@ fn classify_medium(interface: &str, native_type: Option<u32>, wireless: bool) ->
     if wireless {
         return Medium::Wifi;
     }
+    if interface.starts_with("bond") {
+        // bonding 是以太网聚合，与 macOS 的 Bond→Ethernet 一致。
+        return Medium::Ethernet;
+    }
     if [
-        "wwan", "rmnet", "qmi", "bridge", "br", "bond", "virbr", "docker", "veth",
+        "wwan", "rmnet", "qmi", "bridge", "br", "virbr", "docker", "veth",
     ]
     .iter()
     .any(|prefix| interface.starts_with(prefix))
@@ -305,6 +307,8 @@ mod tests {
         assert_eq!(classify_medium("wwan0", Some(1), false), Medium::Other);
         assert_eq!(classify_medium("br0", Some(1), false), Medium::Other);
         assert_eq!(classify_medium("eth0", Some(1), false), Medium::Ethernet);
+        assert_eq!(classify_medium("bond0", Some(1), false), Medium::Ethernet);
+        assert_eq!(classify_medium("bond0", None, false), Medium::Ethernet);
         assert_eq!(classify_medium("wlan0", Some(1), true), Medium::Wifi);
         assert_eq!(classify_medium("mystery0", None, false), Medium::Unknown);
     }
@@ -317,7 +321,7 @@ mod tests {
             ("tap0", TunnelKind::Tap),
             ("wg0", TunnelKind::Wireguard),
             ("ppp0", TunnelKind::Ppp),
-            ("tailscale0", TunnelKind::Other),
+            ("tailscale0", TunnelKind::Wireguard),
             ("ztabc123", TunnelKind::Other),
             ("eth0", TunnelKind::NotApplicable),
             ("wlan0", TunnelKind::NotApplicable),

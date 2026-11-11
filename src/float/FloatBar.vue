@@ -240,6 +240,7 @@
         :aria-label="t('float.network.details')"
         @pointerdown.stop
       >
+        <div ref="detailInnerRef" class="f-network-detail-inner">
         <dl class="f-network-grid">
           <div class="f-network-stat">
             <dt>{{ t("float.network.link") }}</dt>
@@ -315,6 +316,7 @@
         <p class="f-network-explanation">
           {{ networkExplanation }} {{ t("float.network.explainSampling") }}
         </p>
+        </div>
       </section>
     </Transition>
   </div>
@@ -390,10 +392,13 @@ const networkStatus = ref<NetworkStatusOut | null>(null);
 const networkExpanded = ref(false);
 /** 布局/窗口展开态：折叠动画的 180ms 内保持 true，与轮询所用的逻辑展开态分离。 */
 const networkDetailLayoutOpen = ref(false);
+/** 详情内层自然高度容器：窄条文案换行时据此增高窗口，避免 overflow:hidden 裁切。 */
+const detailInnerRef = ref<HTMLElement | null>(null);
+const networkDetailHeight = ref(NETWORK_DETAIL_HEIGHT);
 const baseHeight = computed(() => (cfg.value.float_glass ? 44 : 36));
 const networkDetailOpen = computed(() => networkExpanded.value && cfg.value.show_net);
 const targetHeight = computed(
-  () => baseHeight.value + (networkDetailLayoutOpen.value ? NETWORK_DETAIL_HEIGHT : 0),
+  () => baseHeight.value + (networkDetailLayoutOpen.value ? networkDetailHeight.value : 0),
 );
 const diskMode = ref(localStorage.getItem("screentime-disk-mode") || "system");
 let timer: number | null = null;
@@ -411,6 +416,8 @@ let dragging = false;
  * 只靠 1Hz tick 测量会漏掉「中间态」——用户会看到一闪的裁切。
  */
 let resizeObs: ResizeObserver | null = null;
+/** 详情内层高度观察器：宽度/数值/语言变化引起换行时实时增高窗口。 */
+let detailResizeObs: ResizeObserver | null = null;
 
 const hasAny = computed(
   () => cfg.value.show_cpu || cfg.value.show_mem || cfg.value.show_disk || cfg.value.show_net,
@@ -742,6 +749,14 @@ function persistPosition(x: number, y: number): void {
   localStorage.setItem(POS_KEY, JSON.stringify({ x: Math.round(x), y: Math.round(y) }));
 }
 
+/** 详情窗口高度 = 内层自然高度 + 上下 padding(16) + 顶边框(1) + 取整余量；不低于固定档。 */
+function measureDetailHeight(): void {
+  const inner = detailInnerRef.value;
+  if (!inner || !networkDetailOpen.value) return;
+  const needed = Math.ceil(inner.getBoundingClientRect().height) + 18;
+  networkDetailHeight.value = Math.max(NETWORK_DETAIL_HEIGHT, needed);
+}
+
 async function runFitWidth(): Promise<void> {
   if (dragging) return;
   await nextTick();
@@ -796,6 +811,24 @@ watch(
 watch(targetHeight, () => {
   void fitWidth();
 });
+// 详情内层自然高度随宽度/数值/语言变化：观察内层而非被 flex 限高的外层，
+// 换行增高时立即抬高窗口；折叠时断开，离场动画沿用最后一次测得的高度。
+watch(
+  networkDetailOpen,
+  async (open) => {
+    if (!open) {
+      detailResizeObs?.disconnect();
+      return;
+    }
+    await nextTick();
+    measureDetailHeight();
+    if (typeof ResizeObserver !== "undefined" && detailInnerRef.value) {
+      detailResizeObs ??= new ResizeObserver(() => measureDetailHeight());
+      detailResizeObs.observe(detailInnerRef.value);
+    }
+  },
+  { flush: "post" },
+);
 watch(
   () => cfg.value.show_net,
   (show) => {
@@ -952,6 +985,8 @@ onBeforeUnmount(() => {
   if (networkCollapseTimer !== null) clearTimeout(networkCollapseTimer);
   resizeObs?.disconnect();
   resizeObs = null;
+  detailResizeObs?.disconnect();
+  detailResizeObs = null;
 });
 </script>
 
@@ -1055,6 +1090,11 @@ onBeforeUnmount(() => {
   white-space: normal;
   cursor: default;
   overflow: hidden;
+}
+/* 内层自然高度容器：flow-root 包住子元素外边距，使其高度等于完整内容高度，
+   供 measureDetailHeight 读取；外层 flex 限高 + overflow:hidden 不再裁切内容。 */
+.f-network-detail-inner {
+  display: flow-root;
 }
 .f-network-detail-enter-active,
 .f-network-detail-leave-active {
