@@ -47,6 +47,10 @@ pub struct NativeStatus {
     pub medium: Medium,
     pub band: Band,
     pub vpn: bool,
+    /// 系统代理（HTTP/SOCKS/PAC）是否启用。与 TUN 隧道无关：
+    /// `vpn` 反映「默认路由走虚拟网卡」，`proxy` 反映「OS 系统代理被打开」。
+    /// Clash/V2Ray 等仅改写系统代理、不建虚拟网卡的代理只能靠本字段发现。
+    pub proxy: bool,
     /// 能可靠关联时才给出底层物理介质；无法关联时为 null，绝不猜测。
     pub physical_medium: Option<Medium>,
     pub tunnel: TunnelKind,
@@ -61,6 +65,7 @@ impl Default for NativeStatus {
             medium: Medium::Unknown,
             band: Band::Unknown,
             vpn: false,
+            proxy: false,
             physical_medium: None,
             tunnel: TunnelKind::Unknown,
             local_ip: None,

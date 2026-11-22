@@ -205,6 +205,8 @@ windows = { version = "0.62", features = [
   "Win32_System_Threading",
   "Win32_Foundation",
   "Win32_System_SystemInformation",
+  # 系统代理检测（HKCU Internet Settings）
+  "Win32_System_Registry",
   # v0.7.6：网络采样（GetIfTable2 + MIB_IF_TABLE2 需要 Ndis 常量 IF_TYPE_*/MIB_IF_OPER_STATUS_*）
   "Win32_NetworkManagement_IpHelper",
   "Win32_NetworkManagement_Ndis",

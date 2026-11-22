@@ -7,11 +7,15 @@
 
 use super::{Band, LinkState, Medium, NativeBackend, NativeStatus, TunnelKind};
 use std::ffi::c_void;
-use windows::core::GUID;
+use windows::core::{GUID, HSTRING, PCWSTR};
 use windows::Win32::NetworkManagement::IpHelper::{
     FreeMibTable, GetIfEntry2, GetIfTable2, MIB_IF_ROW2,
 };
 use windows::Win32::NetworkManagement::Ndis::NET_LUID_LH;
+use windows::Win32::System::Registry::{
+    RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ, REG_DWORD,
+    REG_SZ,
+};
 
 const ERROR_SUCCESS: u32 = 0;
 const AF_UNSPEC: u16 = 0;
@@ -58,6 +62,7 @@ impl NativeBackend for Backend {
             medium,
             band,
             vpn,
+            proxy: system_proxy_enabled(),
             physical_medium: vpn.then(active_physical_medium).flatten(),
             tunnel: if vpn {
                 classify_tunnel(row.Type, &row.Alias, &row.Description)
@@ -66,6 +71,99 @@ impl NativeBackend for Backend {
             },
             local_ip: None,
         }
+    }
+}
+
+/// 系统代理 ≠ TUN 隧道：这里只读当前用户的手动代理与 PAC 设置，失败一律按未启用处理。
+fn system_proxy_enabled() -> bool {
+    let subkey = HSTRING::from("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings");
+    let mut raw_key = HKEY::default();
+    // SAFETY: 子键名以 NUL 结尾且输出指针有效；仅申请只读权限。
+    let result = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            PCWSTR(subkey.as_ptr()),
+            None,
+            KEY_READ,
+            &mut raw_key,
+        )
+    };
+    if result.0 != ERROR_SUCCESS {
+        return false;
+    }
+
+    let key = RegistryKey(raw_key);
+    key.query_dword("ProxyEnable").unwrap_or_default() == 1
+        || key.query_nonempty_string("AutoConfigURL")
+}
+
+struct RegistryKey(HKEY);
+
+impl RegistryKey {
+    fn query_dword(&self, name: &str) -> Option<u32> {
+        let name = HSTRING::from(name);
+        let mut value = 0_u32;
+        let mut value_type = REG_DWORD;
+        let mut byte_size = std::mem::size_of::<u32>() as u32;
+        // SAFETY: 名称缓冲区存活至调用结束；value 提供恰好 byte_size 字节的输出空间。
+        let result = unsafe {
+            RegQueryValueExW(
+                self.0,
+                PCWSTR(name.as_ptr()),
+                None,
+                Some(&mut value_type),
+                Some((&mut value as *mut u32).cast::<u8>()),
+                Some(&mut byte_size),
+            )
+        };
+        (result.0 == ERROR_SUCCESS
+            && value_type == REG_DWORD
+            && byte_size as usize == std::mem::size_of::<u32>())
+        .then_some(value)
+    }
+
+    fn query_nonempty_string(&self, name: &str) -> bool {
+        let name = HSTRING::from(name);
+        let mut value_type = REG_SZ;
+        let mut byte_size = 0_u32;
+        // SAFETY: 空数据指针只查询所需大小，其余输出指针均有效。
+        let result = unsafe {
+            RegQueryValueExW(
+                self.0,
+                PCWSTR(name.as_ptr()),
+                None,
+                Some(&mut value_type),
+                None,
+                Some(&mut byte_size),
+            )
+        };
+        if result.0 != ERROR_SUCCESS || value_type != REG_SZ || byte_size < 2 || byte_size % 2 != 0
+        {
+            return false;
+        }
+
+        let mut buffer = vec![0_u16; byte_size as usize / 2];
+        // SAFETY: buffer 至少有 byte_size 字节；名称和输出指针在调用期间均有效。
+        let result = unsafe {
+            RegQueryValueExW(
+                self.0,
+                PCWSTR(name.as_ptr()),
+                None,
+                Some(&mut value_type),
+                Some(buffer.as_mut_ptr().cast::<u8>()),
+                Some(&mut byte_size),
+            )
+        };
+        result.0 == ERROR_SUCCESS
+            && value_type == REG_SZ
+            && buffer.first().is_some_and(|character| *character != 0)
+    }
+}
+
+impl Drop for RegistryKey {
+    fn drop(&mut self) {
+        // SAFETY: 此句柄只来自成功的 RegOpenKeyExW，并由 guard 关闭一次。
+        let _close_result = unsafe { RegCloseKey(self.0) };
     }
 }
 
@@ -878,6 +976,11 @@ mod tests {
         assert_eq!(std::mem::offset_of!(WlanBssEntry, center_frequency_khz), 92);
         assert_eq!(std::mem::size_of::<WlanBssEntry>(), 360);
         assert_eq!(std::mem::offset_of!(WlanBssList, entries), 8);
+    }
+
+    #[test]
+    fn system_proxy_enabled_does_not_panic() {
+        let _enabled = system_proxy_enabled();
     }
 
     /// 人工真机探针：cargo test --lib native_status_probe -- --ignored --nocapture

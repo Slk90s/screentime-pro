@@ -10,7 +10,9 @@ use core_foundation_sys::base::{CFGetTypeID, CFIndex, CFRelease, CFTypeID, CFTyp
 use core_foundation_sys::dictionary::{
     CFDictionaryGetTypeID, CFDictionaryGetValue, CFDictionaryRef,
 };
-use core_foundation_sys::number::{CFBooleanGetTypeID, CFBooleanGetValue};
+use core_foundation_sys::number::{
+    kCFNumberIntType, CFBooleanGetTypeID, CFBooleanGetValue, CFNumberGetTypeID, CFNumberGetValue,
+};
 use core_foundation_sys::propertylist::CFPropertyListRef;
 use core_foundation_sys::string::{
     kCFStringEncodingUTF8, CFStringCreateWithCString, CFStringGetCString, CFStringGetTypeID,
@@ -20,7 +22,7 @@ use objc2::rc::{autoreleasepool, Retained};
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2::{msg_send, sel};
 use objc2_foundation::NSString;
-use std::ffi::{c_void, CString};
+use std::ffi::{c_int, c_void, CString};
 use std::ptr;
 use std::sync::OnceLock;
 
@@ -60,6 +62,7 @@ impl NativeBackend for Backend {
             medium,
             band,
             vpn: medium == Medium::Vpn,
+            proxy: system_proxy_enabled(),
             physical_medium,
             tunnel,
             // The shared sampler resolves the route-local address independently.
@@ -82,6 +85,7 @@ extern "C" {
         context: *mut c_void,
     ) -> SCDynamicStoreRef;
     fn SCDynamicStoreCopyValue(store: SCDynamicStoreRef, key: CFStringRef) -> CFPropertyListRef;
+    fn SCDynamicStoreCopyProxies(store: SCDynamicStoreRef) -> CFDictionaryRef;
     fn SCNetworkInterfaceCopyAll() -> CFArrayRef;
     fn SCNetworkInterfaceGetBSDName(interface: SCNetworkInterfaceRef) -> CFStringRef;
     fn SCNetworkInterfaceGetInterfaceType(interface: SCNetworkInterfaceRef) -> CFStringRef;
@@ -130,6 +134,11 @@ fn dictionary_type_id() -> CFTypeID {
 fn boolean_type_id() -> CFTypeID {
     // SAFETY: `CFBooleanGetTypeID` has no arguments or memory-safety preconditions.
     unsafe { CFBooleanGetTypeID() }
+}
+
+fn number_type_id() -> CFTypeID {
+    // SAFETY: `CFNumberGetTypeID` has no arguments or memory-safety preconditions.
+    unsafe { CFNumberGetTypeID() }
 }
 
 fn cf_type_ids_equal(value: CFTypeRef, expected_type_id: CFTypeID) -> bool {
@@ -212,6 +221,49 @@ fn dictionary_bool(dictionary: &OwnedCf, key: &str) -> Option<bool> {
     // SAFETY: `value` was checked to be a CFBoolean and is kept alive by its
     // parent dictionary for the duration of this read.
     Some(unsafe { CFBooleanGetValue(value.cast()) })
+}
+
+/// 读取代理字典中的 CFBoolean/CFNumber 启用标志。
+fn proxy_flag_enabled(dictionary: &OwnedCf, key: &str) -> bool {
+    let Some(value) = dictionary_value(dictionary, key) else {
+        return false;
+    };
+    if cf_type_ids_equal(value, boolean_type_id()) {
+        // SAFETY: 类型已校验为 CFBoolean，父字典保证借用值在读期间有效。
+        return unsafe { CFBooleanGetValue(value.cast()) };
+    }
+    if !cf_type_ids_equal(value, number_type_id()) {
+        return false;
+    }
+
+    let mut enabled: c_int = 0;
+    // SAFETY: 类型已校验为 CFNumber；输出指针指向足够容纳 C int 的有效内存。
+    let converted = unsafe {
+        CFNumberGetValue(
+            value.cast(),
+            kCFNumberIntType,
+            (&mut enabled as *mut c_int).cast(),
+        )
+    };
+    converted && enabled == 1
+}
+
+/// 任一 HTTP/HTTPS/SOCKS/PAC 系统代理开关启用即返回 true，异常一律 false。
+fn system_proxy_enabled() -> bool {
+    // SAFETY: 空 store 请求当前代理配置；Copy 规则结果立即交给 OwnedCf 配对释放。
+    let Some(proxies) =
+        OwnedCf::from_created(unsafe { SCDynamicStoreCopyProxies(ptr::null()) }.cast())
+    else {
+        return false;
+    };
+    [
+        "HTTPEnable",
+        "HTTPSEnable",
+        "SOCKSEnable",
+        "ProxyAutoConfigEnable",
+    ]
+    .iter()
+    .any(|key| proxy_flag_enabled(&proxies, key))
 }
 
 fn primary_interfaces(store: &OwnedCf) -> Vec<String> {
@@ -514,6 +566,11 @@ fn wifi_band(interface_name: &str) -> Band {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_proxy_enabled_does_not_panic() {
+        let _ = system_proxy_enabled();
+    }
 
     #[test]
     fn native_interface_types_map_to_expected_media() {

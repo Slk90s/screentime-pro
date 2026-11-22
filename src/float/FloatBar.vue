@@ -256,9 +256,7 @@
           </div>
           <div class="f-network-stat">
             <dt>{{ t("float.network.vpn") }}</dt>
-            <dd>
-              {{ networkStatus ? t(networkStatus.vpn ? "float.network.vpnOn" : "float.network.vpnOff") : t("float.network.linkUnknown") }}
-            </dd>
+            <dd>{{ networkVpnLabel }}</dd>
           </div>
         </dl>
         <dl class="f-network-addresses">
@@ -398,8 +396,13 @@ const networkDetailHeight = ref(NETWORK_DETAIL_HEIGHT);
 const baseHeight = computed(() => (cfg.value.float_glass ? 44 : 36));
 const networkDetailOpen = computed(() => networkExpanded.value && cfg.value.show_net);
 const targetHeight = computed(
-  () => baseHeight.value + (networkDetailLayoutOpen.value ? networkDetailHeight.value : 0),
+  // 用即时的逻辑展开态（而非延迟的 layoutOpen）：收起时目标立即变 base，
+  // 由 tweenWindowHeight 把窗口高度随内容 180ms 淡出同步缓动下来。
+  () => baseHeight.value + (networkDetailOpen.value ? networkDetailHeight.value : 0),
 );
+/** 实际应用到窗口的高度：tweenWindowHeight 逐帧逼近 targetHeight，避免窗口框瞬间跳。 */
+const displayedHeight = ref(targetHeight.value);
+let heightTweenToken = 0;
 const diskMode = ref(localStorage.getItem("screentime-disk-mode") || "system");
 let timer: number | null = null;
 let networkCollapseTimer: number | null = null;
@@ -619,6 +622,16 @@ const networkMediumLabel = computed(() => {
 const networkBandLabel = computed(() =>
   t(NETWORK_BAND_KEYS[networkStatus.value?.band ?? "unknown"]),
 );
+// VPN 显示合并「TUN 隧道（vpn）」与「系统代理（proxy）」两类：只改系统代理、
+// 不建虚拟网卡的代理工具（Clash/V2Ray 等）也能被识别出来。
+const networkVpnLabel = computed(() => {
+  const status = networkStatus.value;
+  if (!status) return t("float.network.linkUnknown");
+  if (status.vpn && status.proxy) return t("float.network.vpnBoth");
+  if (status.vpn) return t("float.network.vpnTun");
+  if (status.proxy) return t("float.network.vpnProxy");
+  return t("float.network.vpnOff");
+});
 const networkInternetLabel = computed(() =>
   networkStatus.value
     ? t(NETWORK_INTERNET_KEYS[networkStatus.value.internet])
@@ -757,6 +770,37 @@ function measureDetailHeight(): void {
   networkDetailHeight.value = Math.max(NETWORK_DETAIL_HEIGHT, needed);
 }
 
+// 窗口高度缓动：把 targetHeight 的变化拆成 ~180ms 的 easeOutCubic 逐帧过渡，
+// 与详情内容的 180ms 淡入淡出同步，消除「内容在动、窗口框却瞬间跳」的生硬感。
+// 串行 await 每次 resize（沿用带 DPI/离屏/右缘锚定的 resize_float_window），
+// 保证有序且不刷爆 IPC；token 用于快速连续展开/收起时取消上一段动画。
+async function tweenWindowHeight(goal: number): Promise<void> {
+  heightTweenToken += 1;
+  const token = heightTweenToken;
+  const start = displayedHeight.value;
+  if (Math.abs(start - goal) < 0.5) {
+    displayedHeight.value = goal;
+    await fitWidth();
+    return;
+  }
+  const duration = NETWORK_DETAIL_TRANSITION_MS;
+  const t0 = performance.now();
+  while (token === heightTweenToken) {
+    const t = Math.min(1, (performance.now() - t0) / duration);
+    const eased = 1 - Math.pow(1 - t, 3);
+    displayedHeight.value = start + (goal - start) * eased;
+    await fitWidth();
+    if (t >= 1) break;
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+  }
+  if (token === heightTweenToken) {
+    displayedHeight.value = goal;
+    await fitWidth();
+  }
+}
+
 async function runFitWidth(): Promise<void> {
   if (dragging) return;
   await nextTick();
@@ -765,7 +809,7 @@ async function runFitWidth(): Promise<void> {
   if (!el) return;
   const need = Math.max(el.getBoundingClientRect().width, el.scrollWidth);
   const w = Math.ceil(need) + WIDTH_SLACK;
-  const h = targetHeight.value;
+  const h = displayedHeight.value;
   if (Math.abs(w - appliedW) < 1 && Math.abs(h - appliedH) < 1) return;
   try {
     const [x, y] = await invoke<[number, number]>("resize_float_window", {
@@ -808,8 +852,9 @@ watch(
 );
 
 // DOM 内容行的 ResizeObserver 只覆盖宽度；展开/折叠与玻璃档切换需要显式观察高度。
-watch(targetHeight, () => {
-  void fitWidth();
+// 目标高度变化 → 缓动到目标（不再直接 fitWidth 造成窗口框瞬跳）。
+watch(targetHeight, (goal) => {
+  void tweenWindowHeight(goal);
 });
 // 详情内层自然高度随宽度/数值/语言变化：观察内层而非被 flex 限高的外层，
 // 换行增高时立即抬高窗口；折叠时断开，离场动画沿用最后一次测得的高度。

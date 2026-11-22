@@ -53,6 +53,8 @@ function mockNetworkStatus(): NetworkStatusOut {
     medium: "vpn",
     band: "ghz5",
     vpn: true,
+    // 同时开启系统代理，预览「TUN + 系统代理」组合标签。
+    proxy: true,
     physical_medium: "wifi",
     tunnel: "tun",
     local_ip: "192.168.31.42",

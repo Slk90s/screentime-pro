@@ -1,4 +1,10 @@
-use std::{fs, path::Path, process::Command};
+use std::{
+    fs,
+    path::Path,
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
 
 use super::{Band, LinkState, Medium, NativeBackend, NativeStatus, TunnelKind};
 
@@ -47,9 +53,64 @@ impl NativeBackend for Backend {
             medium,
             band,
             vpn: medium == Medium::Vpn,
+            proxy: system_proxy_enabled(),
             physical_medium,
             tunnel: classify_tunnel(&interface),
             local_ip: None,
+        }
+    }
+}
+
+// 尽力检测系统代理；KDE 等非 GNOME 桌面主要依赖环境变量，失败时保守返回 false。
+fn system_proxy_enabled() -> bool {
+    let env_proxy = [
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+    ]
+    .iter()
+    .any(|name| match std::env::var_os(name) {
+        Some(value) => !value.is_empty(),
+        None => false,
+    });
+    if env_proxy {
+        return true;
+    }
+
+    // gsettings 可能不存在或卡住；直接调用并限时等待，不经 shell。
+    let mut child = match Command::new("gsettings")
+        .args(["get", "org.gnome.system.proxy", "mode"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return false,
+    };
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                return match child.wait_with_output() {
+                    Ok(output) if output.status.success() => {
+                        let mode = String::from_utf8_lossy(&output.stdout);
+                        matches!(mode.trim().trim_matches('\''), "manual" | "auto")
+                    }
+                    _ => false,
+                };
+            }
+            Ok(None) if started.elapsed() < Duration::from_millis(500) => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) | Err(_) => {
+                let _kill_result = child.kill();
+                let _wait_result = child.wait();
+                return false;
+            }
         }
     }
 }
@@ -270,6 +331,11 @@ fn parse_wifi_band(input: &str) -> Option<Band> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_proxy_enabled_does_not_panic() {
+        assert!(std::panic::catch_unwind(system_proxy_enabled).is_ok());
+    }
 
     #[test]
     fn route_parser_requires_up_and_selects_lowest_metric() {

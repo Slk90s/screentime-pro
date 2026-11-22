@@ -291,6 +291,8 @@ export interface NetworkStatusOut {
   medium: NetworkMedium;
   band: NetworkBand;
   vpn: boolean;
+  /** 系统代理（HTTP/SOCKS/PAC）是否开启；与 TUN 隧道无关，可发现仅改系统代理的代理工具。 */
+  proxy: boolean;
   /** VPN 出口下可可靠关联的物理介质；无法关联时为 null。 */
   physical_medium: NetworkMedium | null;
   tunnel: NetworkTunnel;
