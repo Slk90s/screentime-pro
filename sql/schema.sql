@@ -27,6 +27,17 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_sessions_app_date ON sessions(app_id, date);
 CREATE INDEX IF NOT EXISTS idx_sessions_date ON sessions(date);
 
+-- 键盘输入按设备、自然日、虚拟键码聚合；只存次数，不记录按键顺序或文本。
+CREATE TABLE IF NOT EXISTS key_usage_daily (
+  device     TEXT NOT NULL,
+  date       TEXT NOT NULL,
+  key_id     INTEGER NOT NULL,
+  count      INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(device, date, key_id)
+);
+CREATE INDEX IF NOT EXISTS idx_key_usage_daily_date ON key_usage_daily(date);
+
 CREATE TABLE IF NOT EXISTS daily_summaries (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   date          TEXT NOT NULL,

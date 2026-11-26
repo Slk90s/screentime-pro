@@ -14,14 +14,16 @@
 use crate::classifier::classify_app;
 use crate::db::{
     AppRankingOut, CategoryOut, CurrentForegroundOut, DailySummaryOut, DayCategoryOut, DeviceInfo,
-    ExportBundle, ExportResult, HourlyBucketOut, MetricsOut, MonthSummaryOut, NewSession,
-    OverviewOut, PeriodStat, PermissionStatus, RuleOut, SettingsOut, TrendsOut,
+    ExportBundle, ExportResult, HourlyBucketOut, KeyboardConfigOut, KeyboardDay, KeyboardStatsOut,
+    KeyboardSummaryOut, MetricsOut, MonthSummaryOut, NewSession, OverviewOut, PeriodDay,
+    PeriodStat, PermissionStatus, RuleOut, RulePageOut, SettingsOut, TrendsOut,
 };
 use crate::tracker::{platform_name, RawApp};
 use crate::AppState;
 // v1.2.6：采样循环需要区分 NoForeground（正常状态）与真实错误，故引入错误类型
 use crate::error::TrackerError;
-use chrono::{DateTime, Datelike, Duration, Local, NaiveDate};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
@@ -104,6 +106,30 @@ pub fn begin_tracking(state: &Arc<AppState>) {
     tauri::async_runtime::spawn(async move {
         sampling_loop(st).await;
     });
+}
+
+/// 停止前台采样并等待当前 tick 完成，再收尾未落库会话；返回退出前是否正在追踪。
+pub fn stop_tracking_and_flush(state: &Arc<AppState>) -> bool {
+    let was_tracking = {
+        let mut tracking = state.tracking.lock().unwrap_or_else(|e| e.into_inner());
+        let was = *tracking;
+        *tracking = false;
+        was
+    };
+    let _tick = state
+        .sampling_tick
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let active = state
+        .current
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take();
+    if let Some(active) = active {
+        let end = active.paused_at.unwrap_or_else(Local::now);
+        finalize_active_session(state, &active, end);
+    }
+    was_tracking
 }
 
 #[tauri::command]
@@ -422,27 +448,41 @@ pub fn get_categories(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<Cate
 pub fn get_trends(
     state: tauri::State<'_, Arc<AppState>>,
     period: String,
+    anchor: String,
     device: Option<String>,
 ) -> Result<TrendsOut, String> {
-    let (cur_start, cur_end, prev_start, prev_end, yoy_start, yoy_end, cur_label, prev_label) =
-        period_ranges(&period);
-    let current = state
+    let ranges = anchored_period_ranges(&period, &anchor, Local::now().naive_local())?;
+    let (cur_start, cur_end) = local_query_bounds(&ranges.current)?;
+    let (prev_start, prev_end) = local_query_bounds(&ranges.prev)?;
+
+    let mut current = state
         .db
-        .period_summary(&cur_start, &cur_end, &device, &cur_label)
+        .period_summary(&cur_start, &cur_end, &device, &ranges.current_label)
         .map_err(|e| e.to_string())?;
+    let current_days = state
+        .db
+        .period_daily(&cur_start, &cur_end, &device)
+        .map_err(|e| e.to_string())?;
+    current.daily = fill_period_days(
+        ranges.current.display_from,
+        ranges.current.display_to,
+        current_days,
+    );
     let prev = state
         .db
-        .period_summary(&prev_start, &prev_end, &device, &prev_label)
+        .period_summary(&prev_start, &prev_end, &device, &ranges.prev_label)
         .map_err(|e| e.to_string())?;
-    let yoy: Option<PeriodStat> = if period == "month" {
-        Some(
-            state
-                .db
-                .period_summary(&yoy_start, &yoy_end, &device, "去年同期")
-                .map_err(|e| e.to_string())?,
-        )
-    } else {
-        None
+    let yoy: Option<PeriodStat> = match &ranges.yoy {
+        Some(yoy_range) => {
+            let (yoy_start, yoy_end) = local_query_bounds(yoy_range)?;
+            Some(
+                state
+                    .db
+                    .period_summary(&yoy_start, &yoy_end, &device, "去年同期")
+                    .map_err(|e| e.to_string())?,
+            )
+        }
+        None => None,
     };
     let delta_total_pct = if prev.total_seconds > 0 {
         (current.total_seconds - prev.total_seconds) as f64 / prev.total_seconds as f64 * 100.0
@@ -451,11 +491,191 @@ pub fn get_trends(
     };
     Ok(TrendsOut {
         period,
+        anchor,
+        current_from: display_date(ranges.current.display_from),
+        current_to: display_date(ranges.current.display_to),
+        prev_from: display_date(ranges.prev.display_from),
+        prev_to: display_date(ranges.prev.display_to),
         current,
         prev,
         yoy,
         delta_total_pct,
     })
+}
+
+fn keyboard_status(state: &AppState) -> String {
+    if !crate::input::KeyboardInputManager::supported() {
+        "unsupported".to_string()
+    } else if state.keyboard_input.is_running() {
+        "ready".to_string()
+    } else if state
+        .keyboard_input
+        .last_error()
+        .is_some_and(|error| error.starts_with("permission_required:"))
+    {
+        "permission_required".to_string()
+    } else if state
+        .keyboard_input
+        .last_error()
+        .is_some_and(|error| error.starts_with("unsupported:"))
+    {
+        "unsupported".to_string()
+    } else {
+        "disabled".to_string()
+    }
+}
+
+#[tauri::command]
+pub fn get_keyboard_config(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<KeyboardConfigOut, String> {
+    Ok(KeyboardConfigOut {
+        enabled: state.keyboard_input.is_running(),
+        status: keyboard_status(&state),
+        reason: state.keyboard_input.last_error(),
+    })
+}
+
+#[tauri::command]
+pub fn set_keyboard_enabled(
+    state: tauri::State<'_, Arc<AppState>>,
+    enabled: bool,
+) -> Result<KeyboardConfigOut, String> {
+    let _operation = state.keyboard_input.operation();
+    let previous = state.keyboard_input.enabled();
+    if enabled && !crate::input::KeyboardInputManager::supported() {
+        return Err("当前平台或桌面环境不支持键盘输入统计".to_string());
+    }
+    state.keyboard_input.set_enabled(enabled)?;
+    if let Err(error) = state.db.set_setting(
+        "keyboard_stats_enabled",
+        if enabled { "true" } else { "false" },
+    ) {
+        state.keyboard_input.set_enabled(previous)?;
+        return Err(format!("保存键盘统计开关失败: {error}"));
+    }
+    drop(_operation);
+    get_keyboard_config(state)
+}
+
+#[tauri::command]
+pub fn clear_keyboard_stats(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    let _operation = state.keyboard_input.operation();
+    let restart = state.keyboard_input.enabled();
+    if let Err(error) = state.keyboard_input.stop_and_flush() {
+        if restart {
+            let _ = state.keyboard_input.set_enabled(true);
+        }
+        return Err(error);
+    }
+    if let Err(error) = state.db.clear_keyboard_stats() {
+        if restart {
+            state.keyboard_input.set_enabled(true)?;
+        }
+        return Err(error.to_string());
+    }
+    if restart {
+        state.keyboard_input.set_enabled(true)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_keyboard_summary(
+    state: tauri::State<'_, Arc<AppState>>,
+    days: u32,
+    date: String,
+    device: Option<String>,
+) -> Result<KeyboardSummaryOut, String> {
+    let status = keyboard_status(&state);
+    if status != "ready" {
+        return Ok(KeyboardSummaryOut {
+            status,
+            total_count: 0,
+            daily_average: 0,
+            top_key: None,
+        });
+    }
+    let (total_count, daily_average, top_key) = state
+        .db
+        .keyboard_summary(days, &date, &device)
+        .map_err(|e| e.to_string())?;
+    Ok(KeyboardSummaryOut {
+        status,
+        total_count,
+        daily_average,
+        top_key,
+    })
+}
+
+#[tauri::command]
+pub fn get_keyboard_stats(
+    state: tauri::State<'_, Arc<AppState>>,
+    period: String,
+    anchor: String,
+    device: Option<String>,
+) -> Result<KeyboardStatsOut, String> {
+    let ranges = anchored_period_ranges(&period, &anchor, Local::now().naive_local())?;
+    let current_from = display_date(ranges.current.display_from);
+    let current_to = display_date(ranges.current.display_to);
+    let prev_from = display_date(ranges.prev.display_from);
+    let prev_to = display_date(ranges.prev.display_to);
+    let status = keyboard_status(&state);
+    let (daily, keys, total_count, prev_total_count) = if status == "ready" {
+        let (daily, keys, total_count) = state
+            .db
+            .keyboard_period(&current_from, &current_to, &device)
+            .map_err(|e| e.to_string())?;
+        let (_, _, prev_total_count) = state
+            .db
+            .keyboard_period(&prev_from, &prev_to, &device)
+            .map_err(|e| e.to_string())?;
+        (daily, keys, total_count, prev_total_count)
+    } else {
+        (Vec::new(), Vec::new(), 0, 0)
+    };
+    let daily = fill_keyboard_days(
+        ranges.current.display_from,
+        ranges.current.display_to,
+        daily,
+    );
+    let delta_pct = if prev_total_count > 0 {
+        (total_count - prev_total_count) as f64 / prev_total_count as f64 * 100.0
+    } else {
+        0.0
+    };
+    Ok(KeyboardStatsOut {
+        status,
+        anchor,
+        current_from,
+        current_to,
+        prev_from,
+        prev_to,
+        total_count,
+        prev_total_count,
+        delta_pct,
+        daily,
+        keys,
+    })
+}
+
+fn fill_keyboard_days(from: NaiveDate, to: NaiveDate, rows: Vec<KeyboardDay>) -> Vec<KeyboardDay> {
+    let mut counts: HashMap<String, i64> =
+        rows.into_iter().map(|row| (row.date, row.count)).collect();
+    let mut days = Vec::new();
+    let mut cursor = from;
+    while cursor <= to {
+        let date = display_date(cursor);
+        days.push(KeyboardDay {
+            count: counts.remove(&date).unwrap_or(0),
+            date,
+        });
+        cursor = match cursor.succ_opt() {
+            Some(next) => next,
+            None => break,
+        };
+    }
+    days
 }
 
 #[tauri::command]
@@ -483,6 +703,10 @@ pub fn export_all(
 fn state_export(app: &tauri::AppHandle, device_id: Option<&str>) -> Result<ExportBundle, String> {
     let state = app.state::<Arc<AppState>>();
     state
+        .keyboard_input
+        .flush()
+        .map_err(|error| format!("导出前落盘键盘计数失败: {error}"))?;
+    state
         .db
         .export_all_filtered(device_id)
         .map_err(|e| e.to_string())
@@ -502,41 +726,68 @@ pub fn backup_and_prune_device(
     if device_id.trim().is_empty() {
         return Err("device_id 不能为空".to_string());
     }
-    let bundle = state_export(&app, Some(&device_id))?;
-    let json = serde_json::to_string_pretty(&bundle).map_err(|e| e.to_string())?;
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let exports = dir.join("exports");
-    std::fs::create_dir_all(&exports).ok();
-    let suffix = &device_id[..device_id.len().min(12)];
-    let file = format!(
-        "screentime_backup_{}_{}_pre_purge.json",
-        suffix,
-        today_str()
-    );
-    let backup_path = exports.join(file);
-    std::fs::write(&backup_path, &json).map_err(|e| e.to_string())?;
     let state = app.state::<Arc<AppState>>();
-    let deleted = state
-        .db
-        .delete_all_sessions_for_device(&device_id)
-        .map_err(|e| e.to_string())?;
-    crate::logging::audit(
-        "device_backup_purge",
-        &format!(
-            "device_id={device_id} deleted_sessions={deleted} backup={}",
-            backup_path.display()
-        ),
-    );
-    Ok(BackupAndPruneResult {
-        backup_path: backup_path.to_string_lossy().to_string(),
-        deleted_count: deleted,
-    })
+    let _operation = state.keyboard_input.operation();
+    let restart = state.keyboard_input.enabled();
+    let was_tracking = stop_tracking_and_flush(&state);
+    if let Err(error) = state.keyboard_input.stop_and_flush() {
+        if restart {
+            let _ = state.keyboard_input.set_enabled(true);
+        }
+        if was_tracking {
+            begin_tracking(&state);
+        }
+        return Err(error);
+    }
+    let result = (|| {
+        let bundle = state_export(&app, Some(&device_id))?;
+        let json = serde_json::to_string_pretty(&bundle).map_err(|e| e.to_string())?;
+        let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        let exports = dir.join("exports");
+        std::fs::create_dir_all(&exports).ok();
+        let suffix = &device_id[..device_id.len().min(12)];
+        let file = format!(
+            "screentime_backup_{}_{}_pre_purge.json",
+            suffix,
+            Local::now().format("%Y%m%d_%H%M%S")
+        );
+        let backup_path = exports.join(file);
+        std::fs::write(&backup_path, &json).map_err(|e| e.to_string())?;
+        let deleted = state
+            .db
+            .delete_all_sessions_for_device(&device_id)
+            .map_err(|e| e.to_string())?;
+        crate::logging::audit(
+            "device_backup_purge",
+            &format!(
+                "device_id={device_id} deleted_sessions={deleted} backup={}",
+                backup_path.display()
+            ),
+        );
+        Ok(BackupAndPruneResult {
+            backup_path: backup_path.to_string_lossy().to_string(),
+            deleted_count: deleted,
+        })
+    })();
+    let restart_error = if restart {
+        state.keyboard_input.set_enabled(true).err()
+    } else {
+        None
+    };
+    if was_tracking {
+        begin_tracking(&state);
+    }
+    if let Some(error) = restart_error {
+        return Err(error);
+    }
+    result
 }
 
 #[tauri::command]
 pub fn import_data(app: tauri::AppHandle, content: String) -> Result<usize, String> {
     let bundle: ExportBundle = serde_json::from_str(&content).map_err(|e| e.to_string())?;
     let state = app.state::<Arc<AppState>>();
+    let _operation = state.keyboard_input.operation();
     let imported = state.db.import_data(&bundle).map_err(|e| e.to_string())?;
     // P2-9：导入若含**当前设备**的名字映射，同步刷新裸键 `device_name` 与内存态，
     // 消除「备份还原后 device_name 与 device_name:<id> 短暂不一致」的歧义。
@@ -561,6 +812,10 @@ pub struct BackupConfig {
 
 fn perform_backup(app: &tauri::AppHandle, path_override: Option<&str>) -> Result<String, String> {
     let state = app.state::<Arc<AppState>>();
+    state
+        .keyboard_input
+        .flush()
+        .map_err(|error| format!("备份前落盘键盘计数失败: {error}"))?;
     let bundle = state
         .db
         .export_all_filtered(None)
@@ -737,6 +992,7 @@ pub fn prune_data(
     days: u32,
     device_ids: Option<Vec<String>>,
 ) -> Result<usize, String> {
+    let _operation = state.keyboard_input.operation();
     let ids = device_ids.unwrap_or_default();
     let n = if ids.is_empty() {
         state.db.prune_old(days, None).map_err(|e| e.to_string())?
@@ -850,6 +1106,31 @@ pub fn reset_screen_capture_permission() -> Result<String, String> {
 #[tauri::command]
 pub fn get_rules(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<RuleOut>, String> {
     state.db.get_rules_out().map_err(|e| e.to_string())
+}
+
+/// 分类规则管理页的真实数据库搜索分页；排序白名单在 IPC 边界再次校验。
+#[tauri::command]
+pub fn get_rules_page(
+    state: tauri::State<'_, Arc<AppState>>,
+    keyword: String,
+    page: i64,
+    page_size: i64,
+    sort_key: String,
+    sort_dir: String,
+) -> Result<RulePageOut, String> {
+    if !matches!(
+        sort_key.as_str(),
+        "field" | "match_type" | "pattern" | "category_id" | "priority" | "enabled"
+    ) {
+        return Err(format!("不支持的规则排序字段: {sort_key}"));
+    }
+    if !matches!(sort_dir.as_str(), "asc" | "desc") {
+        return Err(format!("不支持的规则排序方向: {sort_dir}"));
+    }
+    state
+        .db
+        .get_rules_page(&keyword, page, page_size, &sort_key, &sort_dir)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1050,6 +1331,10 @@ async fn sampling_loop(state: Arc<AppState>) {
     let mut last_fg_err: Option<String> = None;
     loop {
         ticker.tick().await;
+        let _tick = state
+            .sampling_tick
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if !*state.tracking.lock().unwrap_or_else(|e| e.into_inner()) {
             break;
         }
@@ -1144,6 +1429,7 @@ async fn sampling_loop(state: Arc<AppState>) {
         }
         last_app_for_minute = fg.process_name.clone();
         let platform = platform_name();
+        drop(_tick);
         let category = {
             let user_cat =
                 classify_app(&fg, &state.rules.lock().unwrap_or_else(|e| e.into_inner()));
@@ -1173,6 +1459,13 @@ async fn sampling_loop(state: Arc<AppState>) {
                 }
             }
         };
+        let _tick = state
+            .sampling_tick
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if !*state.tracking.lock().unwrap_or_else(|e| e.into_inner()) {
+            continue;
+        }
         let (to_finalize, pause_end) = {
             let mut cur = state.current.lock().unwrap_or_else(|e| e.into_inner());
             let mut pause_end = None;
@@ -1255,76 +1548,275 @@ async fn sampling_loop(state: Arc<AppState>) {
     }
 }
 
-fn period_ranges(
+#[derive(Debug)]
+struct PeriodQueryRange {
+    start: NaiveDateTime,
+    end: NaiveDateTime,
+    display_from: NaiveDate,
+    display_to: NaiveDate,
+}
+
+#[derive(Debug)]
+struct AnchoredPeriodRanges {
+    current: PeriodQueryRange,
+    prev: PeriodQueryRange,
+    yoy: Option<PeriodQueryRange>,
+    current_label: String,
+    prev_label: String,
+}
+
+/// 纯日期计算入口：调用方只在此处注入当前本地时间，便于确定性地测试历史锚点。
+fn anchored_period_ranges(
     period: &str,
-) -> (
-    String,
-    String,
-    String,
-    String,
-    String,
-    String,
-    String,
-    String,
-) {
-    let now = Local::now();
-    let today = now.date_naive();
-    let to_local = |d: NaiveDate, h: u32, mi: u32, s: u32| -> DateTime<Local> {
-        d.and_hms_opt(h, mi, s)
-            .and_then(|dt| dt.and_local_timezone(Local).latest())
-            .unwrap_or(now)
-    };
-    let ymd =
-        |y: i32, m: u32, d: u32| -> NaiveDate { NaiveDate::from_ymd_opt(y, m, d).unwrap_or(today) };
-    if period == "month" {
-        let y = today.year();
-        let m = today.month();
-        let cur_start = to_local(ymd(y, m, 1), 0, 0, 0);
-        let cur_end = now;
-        let (py, pm) = if m == 1 { (y - 1, 12) } else { (y, m - 1) };
-        let prev_start = to_local(ymd(py, pm, 1), 0, 0, 0);
-        let prev_last = last_day_of_month(py, pm);
-        let prev_end = to_local(ymd(py, pm, prev_last), 23, 59, 59);
-        let yoy_y = y - 1;
-        let yoy_start = to_local(ymd(yoy_y, m, 1), 0, 0, 0);
-        let yoy_last = last_day_of_month(yoy_y, m);
-        let yoy_end = to_local(ymd(yoy_y, m, yoy_last), 23, 59, 59);
-        (
-            cur_start.to_rfc3339(),
-            cur_end.to_rfc3339(),
-            prev_start.to_rfc3339(),
-            prev_end.to_rfc3339(),
-            yoy_start.to_rfc3339(),
-            yoy_end.to_rfc3339(),
-            format!("{y}年{m}月"),
-            format!("{py}年{pm}月"),
-        )
-    } else {
-        let wd = today.weekday().num_days_from_monday() as i64;
-        let this_mon = today - Duration::days(wd);
-        let cur_start = to_local(this_mon, 0, 0, 0);
-        let cur_end = now;
-        let prev_mon = this_mon - Duration::days(7);
-        let prev_start = to_local(prev_mon, 0, 0, 0);
-        let prev_end = to_local(this_mon, 0, 0, 0);
-        (
-            cur_start.to_rfc3339(),
-            cur_end.to_rfc3339(),
-            prev_start.to_rfc3339(),
-            prev_end.to_rfc3339(),
-            String::new(),
-            String::new(),
-            "本周".to_string(),
-            "上周".to_string(),
-        )
+    anchor: &str,
+    now: NaiveDateTime,
+) -> Result<AnchoredPeriodRanges, String> {
+    match period {
+        "month" => month_period_ranges(anchor, now),
+        "week" => week_period_ranges(anchor, now),
+        _ => Err("period 仅支持 month 或 week".to_string()),
     }
 }
 
+fn month_period_ranges(anchor: &str, now: NaiveDateTime) -> Result<AnchoredPeriodRanges, String> {
+    let (year, month) = parse_month_anchor(anchor)?;
+    if (year, month) > (now.year(), now.month()) {
+        return Err("不能查询未来月份".to_string());
+    }
+
+    let (prev_year, prev_month) = previous_month(year, month);
+    let is_current = (year, month) == (now.year(), now.month());
+    let (current, prev, yoy) = if is_current {
+        (
+            month_to_date_range(year, month, now)?,
+            month_to_date_range(prev_year, prev_month, now)?,
+            month_to_date_range(year - 1, month, now)?,
+        )
+    } else {
+        (
+            complete_month_range(year, month)?,
+            complete_month_range(prev_year, prev_month)?,
+            complete_month_range(year - 1, month)?,
+        )
+    };
+
+    Ok(AnchoredPeriodRanges {
+        current,
+        prev,
+        yoy: Some(yoy),
+        current_label: format!("{year}年{month}月"),
+        prev_label: format!("{prev_year}年{prev_month}月"),
+    })
+}
+
+fn week_period_ranges(anchor: &str, now: NaiveDateTime) -> Result<AnchoredPeriodRanges, String> {
+    let anchor_date = parse_week_anchor(anchor)?;
+    let monday = week_start(anchor_date)?;
+    let current_monday = week_start(now.date())?;
+    if monday > current_monday {
+        return Err("不能查询未来周".to_string());
+    }
+
+    let prev_monday = monday
+        .checked_sub_signed(Duration::days(7))
+        .ok_or_else(|| "上周起点超出日期范围".to_string())?;
+    let is_current = monday == current_monday;
+    let (current, prev) = if is_current {
+        let prev_end = now
+            .checked_sub_signed(Duration::days(7))
+            .ok_or_else(|| "上周终点超出日期范围".to_string())?;
+        (
+            PeriodQueryRange {
+                start: monday.and_time(NaiveTime::MIN),
+                end: now,
+                display_from: monday,
+                display_to: now.date(),
+            },
+            PeriodQueryRange {
+                start: prev_monday.and_time(NaiveTime::MIN),
+                end: prev_end,
+                display_from: prev_monday,
+                display_to: prev_end.date(),
+            },
+        )
+    } else {
+        (
+            complete_week_range(monday)?,
+            complete_week_range(prev_monday)?,
+        )
+    };
+
+    Ok(AnchoredPeriodRanges {
+        current,
+        prev,
+        yoy: None,
+        current_label: if is_current { "本周" } else { "所选周" }.to_string(),
+        prev_label: if is_current { "上周" } else { "上一周" }.to_string(),
+    })
+}
+
+fn parse_month_anchor(anchor: &str) -> Result<(i32, u32), String> {
+    let valid_format = anchor.len() == 7
+        && anchor.as_bytes()[4] == b'-'
+        && anchor
+            .bytes()
+            .enumerate()
+            .all(|(index, byte)| index == 4 || byte.is_ascii_digit());
+    if !valid_format {
+        return Err("month anchor 必须为 YYYY-MM".to_string());
+    }
+    let year = anchor[..4]
+        .parse::<i32>()
+        .map_err(|_| "month anchor 年份非法".to_string())?;
+    let month = anchor[5..7]
+        .parse::<u32>()
+        .map_err(|_| "month anchor 月份非法".to_string())?;
+    first_of_month(year, month)?;
+    Ok((year, month))
+}
+
+fn parse_week_anchor(anchor: &str) -> Result<NaiveDate, String> {
+    let valid_format = anchor.len() == 10
+        && anchor.as_bytes()[4] == b'-'
+        && anchor.as_bytes()[7] == b'-'
+        && anchor
+            .bytes()
+            .enumerate()
+            .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit());
+    if !valid_format {
+        return Err("week anchor 必须为 YYYY-MM-DD".to_string());
+    }
+    let year = anchor[..4]
+        .parse::<i32>()
+        .map_err(|_| "week anchor 年份非法".to_string())?;
+    let month = anchor[5..7]
+        .parse::<u32>()
+        .map_err(|_| "week anchor 月份非法".to_string())?;
+    let day = anchor[8..10]
+        .parse::<u32>()
+        .map_err(|_| "week anchor 日期非法".to_string())?;
+    NaiveDate::from_ymd_opt(year, month, day).ok_or_else(|| "week anchor 不是真实日期".to_string())
+}
+
+fn first_of_month(year: i32, month: u32) -> Result<NaiveDate, String> {
+    NaiveDate::from_ymd_opt(year, month, 1).ok_or_else(|| format!("非法月份: {year:04}-{month:02}"))
+}
+
+fn previous_month(year: i32, month: u32) -> (i32, u32) {
+    if month == 1 {
+        (year - 1, 12)
+    } else {
+        (year, month - 1)
+    }
+}
+
+fn next_month(year: i32, month: u32) -> (i32, u32) {
+    if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    }
+}
+
+fn complete_month_range(year: i32, month: u32) -> Result<PeriodQueryRange, String> {
+    let from = first_of_month(year, month)?;
+    let (next_year, next_month) = next_month(year, month);
+    let next = first_of_month(next_year, next_month)?;
+    let display_to = next
+        .pred_opt()
+        .ok_or_else(|| "月末展示日期超出范围".to_string())?;
+    Ok(PeriodQueryRange {
+        start: from.and_time(NaiveTime::MIN),
+        end: next.and_time(NaiveTime::MIN),
+        display_from: from,
+        display_to,
+    })
+}
+
+/// 同期对比沿用注入时刻的「日 + 时分秒」，目标月没有该日时钳制到月末。
+fn month_to_date_range(
+    year: i32,
+    month: u32,
+    now: NaiveDateTime,
+) -> Result<PeriodQueryRange, String> {
+    let from = first_of_month(year, month)?;
+    let day = now.day().min(last_day_of_month(year, month));
+    let display_to = NaiveDate::from_ymd_opt(year, month, day)
+        .ok_or_else(|| "月同期日期超出范围".to_string())?;
+    Ok(PeriodQueryRange {
+        start: from.and_time(NaiveTime::MIN),
+        end: display_to.and_time(now.time()),
+        display_from: from,
+        display_to,
+    })
+}
+
+fn week_start(date: NaiveDate) -> Result<NaiveDate, String> {
+    date.checked_sub_signed(Duration::days(date.weekday().num_days_from_monday() as i64))
+        .ok_or_else(|| "周起点超出日期范围".to_string())
+}
+
+fn complete_week_range(monday: NaiveDate) -> Result<PeriodQueryRange, String> {
+    let next_monday = monday
+        .checked_add_signed(Duration::days(7))
+        .ok_or_else(|| "下周起点超出日期范围".to_string())?;
+    let display_to = next_monday
+        .pred_opt()
+        .ok_or_else(|| "周末展示日期超出范围".to_string())?;
+    Ok(PeriodQueryRange {
+        start: monday.and_time(NaiveTime::MIN),
+        end: next_monday.and_time(NaiveTime::MIN),
+        display_from: monday,
+        display_to,
+    })
+}
+
+fn local_query_bounds(range: &PeriodQueryRange) -> Result<(String, String), String> {
+    let to_local = |value: NaiveDateTime| {
+        value
+            .and_local_timezone(Local)
+            .latest()
+            .ok_or_else(|| format!("本地时区无法表示时间: {value}"))
+    };
+    Ok((
+        to_local(range.start)?.to_rfc3339(),
+        to_local(range.end)?.to_rfc3339(),
+    ))
+}
+
+fn display_date(date: NaiveDate) -> String {
+    date.format("%Y-%m-%d").to_string()
+}
+
+fn fill_period_days(from: NaiveDate, to: NaiveDate, rows: Vec<PeriodDay>) -> Vec<PeriodDay> {
+    let totals: HashMap<String, i64> = rows
+        .into_iter()
+        .map(|day| (day.date, day.total_seconds))
+        .collect();
+    let mut days = Vec::new();
+    let mut cursor = from;
+    while cursor <= to {
+        let date = display_date(cursor);
+        days.push(PeriodDay {
+            total_seconds: totals.get(&date).copied().unwrap_or(0),
+            date,
+        });
+        match cursor.succ_opt() {
+            Some(next) => cursor = next,
+            None => break,
+        }
+    }
+    days
+}
+
 fn last_day_of_month(year: i32, month: u32) -> u32 {
-    let next_month = if month == 12 { 1 } else { month + 1 };
-    let next_year = if month == 12 { year + 1 } else { year };
-    let first_of_next = NaiveDate::from_ymd_opt(next_year, next_month, 1).unwrap();
-    (first_of_next - Duration::days(1)).day()
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        _ => 0,
+    }
 }
 
 fn today_str() -> String {
@@ -2229,16 +2721,26 @@ pub fn get_system_metrics(state: tauri::State<'_, Arc<AppState>>) -> MetricsOut 
 #[cfg(test)]
 mod tests {
     use super::{
-        active_session_seconds, is_idle_screen_process, is_version_tag, last_input_from_idle,
-        parse_atom_latest_release, pause_active_session, resolve_no_foreground_pause, semver_gt,
-        ActiveSession, MIN_SESSION_SECS,
+        active_session_seconds, anchored_period_ranges, fill_period_days, is_idle_screen_process,
+        is_version_tag, last_input_from_idle, parse_atom_latest_release, pause_active_session,
+        resolve_no_foreground_pause, semver_gt, ActiveSession, MIN_SESSION_SECS,
     };
+    use crate::db::PeriodDay;
     use crate::tracker::RawApp;
+    use chrono::{NaiveDate, NaiveDateTime};
 
     fn local_time(seconds: i64) -> chrono::DateTime<chrono::Local> {
         chrono::DateTime::from_timestamp(seconds, 0)
             .expect("固定时间戳必须有效")
             .with_timezone(&chrono::Local)
+    }
+
+    fn dt(value: &str) -> NaiveDateTime {
+        NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S").expect("测试时间必须有效")
+    }
+
+    fn date(value: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(value, "%Y-%m-%d").expect("测试日期必须有效")
     }
 
     fn active_session(started_at: chrono::DateTime<chrono::Local>) -> ActiveSession {
@@ -2407,6 +2909,149 @@ mod tests {
         // 空串 / 空白也不能命中
         assert!(!is_idle_screen_process(""));
         assert!(!is_idle_screen_process("   "));
+    }
+
+    #[test]
+    fn current_month_ranges_are_month_to_date_with_matching_comparison_times() {
+        let now = dt("2026-11-22 10:20:30");
+        let ranges = anchored_period_ranges("month", "2026-11", now).expect("当前月应合法");
+
+        assert_eq!(ranges.current.start, dt("2026-11-01 00:00:00"));
+        assert_eq!(ranges.current.end, now);
+        assert_eq!(ranges.current.display_from, date("2026-11-01"));
+        assert_eq!(ranges.current.display_to, date("2026-11-22"));
+        assert_eq!(ranges.prev.start, dt("2026-10-01 00:00:00"));
+        assert_eq!(ranges.prev.end, dt("2026-10-22 10:20:30"));
+        assert_eq!(ranges.prev.display_to, date("2026-10-22"));
+        let yoy = ranges.yoy.as_ref().expect("月视图必须有同比");
+        assert_eq!(yoy.start, dt("2025-11-01 00:00:00"));
+        assert_eq!(yoy.end, dt("2025-11-22 10:20:30"));
+
+        let daily = fill_period_days(
+            ranges.current.display_from,
+            ranges.current.display_to,
+            Vec::new(),
+        );
+        assert_eq!(daily.len(), 22, "当前月每日序列只包含月初到今天");
+        assert!(daily.iter().all(|day| day.total_seconds == 0));
+    }
+
+    #[test]
+    fn past_month_ranges_cover_complete_current_previous_and_yoy_months() {
+        let ranges = anchored_period_ranges("month", "2026-09", dt("2026-11-22 10:20:30"))
+            .expect("过去月份应合法");
+
+        assert_eq!(ranges.current.start, dt("2026-09-01 00:00:00"));
+        assert_eq!(ranges.current.end, dt("2026-10-01 00:00:00"));
+        assert_eq!(ranges.current.display_to, date("2026-09-30"));
+        assert_eq!(ranges.prev.start, dt("2026-08-01 00:00:00"));
+        assert_eq!(ranges.prev.end, dt("2026-09-01 00:00:00"));
+        assert_eq!(ranges.prev.display_to, date("2026-08-31"));
+        let yoy = ranges.yoy.as_ref().expect("历史月也必须有同比");
+        assert_eq!(yoy.start, dt("2025-09-01 00:00:00"));
+        assert_eq!(yoy.end, dt("2025-10-01 00:00:00"));
+        assert_eq!(yoy.display_to, date("2025-09-30"));
+    }
+
+    #[test]
+    fn march_31_previous_month_clamps_to_february_last_day() {
+        let ranges = anchored_period_ranges("month", "2026-03", dt("2026-03-31 15:16:17"))
+            .expect("当前三月应合法");
+
+        assert_eq!(ranges.current.end, dt("2026-03-31 15:16:17"));
+        assert_eq!(ranges.prev.start, dt("2026-02-01 00:00:00"));
+        assert_eq!(ranges.prev.end, dt("2026-02-28 15:16:17"));
+        assert_eq!(ranges.prev.display_to, date("2026-02-28"));
+        let yoy = ranges.yoy.as_ref().expect("月视图必须有同比");
+        assert_eq!(yoy.end, dt("2025-03-31 15:16:17"));
+    }
+
+    #[test]
+    fn current_week_uses_monday_and_same_previous_weekday_time() {
+        let now = dt("2026-11-18 09:08:07");
+        let ranges = anchored_period_ranges("week", "2026-11-18", now).expect("当前周应合法");
+
+        assert_eq!(ranges.current.start, dt("2026-11-16 00:00:00"));
+        assert_eq!(ranges.current.end, now);
+        assert_eq!(ranges.current.display_from, date("2026-11-16"));
+        assert_eq!(ranges.current.display_to, date("2026-11-18"));
+        assert_eq!(ranges.prev.start, dt("2026-11-09 00:00:00"));
+        assert_eq!(ranges.prev.end, dt("2026-11-11 09:08:07"));
+        assert_eq!(ranges.prev.display_to, date("2026-11-11"));
+        assert!(ranges.yoy.is_none(), "周视图不做同比");
+    }
+
+    #[test]
+    fn past_week_anchor_normalizes_to_monday_and_uses_full_weeks() {
+        let ranges = anchored_period_ranges("week", "2026-11-04", dt("2026-11-18 09:08:07"))
+            .expect("过去周应合法");
+
+        assert_eq!(ranges.current.start, dt("2026-11-02 00:00:00"));
+        assert_eq!(ranges.current.end, dt("2026-11-09 00:00:00"));
+        assert_eq!(ranges.current.display_to, date("2026-11-08"));
+        assert_eq!(ranges.prev.start, dt("2026-10-26 00:00:00"));
+        assert_eq!(ranges.prev.end, dt("2026-11-02 00:00:00"));
+        assert_eq!(ranges.prev.display_to, date("2026-11-01"));
+        assert!(ranges.yoy.is_none());
+    }
+
+    #[test]
+    fn invalid_period_and_anchor_formats_or_dates_are_rejected() {
+        let now = dt("2026-11-18 09:08:07");
+        for (period, anchor) in [
+            ("month", "2026-2"),
+            ("month", "2026-02-01"),
+            ("month", "2026-00"),
+            ("month", "2026-13"),
+            ("month", " 2026-11"),
+            ("week", "2026-11"),
+            ("week", "2026-02-29"),
+            ("week", "2026-04-31"),
+            ("week", "2026-11-18 "),
+            ("week", ""),
+            ("day", "2026-11-18"),
+        ] {
+            assert!(
+                anchored_period_ranges(period, anchor, now).is_err(),
+                "{period}/{anchor} 必须返回错误"
+            );
+        }
+    }
+
+    #[test]
+    fn future_month_and_week_anchors_are_rejected_without_fallback() {
+        let now = dt("2026-11-18 09:08:07");
+        assert!(anchored_period_ranges("month", "2026-12", now).is_err());
+        assert!(anchored_period_ranges("week", "2026-11-23", now).is_err());
+        assert!(anchored_period_ranges("month", "2027-01", now).is_err());
+    }
+
+    #[test]
+    fn leap_february_daily_series_has_29_days_and_fills_zeroes() {
+        let ranges = anchored_period_ranges("month", "2024-02", dt("2026-11-18 09:08:07"))
+            .expect("闰年二月应合法");
+        let rows = vec![
+            PeriodDay {
+                date: "2024-02-29".to_string(),
+                total_seconds: 90,
+            },
+            PeriodDay {
+                date: "2024-02-01".to_string(),
+                total_seconds: 30,
+            },
+        ];
+        let daily = fill_period_days(ranges.current.display_from, ranges.current.display_to, rows);
+
+        assert_eq!(daily.len(), 29);
+        assert_eq!(daily[0].date, "2024-02-01");
+        assert_eq!(daily[0].total_seconds, 30);
+        assert_eq!(daily[28].date, "2024-02-29");
+        assert_eq!(daily[28].total_seconds, 90);
+        assert_eq!(
+            daily.iter().filter(|day| day.total_seconds == 0).count(),
+            27,
+            "没有数据的自然日必须补零"
+        );
     }
 
     #[test]

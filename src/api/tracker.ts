@@ -24,6 +24,10 @@ import type {
   OverviewOut,
   PermissionStatus,
   RuleOut,
+  RulePageOut,
+  KeyboardConfigOut,
+  KeyboardStatsOut,
+  KeyboardSummaryOut,
   SettingsOut,
   StatusBarConfig,
   // v1.2.2（2026-10-21）：液态玻璃能力探测返回体
@@ -140,8 +144,16 @@ export const tracker = {
   /** 记录「用户不想装这个版本」，同版本不再提示；更高版本仍会提示。 */
   dismissUpdate: (version: string) => call<boolean>("dismiss_update", { version }),
   openUrl: (url: string) => call<void>("open_url", { url }),
-  trends: (period: string, device?: string) =>
-    call<TrendsOut>("get_trends", { period, device: device ?? null }),
+  trends: (period: string, anchor: string, device?: string) =>
+    call<TrendsOut>("get_trends", { period, anchor, device: device ?? null }),
+  keyboardSummary: (days: number, date: string, device?: string) =>
+    call<KeyboardSummaryOut>("get_keyboard_summary", { days, date, device: device ?? null }),
+  keyboardStats: (period: string, anchor: string, device?: string) =>
+    call<KeyboardStatsOut>("get_keyboard_stats", { period, anchor, device: device ?? null }),
+  getKeyboardConfig: () => call<KeyboardConfigOut>("get_keyboard_config"),
+  setKeyboardEnabled: (enabled: boolean) =>
+    call<KeyboardConfigOut>("set_keyboard_enabled", { enabled }),
+  clearKeyboardStats: () => call<void>("clear_keyboard_stats"),
   exportAll: (deviceId?: string) =>
     call<ExportResult>("export_all", { deviceId: deviceId ?? null }),
   backupAndPruneDevice: (deviceId: string) =>
@@ -168,6 +180,13 @@ export const tracker = {
     dataRetentionDays: number;
   }) => call<boolean>("save_settings", s),
   rules: () => call<RuleOut[]>("get_rules"),
+  rulesPage: (input: {
+    keyword: string;
+    page: number;
+    pageSize: number;
+    sortKey: string;
+    sortDir: string;
+  }) => call<RulePageOut>("get_rules_page", input),
   addRule: (r: {
     field: string;
     matchType: string;

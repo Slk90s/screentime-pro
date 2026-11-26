@@ -8,6 +8,8 @@
        功能不裁：原 Settings 全部功能（设备名/空闲阈值/保留天数/语言/自启/备份导入/日志/危险区/桌宠/皮肤/编辑器/检查更新/关于）全部保留。 -->
   <!-- 2026-11-02 @v1.2.12: 修复 - 所有配置提交前先取得权威基线，读取失败不得写入；截图多选阻止冒泡并在单删后清理已选 ID。 -->
   <div class="settings">
+    <RulesView v-if="rulesOpen" embedded @close="closeRules" />
+    <template v-else>
     <!-- ============ 顶部品牌色横条 + 标题 ============ -->
     <div class="settings-header">
       <div class="header-bar" />
@@ -119,6 +121,62 @@
           <button class="primary-btn" @click="onSave">
             <AppIcon name="save" :size="14" /> {{ t("settings.save") }}
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 分类规则：只放入口，管理在独立子页 ============ -->
+    <div class="setting-card">
+      <div class="card-head">
+        <div class="head-icon icon-orange">
+          <AppIcon name="tool" :size="20" />
+        </div>
+        <div class="head-text">
+          <h3>{{ t("settings.rulesTitle") }}</h3>
+          <p>{{ t("settings.rulesDesc") }}</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="form-row row between">
+          <span class="field-hint">{{ t("settings.rulesCount", { n: ruleTotal }) }}</span>
+          <button class="ghost-btn" @click="openRules">{{ t("settings.rulesManage") }}</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 键盘输入统计：明确 opt-in 与隐私边界 ============ -->
+    <div class="setting-card">
+      <div class="card-head">
+        <div class="head-icon icon-green">
+          <AppIcon name="keyRound" :size="20" />
+        </div>
+        <div class="head-text">
+          <h3>{{ t("settings.keyboardTitle") }}</h3>
+          <p>{{ t("settings.keyboardDesc") }}</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="form-row row between">
+          <label>{{ t("settings.keyboardTitle") }}</label>
+          <label class="toggle-switch" :class="{ on: keyboardConfig.enabled }">
+            <input
+              type="checkbox"
+              :checked="keyboardConfig.enabled"
+              :disabled="!keyboardLoaded || keyboardSaving || keyboardConfig.status === 'unsupported'"
+              @change="onKeyboardToggle"
+            />
+            <span class="toggle-slider" />
+          </label>
+        </div>
+        <p class="field-hint" v-if="keyboardConfig.status === 'ready'">{{ t("settings.keyboardPrivacy") }}</p>
+        <p class="field-hint" v-else-if="keyboardConfig.status === 'permission_required'">
+          {{ t("settings.keyboardPermission") }}
+          <button class="ghost-btn" :disabled="keyboardSaving" @click="retryKeyboardEnable">{{ t("settings.keyboardRetry") }}</button>
+        </p>
+        <p class="field-hint" v-else-if="keyboardConfig.status === 'unsupported'">{{ t("settings.keyboardUnsupported") }}</p>
+        <p class="field-hint" v-else>{{ t("settings.keyboardPrivacy") }}</p>
+        <div class="btn-row">
+          <button class="ghost-btn" @click="confirmClearKeyboard">{{ t("settings.keyboardClear") }}</button>
         </div>
       </div>
     </div>
@@ -1036,6 +1094,7 @@
         </div>
       </div>
     </Modal>
+    </template>
   </div>
 </template>
 
@@ -1087,6 +1146,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import Modal from "../components/Modal.vue";
 import AppIcon from "../components/AppIcon.vue";
+import RulesView from "./Rules.vue";
 import { tracker, isTauri } from "../api/tracker";
 // v1.2.11：应用内自动升级（Windows / AppImage 启用；macOS / deb / rpm 由后端判为不支持）
 import * as appUpdate from "../api/appUpdate";
@@ -1106,6 +1166,7 @@ import type {
   OcrEngineInfo,
   OcrEngineKind,
   FloatGlassTier,
+  KeyboardConfigOut,
 } from "../types";
 import { formatDuration } from "../utils/format";
 import { petStore } from "../pet/stores/petStore";
@@ -1118,6 +1179,77 @@ const { t } = useI18n();
 
 // 桌宠编辑器显示状态
 const showEditor = ref(false);
+const rulesOpen = ref(false);
+const ruleTotal = ref(0);
+async function loadRuleTotal(): Promise<void> {
+  try {
+    const result = await tracker.rulesPage({
+      keyword: "", page: 1, pageSize: 1, sortKey: "category_id", sortDir: "asc",
+    });
+    ruleTotal.value = result.total;
+  } catch {
+    ruleTotal.value = 0;
+  }
+}
+function openRules(): void {
+  rulesOpen.value = true;
+}
+async function closeRules(): Promise<void> {
+  rulesOpen.value = false;
+  await loadRuleTotal();
+}
+
+const keyboardConfig = ref<KeyboardConfigOut>({ enabled: false, status: "unsupported", reason: null });
+const keyboardLoaded = ref(false);
+const keyboardSaving = ref(false);
+async function loadKeyboardConfig(): Promise<void> {
+  try {
+    keyboardConfig.value = await tracker.getKeyboardConfig();
+  } catch {
+    keyboardConfig.value = { enabled: false, status: "unsupported", reason: null };
+  } finally {
+    keyboardLoaded.value = true;
+  }
+}
+async function onKeyboardToggle(event: Event): Promise<void> {
+  if (!keyboardLoaded.value || keyboardSaving.value) return;
+  const target = (event.target as HTMLInputElement).checked;
+  await applyKeyboardEnabled(target);
+}
+async function retryKeyboardEnable(): Promise<void> {
+  if (!keyboardLoaded.value || keyboardSaving.value) return;
+  await applyKeyboardEnabled(true);
+}
+async function applyKeyboardEnabled(target: boolean): Promise<void> {
+  const previous = { ...keyboardConfig.value };
+  keyboardSaving.value = true;
+  keyboardConfig.value = { ...previous, enabled: target };
+  try {
+    keyboardConfig.value = await tracker.setKeyboardEnabled(target);
+    window.dispatchEvent(new CustomEvent("keyboard-stats-changed"));
+  } catch (error) {
+    keyboardConfig.value = previous;
+    showAlert("warn", t("settings.keyboardTitle"), String(error));
+  } finally {
+    keyboardSaving.value = false;
+  }
+}
+function confirmClearKeyboard(): void {
+  showAlert(
+    "confirm",
+    t("settings.keyboardClearTitle"),
+    t("settings.keyboardClearMsg"),
+    async () => {
+      try {
+        await tracker.clearKeyboardStats();
+        window.dispatchEvent(new CustomEvent("keyboard-stats-changed"));
+        showAlert("info", t("settings.keyboardTitle"), t("settings.keyboardClearDone"));
+      } catch (error) {
+        showAlert("warn", t("settings.keyboardTitle"), String(error));
+      }
+    },
+  );
+}
 
 // v0.6.2-beta.2：皮肤选择器
 const skinList = computed(() => skinRegistry.list());
@@ -1164,6 +1296,8 @@ let disposed = false;
 // ④ 日志大小
 onMounted(async () => {
   void petStore.init();
+  void loadRuleTotal();
+  void loadKeyboardConfig();
   // v1.2.11：先问后端本平台能否应用内升级，决定「发现新版本」时给「一键升级」还是「去下载」。
   // 故意**不**在失败时抛错：这只是决定 UI 形态，拿不到就当不支持（退回浏览器下载）。
   try {

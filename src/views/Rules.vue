@@ -9,65 +9,72 @@
        注：开机自启开关已移至「设置」页（Settings.vue），此处不再重复。
        2026-11-02 @v1.2.12: 修复 - 规则校验或提交失败时保持编辑弹窗，成功后才关闭。 -->
   <div class="rules-view">
-    <!-- ============ 规则列表 ============ -->
     <section class="card">
       <div class="head">
-        <h3>{{ t("rules.title") }}</h3>
+        <div class="head-title">
+          <button v-if="embedded" class="back-btn" @click="emit('close')">← {{ t("rules.backToSettings") }}</button>
+          <h3>{{ t("rules.title") }}</h3>
+        </div>
         <div class="head-actions">
           <button class="primary" @click="openCreate">{{ t("rules.add") }}</button>
           <button @click="doReclassify">{{ t("rules.reclassify") }}</button>
         </div>
       </div>
-      <p class="hint">
-        {{ t("rules.hint") }}
+      <p class="hint">{{ t("rules.hint") }}</p>
+
+      <div class="rule-tools">
+        <input
+          v-model="keyword"
+          class="rule-search"
+          type="search"
+          :placeholder="t('rules.searchPh')"
+          :aria-label="t('rules.searchLabel')"
+          @input="onSearchInput"
+        />
+        <span class="rule-total">{{ t("rules.total", { n: total }) }}</span>
+      </div>
+      <p v-if="loadFailed" class="load-error" role="alert">
+        {{ t("rules.loadFailed") }} <button @click="loadRules">{{ t("trends.retry") }}</button>
       </p>
 
-      <table class="rule-table">
-        <thead>
-          <tr>
-            <th class="sortable" @click="setSort('field')">
-              {{ t("rules.colField") }}<span class="sort-ind">{{ sortMark("field") }}</span>
-            </th>
-            <th class="sortable" @click="setSort('match_type')">
-              {{ t("rules.colMatch") }}<span class="sort-ind">{{ sortMark("match_type") }}</span>
-            </th>
-            <th class="sortable" @click="setSort('pattern')">
-              {{ t("rules.colPattern") }}<span class="sort-ind">{{ sortMark("pattern") }}</span>
-            </th>
-            <th class="sortable" @click="setSort('category_id')">
-              {{ t("rules.colCategory") }}<span class="sort-ind">{{ sortMark("category_id") }}</span>
-            </th>
-            <th class="sortable" @click="setSort('priority')">
-              {{ t("rules.colPriority") }}<span class="sort-ind">{{ sortMark("priority") }}</span>
-            </th>
-            <th class="sortable" @click="setSort('enabled')">
-              {{ t("rules.colEnabled") }}<span class="sort-ind">{{ sortMark("enabled") }}</span>
-            </th>
-            <th>{{ t("rules.colOps") }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="r in sortedRules" :key="r.id">
-            <td>{{ t("rules.field." + r.field) }}</td>
-            <td>{{ t("rules.match." + r.match_type) }}</td>
-            <td class="pattern">{{ r.pattern }}</td>
-            <td>
-              <span class="cat-tag" :style="{ background: catColor(r.category_id) }">
-                {{ catName(r.category_id) }}
-              </span>
-            </td>
-            <td>{{ r.priority }}</td>
-            <td>{{ r.enabled ? t("rules.yes") : t("rules.no") }}</td>
-            <td class="ops">
-              <button @click="openEdit(r)">{{ t("rules.edit") }}</button>
-              <button class="danger" @click="confirmRemove(r.id, r.pattern)">{{ t("rules.remove") }}</button>
-            </td>
-          </tr>
-          <tr v-if="rules.length === 0">
-            <td colspan="7" class="empty">{{ t("rules.empty") }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="table-wrap" :class="{ loading }">
+        <table class="rule-table">
+          <thead>
+            <tr>
+              <th class="sortable" @click="setSort('field')">{{ t("rules.colField") }}<span class="sort-ind">{{ sortMark("field") }}</span></th>
+              <th class="sortable" @click="setSort('match_type')">{{ t("rules.colMatch") }}<span class="sort-ind">{{ sortMark("match_type") }}</span></th>
+              <th class="sortable" @click="setSort('pattern')">{{ t("rules.colPattern") }}<span class="sort-ind">{{ sortMark("pattern") }}</span></th>
+              <th class="sortable" @click="setSort('category_id')">{{ t("rules.colCategory") }}<span class="sort-ind">{{ sortMark("category_id") }}</span></th>
+              <th class="sortable" @click="setSort('priority')">{{ t("rules.colPriority") }}<span class="sort-ind">{{ sortMark("priority") }}</span></th>
+              <th class="sortable" @click="setSort('enabled')">{{ t("rules.colEnabled") }}<span class="sort-ind">{{ sortMark("enabled") }}</span></th>
+              <th>{{ t("rules.colOps") }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in rules" :key="r.id">
+              <td>{{ t("rules.field." + r.field) }}</td>
+              <td>{{ t("rules.match." + r.match_type) }}</td>
+              <td class="pattern">{{ r.pattern }}</td>
+              <td><span class="cat-tag" :style="{ background: catColor(r.category_id) }">{{ catName(r.category_id) }}</span></td>
+              <td>{{ r.priority }}</td>
+              <td>{{ r.enabled ? t("rules.yes") : t("rules.no") }}</td>
+              <td class="ops">
+                <button @click="openEdit(r)">{{ t("rules.edit") }}</button>
+                <button class="danger" @click="confirmRemove(r.id, r.pattern)">{{ t("rules.remove") }}</button>
+              </td>
+            </tr>
+            <tr v-if="rules.length === 0">
+              <td colspan="7" class="empty">{{ keyword ? t("rules.emptySearch") : t("rules.empty") }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <footer class="pagination">
+        <button :disabled="page <= 1 || loading" @click="goPage(page - 1)">{{ t("rules.prevPage") }}</button>
+        <span>{{ t("rules.pageInfo", { page, pages: pageCount }) }}</span>
+        <button :disabled="page >= pageCount || loading" @click="goPage(page + 1)">{{ t("rules.nextPage") }}</button>
+      </footer>
     </section>
 
     <!-- ============ 新增/编辑 弹窗 ============ -->
@@ -145,7 +152,7 @@
 // 注：开机自启开关已移至 Settings.vue，本页只管分类规则。
 // 所有代码均带中文注释，符合项目「新增界面必须加注释」的规范。
 
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 import { useI18n } from "vue-i18n";
 import Modal from "../components/Modal.vue";
 import { tracker } from "../api/tracker";
@@ -154,10 +161,21 @@ import type { CategoryOut, RuleOut } from "../types";
 import { log } from "@/lib/logger";
 
 const { t } = useI18n();
+withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false });
+const emit = defineEmits<{ close: [] }>();
 
 // 规则列表与分类字典
 const rules = ref<RuleOut[]>([]);
 const categories = ref<CategoryOut[]>([]);
+const keyword = ref("");
+const page = ref(1);
+const pageSize = 20;
+const total = ref(0);
+const loading = ref(false);
+const loadFailed = ref(false);
+let requestGeneration = 0;
+let searchTimer: number | null = null;
+const pageCount = computed(() => Math.max(1, Math.ceil(total.value / pageSize)));
 
 // v0.6.2-beta.16：表格排序状态
 // - 默认按分类（category_id）升序分组 + 同分类内按匹配值（pattern）字母序
@@ -181,43 +199,53 @@ function setSort(k: SortKey) {
     sortKey.value = k;
     sortDir.value = "asc";
   }
+  page.value = 1;
+  void loadRules();
 }
 function sortMark(k: SortKey): string {
   if (sortKey.value !== k) return "";
   return sortDir.value === "asc" ? " ▲" : " ▼";
 }
 
-// 按当前 sortKey/sortDir 排序的规则列表（默认 category_id asc + pattern asc）
-const sortedRules = computed<RuleOut[]>(() => {
-  const list = rules.value.slice();
-  const k = sortKey.value;
-  const dir = sortDir.value === "asc" ? 1 : -1;
-  list.sort((a, b) => {
-    const av = (a as any)[k];
-    const bv = (b as any)[k];
-    // 字符串走 localeCompare（兼顾中文 + 大小写不敏感）；布尔/数字按数值
-    let cmp: number;
-    if (typeof av === "boolean" && typeof bv === "boolean") {
-      cmp = (av === bv ? 0 : av ? 1 : -1);
-    } else if (typeof av === "number" && typeof bv === "number") {
-      cmp = av - bv;
-    } else {
-      cmp = String(av ?? "").localeCompare(String(bv ?? ""), "zh-CN", {
-        sensitivity: "base",
-      });
-    }
-    if (cmp !== 0) return cmp * dir;
-    // 同主键再按 pattern asc 兜底（看匹配值字母序）
-    if (k !== "pattern") {
-      const pa = String((a as any).pattern ?? "");
-      const pb = String((b as any).pattern ?? "");
-      const pcmp = pa.localeCompare(pb, "zh-CN", { sensitivity: "base" });
-      if (pcmp !== 0) return pcmp;
-    }
-    return a.id - b.id;
+// 服务端排序分页：关键词和排序变化都重新查询，旧响应不得覆盖新条件。
+async function loadRules(): Promise<void> {
+  const generation = ++requestGeneration;
+  const input = Object.freeze({
+    keyword: keyword.value.trim(),
+    page: page.value,
+    pageSize,
+    sortKey: sortKey.value,
+    sortDir: sortDir.value,
   });
-  return list;
-});
+  loading.value = true;
+  loadFailed.value = false;
+  try {
+    const result = await tracker.rulesPage(input);
+    if (generation !== requestGeneration) return;
+    rules.value = result.items;
+    total.value = result.total;
+    page.value = result.page;
+  } catch {
+    if (generation === requestGeneration) loadFailed.value = true;
+  } finally {
+    if (generation === requestGeneration) loading.value = false;
+  }
+}
+
+function onSearchInput(): void {
+  if (searchTimer !== null) clearTimeout(searchTimer);
+  searchTimer = window.setTimeout(() => {
+    searchTimer = null;
+    page.value = 1;
+    void loadRules();
+  }, 300);
+}
+
+function goPage(target: number): void {
+  if (target < 1 || target > pageCount.value || target === page.value) return;
+  page.value = target;
+  void loadRules();
+}
 
 // 弹窗控制
 // - formOpen: 新增/编辑表单弹窗
@@ -256,8 +284,8 @@ const form = ref({
 
 // 加载规则与分类
 async function loadAll() {
-  rules.value = await tracker.rules();
   categories.value = await tracker.categories();
+  await loadRules();
 }
 
 // 分类名（按 id 经 i18n 取本地化显示名；未知 id 回退到 id）
@@ -405,6 +433,10 @@ function onAlertConfirm() {
   }
 }
 
+onBeforeUnmount(() => {
+  requestGeneration++;
+  if (searchTimer !== null) clearTimeout(searchTimer);
+});
 onMounted(loadAll);
 </script>
 
@@ -480,6 +512,18 @@ onMounted(loadAll);
   color: var(--text-dim, #6b7280);
 }
 /* 头部操作区 */
+.head-title { display: flex; align-items: center; gap: 10px; }
+.back-btn { border: none; background: transparent; color: var(--brand); cursor: pointer; padding: 0; }
+.rule-tools { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.rule-search { flex: 1; max-width: 360px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); }
+.rule-total { margin-left: auto; color: var(--text-dim); font-size: 12px; white-space: nowrap; }
+.table-wrap { transition: opacity 0.15s ease; }
+.table-wrap.loading { opacity: 0.55; }
+.load-error { color: var(--danger); font-size: 12px; }
+.load-error button { border: none; background: transparent; color: var(--brand); cursor: pointer; }
+.pagination { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 12px; color: var(--text-dim); font-size: 12px; }
+.pagination button { border: 1px solid var(--border); border-radius: 7px; background: var(--card); color: var(--text); padding: 5px 10px; cursor: pointer; }
+.pagination button:disabled { opacity: 0.4; cursor: default; }
 .head-actions {
   display: flex;
   gap: 8px;

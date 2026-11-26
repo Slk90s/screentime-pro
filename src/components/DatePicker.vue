@@ -14,40 +14,57 @@
 -->
 <template>
   <!-- 纯 CSS 日历选择器，无需第三方依赖 -->
-  <div class="date-picker-overlay" v-if="visible" @click.self="$emit('close')">
-    <div class="date-picker">
-      <!-- 头部：上月 / 年月 / 下月 -->
+  <div class="date-picker-overlay" v-if="visible" @click.self="$emit('close')" @keydown.esc="$emit('close')">
+    <div class="date-picker" role="dialog" aria-modal="true" :aria-label="dpTitle">
+      <!-- 头部：日期模式切月 / 月份模式切年 -->
       <header class="dp-header">
-        <button @click="prevMonth" class="dp-nav">&lt;</button>
+        <button @click="mode === 'month' ? prevYear() : prevMonth()" class="dp-nav" :aria-label="t('datePicker.previous')">&lt;</button>
         <span class="dp-title">{{ dpTitle }}</span>
-        <button @click="nextMonth" class="dp-nav">&gt;</button>
+        <button
+          @click="mode === 'month' ? nextYear() : nextMonth()"
+          class="dp-nav"
+          :disabled="mode === 'month' && viewYear >= currentYear"
+          :aria-label="t('datePicker.next')"
+        >&gt;</button>
       </header>
 
-      <!-- 星期标题行 -->
-      <div class="dp-weekdays">
-        <span v-for="w in weekdays" :key="w">{{ w }}</span>
-      </div>
-
-      <!-- 日期网格 -->
-      <div class="dp-grid">
+      <div v-if="mode === 'month'" class="dp-month-grid">
         <button
-          v-for="(d, i) in days"
-          :key="i"
-          :class="{
-            'dp-day': true,
-            'dp-other': !d.current,
-            'dp-today': d.isToday,
-            'dp-selected': d.selected,
-            'dp-disabled': d.disabled || !d.current,
-            'dp-empty': d.empty
-          }"
-          :disabled="d.disabled || d.empty"
-          @click="!d.disabled && !d.empty && $emit('select', d.value)"
-        >{{ d.label }}</button>
+          v-for="month in monthCells"
+          :key="month.value"
+          class="dp-month"
+          :class="{ 'dp-selected': month.selected, 'dp-disabled': month.disabled }"
+          :disabled="month.disabled"
+          @click="selectMonth(month.value)"
+        >{{ month.label }}</button>
       </div>
+      <template v-else>
+        <!-- 星期标题行 -->
+        <div class="dp-weekdays">
+          <span v-for="w in weekdays" :key="w">{{ w }}</span>
+        </div>
+
+        <!-- 日期网格 -->
+        <div class="dp-grid">
+          <button
+            v-for="(d, i) in days"
+            :key="i"
+            :class="{
+              'dp-day': true,
+              'dp-other': !d.current,
+              'dp-today': d.isToday,
+              'dp-selected': d.selected,
+              'dp-disabled': d.disabled || !d.current,
+              'dp-empty': d.empty
+            }"
+            :disabled="d.disabled || d.empty"
+            @click="!d.disabled && !d.empty && $emit('select', d.value)"
+          >{{ d.label }}</button>
+        </div>
+      </template>
 
       <!-- 本月统计概括（v0.7.0：月视图切换时显示该月汇总） -->
-      <section class="dp-summary" v-if="visible">
+      <section class="dp-summary" v-if="visible && mode === 'date' && showSummary">
         <div class="dp-summary-title">
           <AppIcon name="clipboard" :size="13" />
           {{ t("dashboard.calendar.monthSummary") }}
@@ -84,7 +101,7 @@
 
       <!-- 快捷操作：今天（v0.7.0：点击后日历视图同步跳转到今天所在月份） -->
       <footer class="dp-footer">
-        <button @click="goToday">{{ t("datePicker.today") }}</button>
+        <button @click="goToday">{{ mode === 'month' ? t("datePicker.thisMonth") : t("datePicker.today") }}</button>
       </footer>
     </div>
   </div>
@@ -113,10 +130,15 @@ import AppIcon from "./AppIcon.vue";
 
 const { t } = useI18n();
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   visible: boolean;
-  value?: string; // 当前选中值 YYYY-MM-DD
-}>();
+  value?: string; // 日期模式 YYYY-MM-DD；月份模式传该月第一天
+  mode?: "date" | "month";
+  showSummary?: boolean;
+}>(), {
+  mode: "date",
+  showSummary: true,
+});
 
 const emit = defineEmits<{
   select: [dateStr: string];
@@ -136,9 +158,15 @@ const weekdays = computed(() => {
 const viewYear = ref(new Date().getFullYear());
 const viewMonth = ref(new Date().getMonth()); // 0-indexed
 
-// 标题（年 + 月，按当前语言本地化）
+// 标题（年 + 月，按当前语言本地化；月份模式只显示年份）
+const currentYear = new Date().getFullYear();
 const dpTitle = computed(() => {
   const localeTag = i18n.global.locale.value === "en-US" ? "en-US" : "zh-CN";
+  if (props.mode === "month") {
+    return new Intl.DateTimeFormat(localeTag, { year: "numeric" }).format(
+      new Date(viewYear.value, 0, 1),
+    );
+  }
   return new Intl.DateTimeFormat(localeTag, { year: "numeric", month: "long" }).format(
     new Date(viewYear.value, viewMonth.value, 1),
   );
@@ -242,6 +270,36 @@ const days = computed<DayCell[]>(() => {
   return result;
 });
 
+const monthCells = computed(() => {
+  const localeTag = i18n.global.locale.value === "en-US" ? "en-US" : "zh-CN";
+  const formatter = new Intl.DateTimeFormat(localeTag, { month: "short" });
+  const selected = parseYM(props.value);
+  const now = new Date();
+  return Array.from({ length: 12 }, (_, month) => {
+    const value = fmt(viewYear.value, month + 1, 1);
+    return {
+      value,
+      label: formatter.format(new Date(viewYear.value, month, 1)),
+      selected: selected?.y === viewYear.value && selected.m === month,
+      disabled:
+        viewYear.value > now.getFullYear() ||
+        (viewYear.value === now.getFullYear() && month > now.getMonth()),
+    };
+  });
+});
+
+function selectMonth(value: string): void {
+  emit("select", value);
+}
+
+function prevYear(): void {
+  viewYear.value--;
+}
+
+function nextYear(): void {
+  if (viewYear.value < currentYear) viewYear.value++;
+}
+
 function prevMonth() {
   if (viewMonth.value === 0) {
     viewMonth.value = 11;
@@ -274,6 +332,7 @@ const summaryLoading = ref(false);
 let monthSummaryRequestGeneration = 0;
 
 async function loadMonthSummary(): Promise<void> {
+  if (props.mode !== "date" || !props.showSummary) return;
   const generation = ++monthSummaryRequestGeneration;
   const input = Object.freeze({
     year: viewYear.value,
@@ -344,8 +403,10 @@ watch(
   (v) => {
     if (v) {
       syncViewToValue();
-      void loadMonthSummary();
-      startSummaryRefresh();
+      if (props.mode === "date" && props.showSummary) {
+        void loadMonthSummary();
+        startSummaryRefresh();
+      }
     } else {
       stopSummaryRefresh();
     }
@@ -354,7 +415,7 @@ watch(
 
 onMounted(() => {
   syncViewToValue();
-  void loadMonthSummary();
+  if (props.mode === "date" && props.showSummary) void loadMonthSummary();
 });
 onBeforeUnmount(stopSummaryRefresh);
 </script>
@@ -401,6 +462,29 @@ onBeforeUnmount(stopSummaryRefresh);
   color: #666;
 }
 .dp-nav:hover { background: #e0e0ea; }
+.dp-nav:disabled { opacity: 0.35; cursor: default; }
+.dp-month-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  padding: 8px 0 4px;
+}
+.dp-month {
+  min-height: 44px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text, #333);
+  font-size: 13px;
+  cursor: pointer;
+}
+.dp-month:hover:not(:disabled) { background: rgba(255, 126, 39, 0.08); }
+.dp-month.dp-selected {
+  background: var(--brand, #ff7e27);
+  color: #fff;
+  font-weight: 600;
+}
+.dp-month:disabled { color: #ccc; cursor: default; }
 
 .dp-weekdays {
   display: grid;

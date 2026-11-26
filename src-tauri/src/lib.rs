@@ -61,6 +61,7 @@ mod commands;
 mod app_update;
 mod db;
 mod error;
+mod input;
 // v1.2.2（2026-10-21）：悬浮窗液态玻璃材质层（仅服务 float 窗口）
 mod float_glass;
 mod float_window;
@@ -91,11 +92,12 @@ use tracker::{create_tracker, PlatformTracker};
 use crate::commands::ActiveSession;
 
 pub struct AppState {
-    pub db: AppDb,
+    pub db: Arc<AppDb>,
     pub tracker: Arc<dyn PlatformTracker>,
     pub device_id: String,
     pub device_name: Mutex<String>,
     pub tracking: Mutex<bool>,
+    pub sampling_tick: Mutex<()>,
     pub idle_threshold: Mutex<u64>,
     pub current: Mutex<Option<ActiveSession>>,
     pub rules: Mutex<Vec<Rule>>,
@@ -104,6 +106,7 @@ pub struct AppState {
     // v0.7.5：仅 macOS，metrics_enabled + Option<MetricsSampler>；v0.7.6 拆 cfg，跨平台始终存在
     pub metrics_sampler: Arc<system_load::MetricsSampler>,
     pub network_status: system_load::network_status::NetworkStatusSampler,
+    pub keyboard_input: input::KeyboardInputManager,
     pub status_bar_config: Mutex<commands::StatusBarConfig>,
 }
 
@@ -249,12 +252,15 @@ fn linux_machine_id() -> Option<String> {
 
 pub fn run() {
     let tracker = create_tracker();
-    tauri::Builder::default()
+    let isolated_debug_data =
+        cfg!(debug_assertions) && std::env::var_os("SCREENTIME_PRO_DATA_DIR").is_some();
+    let mut builder = tauri::Builder::default();
+    if !isolated_debug_data {
         // v1.0.1：单实例锁 —— 修复 macOS「关机自启动已拉起实例后，用户再手动点
         // 图标又起一个 → 两个进程同时记录、时长翻倍」。⚠️ 官方要求本插件必须
         // **第一个**注册（在其他插件/setup 之前），它内部在初始化时做进程互斥，
         // 重复启动的进程会直接退出，并把已运行实例的参数转发过去。
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // 第二实例启动时走到这里的是**第一实例**：把主窗从托盘/菜单栏拉回前台。
             // mac 上是 Accessory 激活策略（无 Dock 图标），show + set_focus 足够。
             if let Some(win) = app.get_webview_window("main") {
@@ -262,7 +268,9 @@ pub fn run() {
                 let _ = win.unminimize();
                 let _ = win.set_focus();
             }
-        }))
+        }));
+    }
+    let app = builder
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             None,
@@ -360,7 +368,13 @@ pub fn run() {
                     default_hook(info);
                 }));
             }
-            let dir = app.path().app_data_dir()?;
+            let dir = if cfg!(debug_assertions) {
+                std::env::var_os("SCREENTIME_PRO_DATA_DIR")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or(app.path().app_data_dir()?)
+            } else {
+                app.path().app_data_dir()?
+            };
             let db = AppDb::open(&dir)?;
             let device_id = db
                 .get_setting("device_id")
@@ -412,18 +426,28 @@ pub fn run() {
             network_status.set_public_ip_enabled(
                 db.get_setting("network_public_ip_enabled").as_deref() == Some("true"),
             );
+            let db = Arc::new(db);
+            let keyboard_input =
+                input::KeyboardInputManager::new(Arc::clone(&db), device_id.clone());
+            if db.get_setting("keyboard_stats_enabled").as_deref() == Some("true") {
+                if let Err(error) = keyboard_input.set_enabled(true) {
+                    tracing::warn!(%error, "启动键盘输入统计失败，保持关闭状态");
+                }
+            }
             let app_state = Arc::new(AppState {
                 db,
                 tracker,
                 device_id: device_id.clone(),
                 device_name: Mutex::new(device_name_from_db),
                 tracking: Mutex::new(false),
+                sampling_tick: Mutex::new(()),
                 idle_threshold: Mutex::new(idle_threshold),
                 current: Mutex::new(None),
                 rules: Mutex::new(rules),
                 category_cache: categorizer::CategoryCache::new(),
                 metrics_sampler,
                 network_status,
+                keyboard_input,
                 status_bar_config: Mutex::new(status_bar_config),
             });
             app.manage(app_state.clone());
@@ -907,6 +931,7 @@ pub fn run() {
             commands::reset_permission,
             commands::reset_screen_capture_permission,
             commands::get_rules,
+            commands::get_rules_page,
             commands::add_rule,
             commands::update_rule,
             commands::delete_rule,
@@ -914,6 +939,11 @@ pub fn run() {
             commands::set_autostart,
             commands::get_autostart_pref,
             commands::get_trends,
+            commands::get_keyboard_summary,
+            commands::get_keyboard_stats,
+            commands::get_keyboard_config,
+            commands::set_keyboard_enabled,
+            commands::clear_keyboard_stats,
             commands::export_all,
             commands::import_data,
             commands::prune_data,
@@ -1000,8 +1030,20 @@ pub fn run() {
             app_update::check_app_update,
             app_update::install_app_update,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+    app.run(|app, event| {
+        if matches!(
+            event,
+            tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
+        ) {
+            let state = app.state::<Arc<AppState>>();
+            commands::stop_tracking_and_flush(&state);
+            if let Err(error) = state.keyboard_input.stop_and_flush() {
+                tracing::warn!(%error, "退出前键盘计数落库失败");
+            }
+        }
+    });
 }
 
 pub struct LogGuardHolder(pub Vec<tracing_appender::non_blocking::WorkerGuard>);

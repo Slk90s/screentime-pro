@@ -15,11 +15,10 @@
       - 失败静默：断网 / GitHub 被拦 / API 限流一律不打扰用户，只写日志
   -->
   <div class="dashboard">
-    <!-- 顶部标签页：统计概览 / 趋势对比 / 分类规则 / 设置 -->
+    <!-- 顶部标签页：统计概览 / 趋势对比 / 设置（分类规则在设置内管理） -->
     <div class="tabs">
       <button :class="{ active: tab === 'stats' }" @click="tab = 'stats'">{{ t("nav.stats") }}</button>
       <button :class="{ active: tab === 'trends' }" @click="tab = 'trends'">{{ t("nav.trends") }}</button>
-      <button :class="{ active: tab === 'rules' }" @click="tab = 'rules'">{{ t("nav.rules") }}</button>
       <button :class="{ active: tab === 'settings' }" @click="tab = 'settings'">{{ t("nav.settings") }}</button>
     </div>
 
@@ -76,6 +75,13 @@
       </div>
 
       <OverviewCard :overview="overview" :range="detailDays" />
+      <KeyboardSummaryCard
+        :summary="keyboardSummary"
+        :range="detailDays"
+        :loading="keyboardLoading"
+        @open="openKeyboardHeatmap"
+        @configure="tab = 'settings'"
+      />
 
       <div class="row">
         <DailyBarChart :summaries="daily" :by-category="dayCats" :categories="categories" @select="onPickDay" />
@@ -86,12 +92,9 @@
     </div>
 
     <!-- 标签页二：周/月同比分析 -->
-    <TrendsView v-else-if="tab === 'trends'" :device="device" :devices="devices" />
+    <TrendsView v-else-if="tab === 'trends'" v-model:view="trendsView" :device="device" :devices="devices" @configure="tab = 'settings'" />
 
-    <!-- 标签页三：分类规则管理（自动归类引擎） -->
-    <RulesView v-else-if="tab === 'rules'" />
-
-    <!-- 标签页四：设置（设备名 / 阈值 / 保留 / 备份合并） -->
+    <!-- 标签页三：设置（设备名 / 阈值 / 保留 / 备份合并 / 分类规则） -->
     <SettingsView v-else />
 
     <!-- 日历选择器（全局浮层） -->
@@ -109,12 +112,12 @@
 import { ref, onMounted, onBeforeUnmount, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import OverviewCard from "../components/OverviewCard.vue";
+import KeyboardSummaryCard from "../components/KeyboardSummaryCard.vue";
 import DailyBarChart from "../components/DailyBarChart.vue";
 import HourlyStackedChart from "../components/HourlyStackedChart.vue";
 import AppRanking from "../components/AppRanking.vue";
 import DeviceSwitcher from "../components/DeviceSwitcher.vue";
 import DatePicker from "../components/DatePicker.vue";
-import RulesView from "./Rules.vue";
 import TrendsView from "./Trends.vue";
 import SettingsView from "./Settings.vue";
 import { tracker } from "../api/tracker";
@@ -127,6 +130,7 @@ import type {
   DayCategoryOut,
   DeviceInfo,
   HourlyBucketOut,
+  KeyboardSummaryOut,
   OverviewOut,
 } from "../types";
 import { log } from "@/lib/logger";
@@ -134,7 +138,8 @@ import { log } from "@/lib/logger";
 const { t } = useI18n();
 
 // 当前激活的标签页
-const tab = ref<"stats" | "trends" | "rules" | "settings">("stats");
+const tab = ref<"stats" | "trends" | "settings">("stats");
+const trendsView = ref<"usage" | "keyboard">("usage");
 
 // 时间范围（天）
 const range = ref(7);
@@ -158,6 +163,13 @@ const overview = ref<OverviewOut>({
   pickup_count: 0,
 });
 const daily = ref<DailySummaryOut[]>([]);
+const keyboardSummary = ref<KeyboardSummaryOut>({
+  status: "disabled",
+  total_count: 0,
+  daily_average: 0,
+  top_key: null,
+});
+const keyboardLoading = ref(false);
 const dayCats = ref<DayCategoryOut[]>([]);
 const hourly = ref<HourlyBucketOut[]>([]);
 const ranking = ref<AppRankingOut[]>([]);
@@ -198,6 +210,7 @@ async function loadDetails(opts?: { days?: number; date?: string }) {
     dev: device.value,
   });
   detailDays.value = input.days;
+  void loadKeyboardSummary(input);
 
   const nextOverview = await tracker.overview(input.days, input.date, input.dev);
   if (generation !== detailsRequestGeneration) return;
@@ -210,6 +223,35 @@ async function loadDetails(opts?: { days?: number; date?: string }) {
   const nextRanking = await tracker.ranking(input.days, input.date, input.dev);
   if (generation !== detailsRequestGeneration) return;
   ranking.value = nextRanking;
+}
+
+async function loadKeyboardSummary(input: { days: number; date: string; dev: string }): Promise<void> {
+  const generation = detailsRequestGeneration;
+  keyboardLoading.value = true;
+  try {
+    const nextKeyboard = await tracker.keyboardSummary(input.days, input.date, input.dev);
+    if (generation !== detailsRequestGeneration) return;
+    keyboardSummary.value = nextKeyboard;
+  } catch {
+    if (generation === detailsRequestGeneration) {
+      keyboardSummary.value = {
+        status: "unsupported",
+        total_count: 0,
+        daily_average: 0,
+        top_key: null,
+      };
+    }
+  } finally {
+    if (generation === detailsRequestGeneration) keyboardLoading.value = false;
+  }
+}
+
+function openKeyboardHeatmap(): void {
+  trendsView.value = "keyboard";
+  tab.value = "trends";
+}
+function onKeyboardStatsChanged(): void {
+  void loadKeyboardSummary({ days: range.value, date: selectedDate.value, dev: device.value });
 }
 // 点击柱状图某天 -> 切换查看日期并强制以单日模式刷新当天详情
 function onPickDay(d: string) {
@@ -350,6 +392,7 @@ onMounted(() => {
   // 会让「一次检查」变成这个进程唯一的检查时机，新版本永远不会被发现。
   updateTimer = setTimeout(checkUpdateSilently, UPDATE_FIRST_DELAY_MS);
   updateInterval = setInterval(checkUpdateSilently, UPDATE_RECHECK_INTERVAL_MS);
+  window.addEventListener("keyboard-stats-changed", onKeyboardStatsChanged);
 });
 // 卸载时清掉定时器：否则用户 15s 内切走或关窗后，回调仍会打一次 IPC
 onBeforeUnmount(() => {
@@ -363,11 +406,19 @@ onBeforeUnmount(() => {
     clearInterval(updateInterval);
     updateInterval = null;
   }
+  window.removeEventListener("keyboard-stats-changed", onKeyboardStatsChanged);
 });
 // 切换时间范围或设备时重新拉取概览数据
 watch([range, device], () => {
   loadRange();
   loadDetails();
+});
+// 从设置返回概览时刷新键盘开关状态，避免沿用进入设置前的旧计数。
+watch(tab, (next, previous) => {
+  if (next === "stats" && previous !== "stats") {
+    loadRange();
+    loadDetails();
+  }
 });
 </script>
 

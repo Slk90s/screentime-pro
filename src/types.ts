@@ -135,6 +135,47 @@ export interface RuleOut {
   enabled: boolean;
 }
 
+export type KeyboardStatus = "ready" | "disabled" | "permission_required" | "unsupported";
+export interface KeyCountOut {
+  key_id: number;
+  count: number;
+}
+export interface KeyboardDay {
+  date: string;
+  count: number;
+}
+export interface KeyboardSummaryOut {
+  status: KeyboardStatus;
+  total_count: number;
+  daily_average: number;
+  top_key: KeyCountOut | null;
+}
+export interface KeyboardStatsOut {
+  status: KeyboardStatus;
+  anchor: string;
+  current_from: string;
+  current_to: string;
+  prev_from: string;
+  prev_to: string;
+  total_count: number;
+  prev_total_count: number;
+  delta_pct: number;
+  daily: KeyboardDay[];
+  keys: KeyCountOut[];
+}
+export interface KeyboardConfigOut {
+  enabled: boolean;
+  status: KeyboardStatus;
+  reason: string | null;
+}
+
+export interface RulePageOut {
+  items: RuleOut[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
 export interface CategorySeconds {
   category_id: string;
   total_seconds: number;
@@ -144,15 +185,25 @@ export interface AppSeconds {
   category_id: string;
   total_seconds: number;
 }
+export interface PeriodDay {
+  date: string;
+  total_seconds: number;
+}
 export interface PeriodStat {
   label: string;
   total_seconds: number;
   app_count: number;
   by_category: CategorySeconds[];
   top_apps: AppSeconds[];
+  daily: PeriodDay[];
 }
 export interface TrendsOut {
   period: string;
+  anchor: string;
+  current_from: string;
+  current_to: string;
+  prev_from: string;
+  prev_to: string;
   current: PeriodStat;
   prev: PeriodStat;
   yoy?: PeriodStat | null;

@@ -16,6 +16,9 @@ import type {
   DiskVolume,
   ExportResult,
   HourlyBucketOut,
+  KeyboardConfigOut,
+  KeyboardStatsOut,
+  KeyboardSummaryOut,
   NetworkProbeConfig,
   NetworkStatusOut,
   OverviewOut,
@@ -33,6 +36,17 @@ export const mockRules = [
   { id: 3, field: "process_name", match_type: "contains", pattern: "code", category_id: "dev", priority: 0, enabled: true },
   { id: 4, field: "window_title", match_type: "contains", pattern: "netflix", category_id: "entertainment", priority: 5, enabled: true },
 ];
+for (let i = 5; i <= 34; i++) {
+  mockRules.push({
+    id: i,
+    field: i % 4 === 0 ? "window_title" : "process_name",
+    match_type: i % 3 === 0 ? "prefix" : "contains",
+    pattern: `app-${String(i).padStart(2, "0")}`,
+    category_id: ["social", "productivity", "creative", "entertainment", "dev", "education", "game", "other"][i % 8],
+    priority: i % 5,
+    enabled: i % 6 !== 0,
+  });
+}
 
 const mockDiskVolumes: DiskVolume[] = [
   { mount: "C:", total_bytes: 200_000_000_000, used_bytes: 110_000_000_000, avail_bytes: 90_000_000_000, is_system: true },
@@ -43,6 +57,12 @@ const mockNetworkProbeConfig: NetworkProbeConfig = {
   enabled: false,
   public_ip_enabled: false,
 };
+const mockKeyboardConfig: KeyboardConfigOut = {
+  enabled: true,
+  status: "ready",
+  reason: null,
+};
+let mockKeyboardCleared = false;
 
 function mockNetworkStatus(): NetworkStatusOut {
   const enabled = mockNetworkProbeConfig.enabled;
@@ -94,6 +114,35 @@ function dateMinusDays(i: number): string {
   ).padStart(2, "0")}`;
 }
 
+function mockKeyboardStats(period: string, anchor: string): KeyboardStatsOut {
+  const trend = mock("get_trends", { period, anchor }) as TrendsOut;
+  const empty = !mockKeyboardConfig.enabled || mockKeyboardCleared;
+  const daily = trend.current.daily.map((day, index) => ({
+    date: day.date,
+    count: empty ? 0 : 260 + ((index * 137 + Number(day.date.slice(-2)) * 41) % 920),
+  }));
+  const total = daily.reduce((sum, day) => sum + day.count, 0);
+  const previousTotal = empty ? 0 : Math.round(total * 0.88);
+  const topCounts = [0.24, 0.08, 0.065, 0.052, 0.043, 0.036, 0.029, 0.022];
+  const keyIds = [0x2c, 0x04, 0x16, 0x07, 0x09, 0x0d, 0x0e, 0x0f];
+  return {
+    status: mockKeyboardConfig.enabled ? "ready" : "disabled",
+    anchor,
+    current_from: trend.current_from,
+    current_to: trend.current_to,
+    prev_from: trend.prev_from,
+    prev_to: trend.prev_to,
+    total_count: total,
+    prev_total_count: previousTotal,
+    delta_pct: previousTotal > 0 ? Math.round(((total - previousTotal) / previousTotal) * 1000) / 10 : 0,
+    daily,
+    keys: empty ? [] : keyIds.map((key_id, index) => ({
+      key_id,
+      count: Math.round(total * topCounts[index]),
+    })),
+  };
+}
+
 export function mock(cmd: string, args?: Record<string, unknown>): unknown {
   switch (cmd) {
     case "screenshot_commit":
@@ -106,6 +155,31 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
       return mockCategories;
     case "get_rules":
       return mockRules.map((rule) => ({ ...rule }));
+    case "get_rules_page": {
+      const keyword = String(args?.keyword ?? "").trim().toLowerCase();
+      const pageSize = Math.max(1, Math.min(100, Number(args?.pageSize) || 20));
+      const sortKey = String(args?.sortKey ?? "category_id");
+      const direction = args?.sortDir === "desc" ? -1 : 1;
+      const filtered = mockRules.filter((rule) =>
+        !keyword || `${rule.pattern} ${rule.category_id}`.toLowerCase().includes(keyword),
+      );
+      filtered.sort((a, b) => {
+        const av = (a as unknown as Record<string, unknown>)[sortKey];
+        const bv = (b as unknown as Record<string, unknown>)[sortKey];
+        const cmp = typeof av === "number" && typeof bv === "number"
+          ? av - bv
+          : String(av ?? "").localeCompare(String(bv ?? ""), "zh-CN", { sensitivity: "base" });
+        return cmp === 0 ? a.id - b.id : cmp * direction;
+      });
+      const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+      const page = Math.max(1, Math.min(pageCount, Number(args?.page) || 1));
+      return {
+        items: filtered.slice((page - 1) * pageSize, page * pageSize).map((rule) => ({ ...rule })),
+        total: filtered.length,
+        page,
+        page_size: pageSize,
+      };
+    }
     case "add_rule": {
       const id = Math.max(0, ...mockRules.map((rule) => rule.id)) + 1;
       mockRules.push({
@@ -126,9 +200,9 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
       mockRules[index] = {
         id: rule.id as number,
         field: rule.field as string,
-        match_type: rule.matchType as string,
+        match_type: rule.match_type as string,
         pattern: rule.pattern as string,
-        category_id: rule.categoryId as string,
+        category_id: rule.category_id as string,
         priority: rule.priority as number,
         enabled: rule.enabled as boolean,
       };
@@ -311,13 +385,52 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
     // ===== 周/月同比分析 =====
     case "get_trends": {
       const period = (args?.period as string) || "week";
-      const build = (label: string, scale: number): PeriodStat => ({
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const fmt = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      const anchor = (args?.anchor as string) ||
+        (period === "month" ? `${now.getFullYear()}-${pad(now.getMonth() + 1)}` : fmt(now));
+      const dates: string[] = [];
+      let prevFrom: Date;
+      let prevTo: Date;
+      if (period === "month") {
+        const [year, month] = anchor.split("-").map(Number);
+        const isCurrent = year === now.getFullYear() && month === now.getMonth() + 1;
+        const count = isCurrent ? now.getDate() : new Date(year, month, 0).getDate();
+        for (let day = 1; day <= count; day++) dates.push(fmt(new Date(year, month - 1, day)));
+        prevFrom = new Date(year, month - 2, 1);
+        prevTo = isCurrent
+          ? new Date(year, month - 1, Math.min(now.getDate(), new Date(year, month - 1, 0).getDate()))
+          : new Date(year, month - 1, 0);
+      } else {
+        const picked = new Date(`${anchor}T00:00:00`);
+        const monday = new Date(picked);
+        monday.setDate(picked.getDate() - ((picked.getDay() + 6) % 7));
+        const isCurrent = fmt(monday) === fmt(new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7)));
+        const count = isCurrent ? ((now.getDay() + 6) % 7) + 1 : 7;
+        for (let i = 0; i < count; i++) {
+          const day = new Date(monday);
+          day.setDate(monday.getDate() + i);
+          dates.push(fmt(day));
+        }
+        prevFrom = new Date(monday);
+        prevFrom.setDate(monday.getDate() - 7);
+        prevTo = new Date(monday);
+        prevTo.setDate(monday.getDate() - 1);
+      }
+      const daily = dates.map((date, i) => ({
+        date,
+        total_seconds: ((i * 7 + Number(date.slice(-2)) * 3) % 9) * 1500 + (i % 3) * 900,
+      }));
+      const build = (label: string, scale: number, withDaily = false): PeriodStat => ({
         label,
-        total_seconds: Math.floor(scale * (6 + Math.random() * 4)) * 3600,
-        app_count: 12 + Math.floor(Math.random() * 8),
+        total_seconds: withDaily
+          ? daily.reduce((sum, day) => sum + day.total_seconds, 0)
+          : Math.floor(scale * 8) * 3600,
+        app_count: 12 + Math.floor(scale * 5),
         by_category: mockCategories.map((c, i) => ({
           category_id: c.id,
-          total_seconds: Math.floor(scale * (1 + Math.random() * 3) * (6 - i)) * 600,
+          total_seconds: Math.floor(scale * (1 + (i % 3)) * (6 - i)) * 600,
         })),
         top_apps: [
           { app_name: "微信", category_id: "social", total_seconds: Math.floor(scale * 3.2 * 3600) },
@@ -326,21 +439,57 @@ export function mock(cmd: string, args?: Record<string, unknown>): unknown {
           { app_name: "备忘录", category_id: "productivity", total_seconds: Math.floor(scale * 1.4 * 3600) },
           { app_name: "Spotify", category_id: "entertainment", total_seconds: Math.floor(scale * 1.0 * 3600) },
         ],
+        daily: withDaily ? daily : [],
       });
-      const current = build(period === "month" ? "本月" : "本周", 1);
+      const currentStat = build(period === "month" ? "本月" : "本周", 1, true);
       const prev = build(period === "month" ? "上月" : "上周", 0.9);
       const yoy = period === "month" ? build("去年同期", 0.8) : null;
       const delta = prev.total_seconds > 0
-        ? ((current.total_seconds - prev.total_seconds) / prev.total_seconds) * 100
+        ? ((currentStat.total_seconds - prev.total_seconds) / prev.total_seconds) * 100
         : 0;
       return {
         period,
-        current,
+        anchor,
+        current_from: dates[0],
+        current_to: dates[dates.length - 1],
+        prev_from: fmt(prevFrom),
+        prev_to: fmt(prevTo),
+        current: currentStat,
         prev,
         yoy,
         delta_total_pct: Math.round(delta * 10) / 10,
       } as TrendsOut;
     }
+    case "get_keyboard_summary": {
+      const days = Math.max(0, Number(args?.days) || 0);
+      const total = !mockKeyboardConfig.enabled || mockKeyboardCleared
+        ? 0
+        : days === 0 ? 1842 : days * 1150;
+      return {
+        status: mockKeyboardConfig.enabled ? "ready" : "disabled",
+        total_count: total,
+        daily_average: days > 0 ? Math.round(total / days) : total,
+        top_key: total > 0 ? { key_id: 0x2c, count: Math.round(total * 0.24) } : null,
+      } as KeyboardSummaryOut;
+    }
+    case "get_keyboard_stats":
+      return mockKeyboardStats(
+        (args?.period as string) || "week",
+        (args?.anchor as string) || "",
+      );
+    case "get_keyboard_config":
+      return { ...mockKeyboardConfig };
+    case "set_keyboard_enabled": {
+      const enabled = args?.enabled;
+      if (typeof enabled !== "boolean") throw new Error("set_keyboard_enabled 需要 boolean enabled");
+      mockKeyboardConfig.enabled = enabled;
+      mockKeyboardConfig.status = enabled ? "ready" : "disabled";
+      if (enabled) mockKeyboardCleared = false;
+      return { ...mockKeyboardConfig };
+    }
+    case "clear_keyboard_stats":
+      mockKeyboardCleared = true;
+      return null;
     // ===== 全量导出 / 导入合并 =====
     case "export_all":
       // mock：浏览器预览场景，路径用 file:// 协议路径占位

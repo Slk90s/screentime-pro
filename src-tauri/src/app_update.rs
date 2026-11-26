@@ -55,8 +55,10 @@
 //!   - 2026-10-27 @v1.2.11: 新增 - 引入 Tauri updater 签名校验与平台化安装策略。
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use serde::Serialize;
+use tauri::Manager;
 use tauri_plugin_updater::UpdaterExt;
 
 // `bundle_type()` / `BundleType` 在 **Windows 与 Linux** 两个平台的分支里都用，
@@ -243,8 +245,17 @@ pub async fn install_app_update(
 
     let _guard = BusyGuard::acquire().ok_or_else(|| "已有一次更新正在进行，请稍候".to_string())?;
 
+    let app_for_exit = app.clone();
     let updater = app
-        .updater()
+        .updater_builder()
+        .on_before_exit(move || {
+            let state = app_for_exit.state::<Arc<crate::AppState>>();
+            crate::commands::stop_tracking_and_flush(&state);
+            if let Err(error) = state.keyboard_input.stop_and_flush() {
+                tracing::warn!(%error, "更新退出前键盘计数落库失败");
+            }
+        })
+        .build()
         .map_err(|e| format!("初始化升级组件失败：{e}"))?;
 
     // check() 在这里**必须重做一次**，不能复用 check_app_update 的结果：

@@ -107,6 +107,15 @@ pub struct RuleOut {
     pub enabled: bool,
 }
 
+/// 分类规则分页结果；页码已按过滤后的总数收敛到有效范围。
+#[derive(Debug, Clone, Serialize)]
+pub struct RulePageOut {
+    pub items: Vec<RuleOut>,
+    pub total: i64,
+    pub page: i64,
+    pub page_size: i64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PermissionStatus {
     pub accessibility: bool,
@@ -127,21 +136,75 @@ pub struct AppSeconds {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct PeriodDay {
+    pub date: String,
+    pub total_seconds: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct PeriodStat {
     pub label: String,
     pub total_seconds: i64,
     pub app_count: i64,
     pub by_category: Vec<CategorySeconds>,
     pub top_apps: Vec<AppSeconds>,
+    pub daily: Vec<PeriodDay>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TrendsOut {
     pub period: String,
+    pub anchor: String,
+    pub current_from: String,
+    pub current_to: String,
+    pub prev_from: String,
+    pub prev_to: String,
     pub current: PeriodStat,
     pub prev: PeriodStat,
     pub yoy: Option<PeriodStat>,
     pub delta_total_pct: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct KeyCountOut {
+    pub key_id: i32,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct KeyboardDay {
+    pub date: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct KeyboardSummaryOut {
+    pub status: String,
+    pub total_count: i64,
+    pub daily_average: i64,
+    pub top_key: Option<KeyCountOut>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct KeyboardStatsOut {
+    pub status: String,
+    pub anchor: String,
+    pub current_from: String,
+    pub current_to: String,
+    pub prev_from: String,
+    pub prev_to: String,
+    pub total_count: i64,
+    pub prev_total_count: i64,
+    pub delta_pct: f64,
+    pub daily: Vec<KeyboardDay>,
+    pub keys: Vec<KeyCountOut>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct KeyboardConfigOut {
+    pub enabled: bool,
+    pub status: String,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -182,6 +245,17 @@ pub struct ExportSession {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportKeyUsage {
+    pub device: String,
+    pub date: String,
+    pub key_id: i32,
+    pub count: i64,
+    /// 行级快照时间；旧备份缺省为 0，不得覆盖已有新计数。
+    #[serde(default)]
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportBundle {
     pub version: u32,
     pub exported_at: String,
@@ -190,6 +264,8 @@ pub struct ExportBundle {
     pub pet_state: Option<String>,
     pub apps: Vec<ExportApp>,
     pub sessions: Vec<ExportSession>,
+    #[serde(default)]
+    pub key_usage: Vec<ExportKeyUsage>,
 }
 
 #[derive(Debug, Clone, Serialize)]

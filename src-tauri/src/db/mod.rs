@@ -137,6 +137,19 @@ impl AppDb {
                 [],
             )?;
         }
+        let has_key_updated_at: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('key_usage_daily') WHERE name='updated_at'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if has_key_updated_at == 0 {
+            conn.execute(
+                "ALTER TABLE key_usage_daily ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
         Ok(())
     }
 
@@ -206,6 +219,155 @@ impl AppDb {
         // category_id 冗余写入 apps（若用户手动改过分类，以 apps 为准；此处不动）
         let _ = session.category_id;
         Ok(())
+    }
+
+    // ===================== 键盘输入统计 =====================
+
+    /// 在单个事务内累计一批键盘输入；空批次不获取数据库锁。
+    pub fn increment_key_usage(
+        &self,
+        device: &str,
+        entries: &[(String, i32, i64)],
+    ) -> rusqlite::Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let mut conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let now_ms = Local::now().timestamp_millis();
+        let tx = conn.transaction()?;
+        let mut stmt = tx.prepare(
+            "INSERT INTO key_usage_daily (device, date, key_id, count, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(device, date, key_id) DO UPDATE SET
+               count = count + excluded.count,
+               updated_at = excluded.updated_at",
+        )?;
+        for (date, key_id, count) in entries {
+            stmt.execute(params![device, date, key_id, count, now_ms])?;
+        }
+        drop(stmt);
+        tx.commit()
+    }
+
+    /// 键盘输入总览；`days == 0` 查询指定日，`days > 0` 查询近 N 天。
+    ///
+    /// 总量、日均和最高频键均排除 CapsLock 与修饰键；范围模式的日均按活跃天数计算。
+    pub fn keyboard_summary(
+        &self,
+        days: u32,
+        date: &str,
+        device: &Option<String>,
+    ) -> rusqlite::Result<(i64, i64, Option<KeyCountOut>)> {
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let (date_clause, date_param): (&str, &dyn ToSql) = if days == 0 {
+            ("k.date = ?1", &date as &dyn ToSql)
+        } else {
+            (
+                "k.date >= date('now', '-' || (?1 - 1) || ' days')",
+                &days as &dyn ToSql,
+            )
+        };
+        let (dev_clause, dev_param): (&str, Option<&dyn ToSql>) = match device {
+            Some(d) if !d.is_empty() => (" AND k.device = ?2", Some(d as &dyn ToSql)),
+            _ => ("", None),
+        };
+        let mut p: Vec<&dyn ToSql> = vec![date_param];
+        if let Some(dp) = dev_param {
+            p.push(dp);
+        }
+        let countable_keys = "k.key_id != 57 AND k.key_id NOT BETWEEN 224 AND 231";
+
+        let (total_count, active_days): (i64, i64) = conn.query_row(
+            &format!(
+                "SELECT COALESCE(SUM(k.count), 0), COUNT(DISTINCT k.date)
+                 FROM key_usage_daily k
+                 WHERE {date_clause}{dev_clause} AND {countable_keys}"
+            ),
+            p.as_slice(),
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let top_key = conn
+            .query_row(
+                &format!(
+                    "SELECT k.key_id, SUM(k.count)
+                     FROM key_usage_daily k
+                     WHERE {date_clause}{dev_clause} AND {countable_keys}
+                     GROUP BY k.key_id
+                     ORDER BY SUM(k.count) DESC, k.key_id ASC LIMIT 1"
+                ),
+                p.as_slice(),
+                |r| {
+                    Ok(KeyCountOut {
+                        key_id: r.get(0)?,
+                        count: r.get(1)?,
+                    })
+                },
+            )
+            .optional()?;
+        let daily_average = if days > 0 && active_days > 0 {
+            total_count / active_days
+        } else {
+            0
+        };
+
+        Ok((total_count, daily_average, top_key))
+    }
+
+    /// 查询包含首尾日期的键盘统计，返回有记录的每日总量、全键聚合和总量。
+    ///
+    /// 每日数据与总量使用相同的修饰键排除口径；热力图键聚合保留所有键。
+    pub fn keyboard_period(
+        &self,
+        from: &str,
+        to: &str,
+        device: &Option<String>,
+    ) -> rusqlite::Result<(Vec<KeyboardDay>, Vec<KeyCountOut>, i64)> {
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let (dev_clause, dev_param): (&str, Option<&dyn ToSql>) = match device {
+            Some(d) if !d.is_empty() => (" AND k.device = ?3", Some(d as &dyn ToSql)),
+            _ => ("", None),
+        };
+        let mut p: Vec<&dyn ToSql> = vec![&from, &to];
+        if let Some(dp) = dev_param {
+            p.push(dp);
+        }
+
+        let daily = {
+            let mut stmt = conn.prepare(&format!(
+                "SELECT k.date, SUM(k.count)
+                 FROM key_usage_daily k
+                 WHERE k.date >= ?1 AND k.date <= ?2{dev_clause}
+                   AND k.key_id != 57 AND k.key_id NOT BETWEEN 224 AND 231
+                 GROUP BY k.date ORDER BY k.date ASC"
+            ))?;
+            let rows = stmt.query_map(p.as_slice(), |r| {
+                Ok(KeyboardDay {
+                    date: r.get(0)?,
+                    count: r.get(1)?,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        let keys = {
+            let mut stmt = conn.prepare(&format!(
+                "SELECT k.key_id, SUM(k.count)
+                 FROM key_usage_daily k
+                 WHERE k.date >= ?1 AND k.date <= ?2{dev_clause}
+                 GROUP BY k.key_id
+                 ORDER BY SUM(k.count) DESC, k.key_id ASC"
+            ))?;
+            let rows = stmt.query_map(p.as_slice(), |r| {
+                Ok(KeyCountOut {
+                    key_id: r.get(0)?,
+                    count: r.get(1)?,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        let total_count = daily.iter().map(|day| day.count).sum();
+
+        Ok((daily, keys, total_count))
     }
 
     /// 近 N 天每日总览（按 device 过滤；空 device = 全部设备合并）
@@ -608,6 +770,88 @@ impl AppDb {
         rows.collect()
     }
 
+    /// 按关键字筛选并稳定分页读取分类规则，不改动采样使用的规则热路径。
+    ///
+    /// `page_size` 收敛到 1..=100，`page` 从 1 开始并收敛到过滤后的末页；
+    /// 无结果时返回第 1 页。排序字段和方向只通过白名单映射为 SQL 片段。
+    pub fn get_rules_page(
+        &self,
+        keyword: &str,
+        page: i64,
+        page_size: i64,
+        sort_key: &str,
+        sort_dir: &str,
+    ) -> rusqlite::Result<RulePageOut> {
+        let page_size = page_size.clamp(1, 100);
+        let keyword = keyword.trim();
+        let like_pattern = format!("%{}%", escape_like_literal(keyword));
+        let sort_key = match sort_key {
+            "field" | "match_type" | "pattern" | "category_id" | "priority" | "enabled" => sort_key,
+            _ => "category_id",
+        };
+        let sort_column = match sort_key {
+            "field" => "r.field",
+            "match_type" => "r.match_type",
+            "pattern" => "r.pattern",
+            "priority" => "r.priority",
+            "enabled" => "r.enabled",
+            _ => "r.category_id",
+        };
+        let direction = if sort_dir == "desc" { "DESC" } else { "ASC" };
+        let order_by = if sort_key == "pattern" {
+            format!("{sort_column} {direction}, r.id ASC")
+        } else {
+            format!("{sort_column} {direction}, r.pattern ASC, r.id ASC")
+        };
+
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let total: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM classification_rules r
+             LEFT JOIN categories c ON c.id = r.category_id
+             WHERE (?1 = '' OR LOWER(r.pattern) LIKE LOWER(?2) ESCAPE '\\'
+                    OR LOWER(r.category_id) LIKE LOWER(?2) ESCAPE '\\'
+                    OR LOWER(COALESCE(c.name, '')) LIKE LOWER(?2) ESCAPE '\\')",
+            params![keyword, like_pattern],
+            |r| r.get(0),
+        )?;
+        let last_page = if total == 0 {
+            1
+        } else {
+            (total - 1) / page_size + 1
+        };
+        let page = page.clamp(1, last_page);
+        let offset = (page - 1) * page_size;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT r.id, r.field, r.match_type, r.pattern, r.category_id, r.priority, r.enabled
+             FROM classification_rules r
+             LEFT JOIN categories c ON c.id = r.category_id
+             WHERE (?1 = '' OR LOWER(r.pattern) LIKE LOWER(?2) ESCAPE '\\'
+                    OR LOWER(r.category_id) LIKE LOWER(?2) ESCAPE '\\'
+                    OR LOWER(COALESCE(c.name, '')) LIKE LOWER(?2) ESCAPE '\\')
+             ORDER BY {order_by}
+             LIMIT ?3 OFFSET ?4"
+        ))?;
+        let rows = stmt.query_map(params![keyword, like_pattern, page_size, offset], |r| {
+            Ok(RuleOut {
+                id: r.get(0)?,
+                field: r.get(1)?,
+                match_type: r.get(2)?,
+                pattern: r.get(3)?,
+                category_id: r.get(4)?,
+                priority: r.get(5)?,
+                enabled: r.get::<_, i64>(6)? != 0,
+            })
+        })?;
+        let items = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(RulePageOut {
+            items,
+            total,
+            page,
+            page_size,
+        })
+    }
+
     /// 新增规则；若 (field, match_type, pattern) 已存在则更新其分类/优先级并重新启用。
     /// `enabled` 由用户显式传入（前端新增表单有该复选框），缺省 true 仅作兜底。
     pub fn insert_rule(
@@ -811,7 +1055,44 @@ impl AppDb {
             app_count,
             by_category,
             top_apps,
+            daily: Vec::new(),
         })
+    }
+
+    /// 按 sessions.date 汇总区间内每日时长；缺日期由命令层按自然日补齐。
+    ///
+    /// 与 `period_summary` 使用相同的 start_at 闭/开边界和 device 过滤口径。
+    pub fn period_daily(
+        &self,
+        start: &str,
+        end: &str,
+        device: &Option<String>,
+    ) -> rusqlite::Result<Vec<PeriodDay>> {
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut p: Vec<&dyn ToSql> = vec![&start, &end];
+        let dev = if let Some(d) = device {
+            if !d.is_empty() {
+                p.push(d);
+                " AND s.device = ?3"
+            } else {
+                ""
+            }
+        } else {
+            ""
+        };
+        let mut stmt = conn.prepare(&format!(
+            "SELECT s.date, SUM(s.duration_seconds)
+             FROM sessions s
+             WHERE s.start_at >= ?1 AND s.start_at < ?2{dev}
+             GROUP BY s.date ORDER BY s.date ASC"
+        ))?;
+        let rows = stmt.query_map(p.as_slice(), |r| {
+            Ok(PeriodDay {
+                date: r.get(0)?,
+                total_seconds: r.get(1)?,
+            })
+        })?;
+        rows.collect()
     }
 
     // ===================== 多设备合并 =====================
@@ -922,6 +1203,31 @@ impl AppDb {
                 .collect::<Result<Vec<_>, rusqlite::Error>>()?
         };
 
+        // key_usage_daily 与 sessions 使用相同的设备过滤语义。
+        let key_device_id = device_filter.unwrap_or_default();
+        let mut key_params: Vec<&dyn ToSql> = Vec::new();
+        let key_device_clause = if key_device_id.is_empty() {
+            ""
+        } else {
+            key_params.push(&key_device_id);
+            " WHERE device = ?1"
+        };
+        let mut key_stmt = conn.prepare(&format!(
+            "SELECT device, date, key_id, count, updated_at FROM key_usage_daily{key_device_clause}
+             ORDER BY device, date, key_id"
+        ))?;
+        let key_usage = key_stmt
+            .query_map(key_params.as_slice(), |r| {
+                Ok(ExportKeyUsage {
+                    device: r.get(0)?,
+                    date: r.get(1)?,
+                    key_id: r.get(2)?,
+                    count: r.get(3)?,
+                    updated_at: r.get(4)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, rusqlite::Error>>()?;
+
         // 收集设备名映射（settings 中 device_name:<id>）
         let mut dev_stmt =
             conn.prepare("SELECT key, value FROM settings WHERE key LIKE 'device_name:%'")?;
@@ -936,6 +1242,7 @@ impl AppDb {
         }
 
         drop(dev_stmt);
+        drop(key_stmt);
         drop(stmt2);
         drop(stmt);
         // 当前连接已持锁，不能调用会再次获取 self.0 的 get_setting_result。
@@ -948,12 +1255,13 @@ impl AppDb {
             .optional()?;
 
         Ok(ExportBundle {
-            version: 1,
+            version: 2,
             exported_at: Local::now().to_rfc3339(),
             devices,
             pet_state,
             apps,
             sessions,
+            key_usage,
         })
     }
 
@@ -961,6 +1269,14 @@ impl AppDb {
     ///
     /// 返回新导入的时段条数。
     pub fn import_data(&self, bundle: &ExportBundle) -> rusqlite::Result<usize> {
+        if bundle.version > 2 {
+            return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("不支持的备份版本: {}（当前最高支持 2）", bundle.version),
+                ),
+            )));
+        }
         // 备份里的桌宠状态必须是 JSON object。校验必须先于任何 SQL 写入：
         // 否则非法 pet_state 会在导入后污染设置，甚至已经写入部分设备/应用数据。
         if let Some(json) = &bundle.pet_state {
@@ -1040,6 +1356,27 @@ impl AppDb {
             // 原因详见 insert_session 的文档注释）。导入只落 sessions 即可。
             imported += 1;
         }
+        // 同一设备/日期/键位是快照口径：较新的 updated_at 获胜；重复导入不翻倍，
+        // 删除后新增的行也不会被旧备份覆盖。
+        for usage in &bundle.key_usage {
+            conn.execute(
+                "INSERT INTO key_usage_daily (device, date, key_id, count, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(device, date, key_id) DO UPDATE SET
+                   count = CASE
+                     WHEN excluded.updated_at > key_usage_daily.updated_at THEN excluded.count
+                     ELSE key_usage_daily.count
+                   END,
+                   updated_at = MAX(key_usage_daily.updated_at, excluded.updated_at)",
+                params![
+                    usage.device,
+                    usage.date,
+                    usage.key_id,
+                    usage.count,
+                    usage.updated_at
+                ],
+            )?;
+        }
         Ok(imported)
     }
 
@@ -1051,40 +1388,64 @@ impl AppDb {
         retention_days: u32,
         device_filter: Option<&str>,
     ) -> rusqlite::Result<usize> {
-        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let cutoff = (Local::now() - Duration::days(retention_days as i64))
             .format("%Y-%m-%d")
             .to_string();
+        let tx = conn.transaction()?;
         let n: usize = match device_filter {
             Some(dev) if !dev.is_empty() => {
                 // 仅清指定设备的旧数据（用于「按设备清理」入口）
-                conn.execute(
+                tx.execute(
                     "DELETE FROM sessions WHERE date < ?1 AND device = ?2",
                     params![cutoff, dev],
                 )?
             }
-            _ => conn.execute("DELETE FROM sessions WHERE date < ?1", params![cutoff])?,
+            _ => tx.execute("DELETE FROM sessions WHERE date < ?1", params![cutoff])?,
         };
-        conn.execute(
+        match device_filter {
+            Some(dev) if !dev.is_empty() => {
+                tx.execute(
+                    "DELETE FROM key_usage_daily WHERE date < ?1 AND device = ?2",
+                    params![cutoff, dev],
+                )?;
+            }
+            _ => {
+                tx.execute(
+                    "DELETE FROM key_usage_daily WHERE date < ?1",
+                    params![cutoff],
+                )?;
+            }
+        }
+        tx.execute(
             "DELETE FROM daily_summaries WHERE date < ?1",
             params![cutoff],
         )?;
+        tx.commit()?;
         Ok(n)
     }
 
     // ===================== 简易键值配置 =====================
 
-    /// 删除指定设备的全部 sessions（不限时间，与 `prune_old` 的「超过 N 天」不同）
-    /// - 用于「按设备清理」组合命令（先备份再全删）
-    /// - 同步清理 daily_summaries（同 device 的记录）
+    /// 删除指定设备的全部 sessions 和键盘计数（不限时间）。
+    /// 用于「按设备清理」组合命令（先备份再全删）。
     pub fn delete_all_sessions_for_device(&self, device_id: &str) -> rusqlite::Result<usize> {
-        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        let n: usize =
-            conn.execute("DELETE FROM sessions WHERE device = ?1", params![device_id])?;
-        // daily_summaries 是按 (date, app_id) 聚合的，无法按 device 过滤（无 device 列）
-        // 删除 sessions 后，对应日聚合仍保留但少了一段时长，accuracy 影响小；
-        // 真正彻底清理需要重建 daily_summaries（v0.5+ 优化）。
+        let mut conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let tx = conn.transaction()?;
+        let n: usize = tx.execute("DELETE FROM sessions WHERE device = ?1", params![device_id])?;
+        tx.execute(
+            "DELETE FROM key_usage_daily WHERE device = ?1",
+            params![device_id],
+        )?;
+        tx.commit()?;
         Ok(n)
+    }
+
+    /// 清空所有设备的键盘输入统计，不影响应用使用时段。
+    pub fn clear_keyboard_stats(&self) -> rusqlite::Result<()> {
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute("DELETE FROM key_usage_daily", [])?;
+        Ok(())
     }
 
     /// 读取配置项（不存在返回 None）
@@ -1220,6 +1581,18 @@ impl AppDb {
     }
 }
 
+/// 转义 SQLite LIKE 的字面量关键字；反斜杠是查询中显式声明的 ESCAPE 字符。
+fn escape_like_literal(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if matches!(ch, '\\' | '%' | '_') {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
+}
+
 /// 标准 base64 编码（内联实现，避免额外依赖）
 fn to_base64(data: &[u8]) -> String {
     const CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -1328,9 +1701,464 @@ impl AppDb {
 mod tests {
     use super::AppDb;
     use rusqlite::Connection;
+    use std::collections::HashSet;
     use std::sync::{mpsc, Arc, Mutex};
     use std::thread;
     use std::time::Duration;
+
+    fn rules_test_db() -> AppDb {
+        let conn = Connection::open_in_memory().expect("创建内存数据库");
+        AppDb::migrate(&conn).expect("初始化测试数据库");
+        conn.execute("DELETE FROM classification_rules", [])
+            .expect("清空种子规则以隔离分页测试");
+        AppDb(Mutex::new(conn))
+    }
+
+    #[test]
+    fn rules_page_counts_boundaries_and_clamps_after_last_page_delete() {
+        let db = rules_test_db();
+        for i in 0..34 {
+            let category_id = if i % 2 == 0 { "dev" } else { "social" };
+            db.insert_rule(
+                "process_name",
+                "contains",
+                &format!("Rule-{i:02}"),
+                category_id,
+                0,
+                true,
+            )
+            .expect("插入分页测试规则");
+        }
+        let expected: Vec<String> = (0..34)
+            .filter(|i| i % 2 == 0)
+            .chain((0..34).filter(|i| i % 2 != 0))
+            .map(|i| format!("Rule-{i:02}"))
+            .collect();
+
+        let mut actual = Vec::new();
+        for (index, expected_len) in [11, 11, 11, 1].into_iter().enumerate() {
+            let out = db
+                .get_rules_page("", index as i64 + 1, 11, "category_id", "asc")
+                .expect("读取默认排序分页");
+            assert_eq!(out.total, 34);
+            assert_eq!(out.page, index as i64 + 1);
+            assert_eq!(out.page_size, 11);
+            assert_eq!(out.items.len(), expected_len);
+            actual.extend(out.items.into_iter().map(|rule| rule.pattern));
+        }
+        assert_eq!(actual, expected, "默认排序必须覆盖全部规则且无重复");
+
+        let beyond = db
+            .get_rules_page("", 99, 11, "category_id", "asc")
+            .expect("越界页码应收敛到末页");
+        assert_eq!(beyond.page, 4);
+        assert_eq!(beyond.items.len(), 1);
+        assert_eq!(beyond.items[0].pattern, "Rule-33");
+        let deleted_id = beyond.items[0].id;
+        db.delete_rule(deleted_id).expect("删除末页唯一规则");
+
+        let clamped = db
+            .get_rules_page("", 4, 11, "category_id", "asc")
+            .expect("删除后应重新收敛页码");
+        assert_eq!(clamped.total, 33);
+        assert_eq!(clamped.page, 3);
+        assert_eq!(clamped.items.len(), 11);
+        assert!(clamped.items.iter().all(|rule| rule.id != deleted_id));
+        let page_zero = db
+            .get_rules_page("", 0, 11, "category_id", "asc")
+            .expect("非正页码应收敛到第一页");
+        assert_eq!(page_zero.page, 1);
+    }
+
+    #[test]
+    fn rules_page_custom_sort_is_stable_across_pages() {
+        let db = rules_test_db();
+        let fields = [
+            "process_name",
+            "name",
+            "window_title",
+            "exe_path",
+            "bundle_id",
+        ];
+        for i in 0usize..34 {
+            let combination = i / 5;
+            db.insert_rule(
+                fields[combination % fields.len()],
+                if combination < fields.len() {
+                    "contains"
+                } else {
+                    "equals"
+                },
+                &format!("Same-{:02}", i % 5),
+                if i % 2 == 0 { "dev" } else { "social" },
+                (i % 3) as i32,
+                i % 2 == 0,
+            )
+            .expect("插入重复排序键测试规则");
+        }
+
+        let mut expected = db.get_rules_out().expect("读取排序期望值");
+        expected.sort_by(|a, b| {
+            b.priority
+                .cmp(&a.priority)
+                .then_with(|| a.pattern.cmp(&b.pattern))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        let expected_ids: Vec<i64> = expected.iter().map(|rule| rule.id).collect();
+        let mut actual_ids = Vec::new();
+        for page in 1..=6 {
+            let out = db
+                .get_rules_page("", page, 6, "priority", "desc")
+                .expect("读取自定义排序分页");
+            assert_eq!(out.total, 34);
+            actual_ids.extend(out.items.into_iter().map(|rule| rule.id));
+        }
+        assert_eq!(
+            actual_ids, expected_ids,
+            "相同优先级必须按 pattern、id 稳定排序"
+        );
+        assert_eq!(
+            actual_ids.into_iter().collect::<HashSet<_>>().len(),
+            34,
+            "跨页不得重复或遗漏规则"
+        );
+
+        for sort_key in [
+            "field",
+            "match_type",
+            "pattern",
+            "category_id",
+            "priority",
+            "enabled",
+        ] {
+            let out = db
+                .get_rules_page("", 1, 100, sort_key, "asc")
+                .expect("所有契约排序字段都应可查询");
+            assert_eq!(out.total, 34, "sort_key={sort_key}");
+            assert_eq!(out.items.len(), 34, "sort_key={sort_key}");
+        }
+    }
+
+    #[test]
+    fn rules_page_search_is_trimmed_ascii_case_insensitive_and_literal() {
+        let db = rules_test_db();
+        {
+            let conn = db.0.lock().unwrap_or_else(|e| e.into_inner());
+            conn.execute(
+                "INSERT INTO categories (id, name, color) VALUES ('custom', 'MixedName', '#000000')",
+                [],
+            )
+            .expect("插入英文分类名测试数据");
+        }
+        for (pattern, category_id) in [
+            ("NeedlePattern", "dev"),
+            ("plain", "productivity"),
+            ("100%_done", "social"),
+            ("100ZZdone", "social"),
+            ("under_score", "game"),
+            ("underXscore", "game"),
+            ("category-name-target", "custom"),
+        ] {
+            db.insert_rule("process_name", "contains", pattern, category_id, 0, true)
+                .expect("插入搜索测试规则");
+        }
+        let matches = |keyword: &str| {
+            let mut patterns: Vec<String> = db
+                .get_rules_page(keyword, 99, 20, "category_id", "asc")
+                .expect("执行关键词搜索")
+                .items
+                .into_iter()
+                .map(|rule| rule.pattern)
+                .collect();
+            patterns.sort();
+            patterns
+        };
+
+        assert_eq!(matches("  nEeDlEpAtTeRn  "), ["NeedlePattern"]);
+        assert_eq!(matches("DEV"), ["NeedlePattern"]);
+        assert_eq!(matches("开发"), ["NeedlePattern"]);
+        assert_eq!(matches("效率与财务"), ["plain"]);
+        assert_eq!(matches("mixedname"), ["category-name-target"]);
+        assert_eq!(matches("%"), ["100%_done"]);
+        assert_eq!(matches("_"), ["100%_done", "under_score"]);
+        assert_eq!(matches("100%_"), ["100%_done"]);
+
+        let empty = db
+            .get_rules_page("not-present", 99, 20, "category_id", "asc")
+            .expect("空结果查询应成功");
+        assert_eq!(empty.total, 0);
+        assert_eq!(empty.page, 1);
+        assert!(empty.items.is_empty());
+        assert_eq!(
+            db.get_rules_page("", 1, 0, "category_id", "asc")
+                .expect("page_size 下限")
+                .page_size,
+            1
+        );
+        assert_eq!(
+            db.get_rules_page("", 1, 101, "category_id", "asc")
+                .expect("page_size 上限")
+                .page_size,
+            100
+        );
+    }
+
+    fn keyboard_test_db() -> AppDb {
+        let conn = Connection::open_in_memory().expect("创建内存数据库");
+        AppDb::migrate(&conn).expect("初始化测试数据库");
+        AppDb(Mutex::new(conn))
+    }
+
+    fn stored_key_count(db: &AppDb, device: &str, date: &str, key_id: i32) -> i64 {
+        let conn = db.0.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT COALESCE(SUM(count), 0) FROM key_usage_daily
+             WHERE device = ?1 AND date = ?2 AND key_id = ?3",
+            rusqlite::params![device, date, key_id],
+            |r| r.get(0),
+        )
+        .expect("读取键盘聚合计数")
+    }
+
+    #[test]
+    fn keyboard_increment_accumulates_and_accepts_empty_batches() {
+        let db = keyboard_test_db();
+        db.increment_key_usage("dev-a", &[])
+            .expect("空批次应直接成功");
+        db.increment_key_usage(
+            "dev-a",
+            &[
+                ("2026-01-02".to_string(), 65, 2),
+                ("2026-01-02".to_string(), 66, 1),
+            ],
+        )
+        .expect("写入首批键盘计数");
+        db.increment_key_usage("dev-a", &[("2026-01-02".to_string(), 65, 3)])
+            .expect("重复键应累计");
+
+        assert_eq!(stored_key_count(&db, "dev-a", "2026-01-02", 65), 5);
+        assert_eq!(stored_key_count(&db, "dev-a", "2026-01-02", 66), 1);
+        assert_eq!(stored_key_count(&db, "dev-b", "2026-01-02", 65), 0);
+    }
+
+    #[test]
+    fn keyboard_summary_excludes_capslock_and_modifiers() {
+        let db = keyboard_test_db();
+        let now = chrono::Local::now();
+        let today = now.format("%Y-%m-%d").to_string();
+        let yesterday = (now - chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
+        let mut entries = vec![
+            (today.clone(), 65, 8),
+            (today.clone(), 66, 2),
+            (yesterday, 65, 4),
+            (today.clone(), 0x39, 100),
+        ];
+        for key_id in 0xE0..=0xE7 {
+            entries.push((today.clone(), key_id, 50));
+        }
+        db.increment_key_usage("dev-a", &entries)
+            .expect("写入普通键和控制键");
+        db.increment_key_usage("dev-b", &[(today.clone(), 65, 100)])
+            .expect("写入其他设备计数");
+        let device = Some("dev-a".to_string());
+
+        let (total, average, top) = db
+            .keyboard_summary(2, "range-mode-ignores-this-date", &device)
+            .expect("读取范围总览");
+        assert_eq!(total, 14);
+        assert_eq!(average, 7);
+        assert_eq!(top.map(|key| (key.key_id, key.count)), Some((65, 12)));
+
+        let (daily_total, daily_average, daily_top) = db
+            .keyboard_summary(0, &today, &device)
+            .expect("读取指定日总览");
+        assert_eq!(daily_total, 10);
+        assert_eq!(daily_average, 0);
+        assert_eq!(daily_top.map(|key| (key.key_id, key.count)), Some((65, 8)));
+    }
+
+    #[test]
+    fn keyboard_period_filters_inclusive_dates_and_devices() {
+        let db = keyboard_test_db();
+        db.increment_key_usage(
+            "dev-a",
+            &[
+                ("2026-01-01".to_string(), 65, 2),
+                ("2026-01-01".to_string(), 0x39, 20),
+                ("2026-01-01".to_string(), 0xE0, 30),
+                ("2026-01-02".to_string(), 65, 1),
+                ("2026-01-02".to_string(), 66, 4),
+                ("2026-01-02".to_string(), 0xE7, 40),
+                ("2026-01-03".to_string(), 67, 9),
+            ],
+        )
+        .expect("写入区间测试数据");
+        db.increment_key_usage("dev-b", &[("2026-01-01".to_string(), 65, 100)])
+            .expect("写入设备过滤数据");
+        let device = Some("dev-a".to_string());
+
+        let (daily, keys, total) = db
+            .keyboard_period("2026-01-01", "2026-01-02", &device)
+            .expect("读取包含首尾日期的区间");
+        assert_eq!(total, 7);
+        assert_eq!(
+            daily
+                .into_iter()
+                .map(|day| (day.date, day.count))
+                .collect::<Vec<_>>(),
+            vec![("2026-01-01".to_string(), 2), ("2026-01-02".to_string(), 5)]
+        );
+        assert_eq!(
+            keys.into_iter()
+                .map(|key| (key.key_id, key.count))
+                .collect::<Vec<_>>(),
+            vec![(0xE7, 40), (0xE0, 30), (0x39, 20), (66, 4), (65, 3)],
+            "热力图聚合必须保留 CapsLock 和修饰键"
+        );
+
+        let (all_device_daily, _, all_device_total) = db
+            .keyboard_period("2026-01-01", "2026-01-01", &None)
+            .expect("空设备过滤应合并全部设备");
+        assert_eq!(all_device_daily.len(), 1);
+        assert_eq!(all_device_total, 102);
+    }
+
+    #[test]
+    fn keyboard_export_import_is_filtered_idempotent_and_legacy_compatible() {
+        let source = keyboard_test_db();
+        source
+            .increment_key_usage(
+                "dev-a",
+                &[
+                    ("2026-01-01".to_string(), 65, 10),
+                    ("2026-01-01".to_string(), 66, 5),
+                ],
+            )
+            .expect("写入待导出设备");
+        source
+            .increment_key_usage("dev-b", &[("2026-01-01".to_string(), 65, 7)])
+            .expect("写入应被过滤的设备");
+        let bundle = source
+            .export_all_filtered(Some("dev-a"))
+            .expect("按设备导出键盘统计");
+        assert_eq!(bundle.version, 2);
+        assert_eq!(bundle.key_usage.len(), 2);
+        assert!(bundle.key_usage.iter().all(|usage| usage.device == "dev-a"));
+
+        let target = keyboard_test_db();
+        target
+            .increment_key_usage(
+                "dev-a",
+                &[
+                    ("2026-01-01".to_string(), 65, 12),
+                    ("2026-01-01".to_string(), 66, 3),
+                ],
+            )
+            .expect("写入导入前的本地计数");
+        target.import_data(&bundle).expect("首次导入");
+        target.import_data(&bundle).expect("重复导入仍应成功");
+        assert_eq!(stored_key_count(&target, "dev-a", "2026-01-01", 65), 12);
+        assert_eq!(stored_key_count(&target, "dev-a", "2026-01-01", 66), 3);
+        assert_eq!(stored_key_count(&target, "dev-b", "2026-01-01", 65), 0);
+
+        let mut legacy_json = serde_json::to_value(&bundle).expect("序列化测试备份");
+        legacy_json
+            .as_object_mut()
+            .expect("备份应为 JSON object")
+            .remove("key_usage");
+        let legacy: super::ExportBundle =
+            serde_json::from_value(legacy_json).expect("旧备份缺少 key_usage 时仍可解析");
+        assert!(legacy.key_usage.is_empty());
+        target.import_data(&legacy).expect("旧备份仍可导入");
+        assert_eq!(stored_key_count(&target, "dev-a", "2026-01-01", 65), 12);
+    }
+
+    #[test]
+    fn keyboard_import_newer_snapshot_wins_without_double_counting() {
+        let source = keyboard_test_db();
+        source
+            .increment_key_usage("dev-a", &[("2026-01-01".to_string(), 65, 100)])
+            .expect("写入旧快照计数");
+        let backup = source
+            .export_all_filtered(Some("dev-a"))
+            .expect("导出旧快照");
+
+        let target = keyboard_test_db();
+        target.import_data(&backup).expect("首次恢复旧快照");
+        target.clear_keyboard_stats().expect("清空后模拟分叉");
+        std::thread::sleep(Duration::from_millis(2));
+        target
+            .increment_key_usage("dev-a", &[("2026-01-01".to_string(), 65, 5)])
+            .expect("清空后新增 5 次");
+        target.import_data(&backup).expect("再次导入旧备份");
+        assert_eq!(stored_key_count(&target, "dev-a", "2026-01-01", 65), 5);
+        target.import_data(&backup).expect("重复导入仍不翻倍");
+        assert_eq!(stored_key_count(&target, "dev-a", "2026-01-01", 65), 5);
+
+        let mut future = backup;
+        future.version = 3;
+        assert!(
+            target.import_data(&future).is_err(),
+            "未知新备份版本必须拒绝"
+        );
+    }
+
+    #[test]
+    fn keyboard_prune_and_device_delete_follow_session_lifecycle() {
+        let db = keyboard_test_db();
+        let now = chrono::Local::now();
+        let old = (now - chrono::Duration::days(31))
+            .format("%Y-%m-%d")
+            .to_string();
+        let cutoff = (now - chrono::Duration::days(30))
+            .format("%Y-%m-%d")
+            .to_string();
+        let recent = now.format("%Y-%m-%d").to_string();
+        db.increment_key_usage(
+            "dev-a",
+            &[
+                (old.clone(), 65, 5),
+                (cutoff.clone(), 65, 7),
+                (recent.clone(), 65, 11),
+            ],
+        )
+        .expect("写入保留期测试数据");
+        db.increment_key_usage("dev-b", &[(old.clone(), 65, 9), (recent.clone(), 65, 13)])
+            .expect("写入其他设备保留期数据");
+
+        db.prune_old(30, Some("dev-a"))
+            .expect("按设备清理过期键盘数据");
+        assert_eq!(stored_key_count(&db, "dev-a", &old, 65), 0);
+        assert_eq!(stored_key_count(&db, "dev-a", &cutoff, 65), 7);
+        assert_eq!(stored_key_count(&db, "dev-b", &old, 65), 9);
+        db.prune_old(30, None).expect("清理全部过期键盘数据");
+        assert_eq!(stored_key_count(&db, "dev-b", &old, 65), 0);
+        assert_eq!(stored_key_count(&db, "dev-b", &recent, 65), 13);
+
+        db.delete_all_sessions_for_device("dev-a")
+            .expect("按设备删除全部数据");
+        assert_eq!(stored_key_count(&db, "dev-a", &cutoff, 65), 0);
+        assert_eq!(stored_key_count(&db, "dev-a", &recent, 65), 0);
+        assert_eq!(stored_key_count(&db, "dev-b", &recent, 65), 13);
+    }
+
+    #[test]
+    fn clear_keyboard_stats_clears_every_device() {
+        let db = keyboard_test_db();
+        db.increment_key_usage("dev-a", &[("2026-01-01".to_string(), 65, 1)])
+            .expect("写入设备 A");
+        db.increment_key_usage("dev-b", &[("2026-01-01".to_string(), 65, 2)])
+            .expect("写入设备 B");
+
+        db.clear_keyboard_stats().expect("清空键盘统计");
+        let conn = db.0.lock().unwrap_or_else(|e| e.into_inner());
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM key_usage_daily", [], |r| r.get(0))
+            .expect("读取剩余键盘记录数");
+        assert_eq!(remaining, 0);
+    }
 
     /// 回归：导出复用已持锁连接，必须完成且带上桌宠状态。
     #[test]
@@ -1406,5 +2234,73 @@ mod tests {
                 "{invalid} 不得先写入设备映射再报错"
             );
         }
+    }
+
+    /// 旧库既没有键盘统计表、sessions 也没有 device 列时，升级必须补全且保留原记录。
+    #[test]
+    fn migrate_legacy_database_adds_keyboard_table_without_losing_sessions() {
+        let conn = Connection::open_in_memory().expect("创建旧版内存数据库");
+        conn.execute_batch(
+            "CREATE TABLE sessions (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              app_id INTEGER NOT NULL,
+              start_at DATETIME NOT NULL,
+              end_at DATETIME NOT NULL,
+              duration_seconds INTEGER NOT NULL,
+              date TEXT NOT NULL,
+              window_title TEXT
+            );
+            INSERT INTO sessions (app_id,start_at,end_at,duration_seconds,date)
+              VALUES (1,'2026-01-01T08:00:00+08:00','2026-01-01T08:10:00+08:00',600,'2026-01-01');
+            CREATE TABLE key_usage_daily (
+              device TEXT, date TEXT, key_id INTEGER, count INTEGER NOT NULL,
+              PRIMARY KEY(device,date,key_id)
+            );
+            INSERT INTO key_usage_daily VALUES ('legacy','2026-01-01',65,7);",
+        )
+        .expect("构造旧版 sessions 表和记录");
+
+        AppDb::migrate(&conn).expect("旧库无损升级");
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get::<_, i64>(0))
+                .expect("旧时段仍在"),
+            1
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='device'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .expect("sessions 已补 device 列"),
+            1
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='key_usage_daily'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .expect("key_usage_daily 已自动建表"),
+            1
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('key_usage_daily') WHERE name='updated_at'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .expect("已有键盘表已补 updated_at 列"),
+            1
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count FROM key_usage_daily WHERE device='legacy' AND key_id=65",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .expect("已有键盘计数保留"),
+            7
+        );
     }
 }
